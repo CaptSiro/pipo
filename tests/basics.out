@@ -1,0 +1,25 @@
+hello 7 3 2.5 1 2 1024
+7 -7 5 3
+true true false
+0 1 2 3 4 
+10 9 8 7 6 5 4 3 2 1 
+0 : 3  1 : 1  2 : 2  
+[1, 2, 3] [2, 1, 3] [30, 10, 20]
+6
+6765
+["b", "a", "a", "a", "a", "a"]
+[] [1]
+success(5) fail("bad") some(3) none()
+five
+{
+    "name": "John Pork",
+    "age": 22
+}
+Hi John Pork
+parsed 42
+no
+1 7 9 true
+Properties.VALUE 2 Warning
+error!
+4
+1.0 0.30000000000000004 1e+100 3.5

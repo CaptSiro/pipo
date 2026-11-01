@@ -1,0 +1,21 @@
+{
+  "name": "pipo",
+  "displayName": "PiPo",
+  "version": "0.1.0",
+  "contributes": {
+    "languages": [
+      {
+        "id": "pp",
+        "aliases": ["pp"],
+        "extensions": [".pp"]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pp",
+        "scopeName": "source.pp",
+        "path": "./syntaxes/pp.tmLanguage.json"
+      }
+    ]
+  }
+}

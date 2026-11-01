@@ -1,0 +1,16 @@
+io:print
+aliased module behaves like an object: <module io>
+destructured print
+no newline
+14
+14
+{
+    "x": 2,
+    "y": 4
+}
+(0, 0) Point
+green
+obj 6 hi bob true
+wrote 17 bytes
+["line one", "line two"]
+fail("cannot read 'definitely/missing/file.txt'")

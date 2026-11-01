@@ -57,6 +57,7 @@ struct VM {
 
     ObjEnv* builtins;
     Table modules;
+    Table globals; /* name -> ObjOverload of the functions declared `global` */
     Table prec;
     int prec_version;
     Value ret;

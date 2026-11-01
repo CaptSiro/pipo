@@ -22,7 +22,7 @@ with `pp`.
   64-bit, floats are doubles.
 * Strings: `"..."` or `'...'`, escapes `\n \t \r \0 \\ \" \' \xHH \u{1F600}`.
   Strings may span lines.
-* Keywords: `import export function return const let if else for in while
+* Keywords: `import export global function return const let if else for in while
   break continue match enum true false`. `type`, `precedence`, `over`, `under`
   and `as` are contextual and can still be used as names.
 
@@ -247,6 +247,18 @@ export SCALE -> factor
 
 Only exported symbols are visible from outside. A module bound to a name is
 used like an object: `geometry:vec(1, 2)`, `const geometry:Vec v = ...`.
+
+Dot syntax does not need the module prefix for functions exported by the
+module that declared the receiver's type: `r.area()` works like
+`r.shapes:area()`. A top-level function declared `global` is visible in every
+file once its module has been loaded:
+
+```
+global function ==(Rect a, Rect b) -> bool { ... }   // in shapes.pp
+
+import "./shapes" -> shapes                         // in another file
+shapes:rect(2, 3) == shapes:rect(2, 2)              // false, no import of == needed
+```
 See [PACKAGES.md](PACKAGES.md) for lookup rules and the `io` module.
 
 ## Errors

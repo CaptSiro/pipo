@@ -886,6 +886,24 @@ static Node* parse_statement(Parser* p) {
     switch (t->kind) {
         case T_IMPORT: n = parse_import(p); break;
         case T_EXPORT: n = parse_export(p); break;
+        case T_GLOBAL: {
+            /* global function f(...) / global <T>function f(...): visible everywhere once the file is loaded */
+            advance(p);
+            if (p->block_depth > 0) perr(p, t, "'global' is only allowed at the top level of a file");
+            Node* fn;
+            if (is_generic_prefix(p)) {
+                ObjString** gens = NULL;
+                int ngen = 0;
+                parse_generic_params(p, &gens, NULL, &ngen, false);
+                fn = parse_function(p, gens, ngen, true);
+            } else if (check(p, T_FUNCTION) && (peek_at(p, 1)->kind == T_IDENT || peek_at(p, 1)->kind == T_OP)) {
+                fn = parse_function(p, NULL, 0, true);
+            } else {
+                perr(p, peek(p), "expected a named function declaration after 'global' but found %s", tok_desc(peek(p)));
+            }
+            fn->as.func.global = true;
+            return fn;
+        }
         case T_CONST:
         case T_LET: n = parse_let(p); break;
         case T_FUNCTION: {

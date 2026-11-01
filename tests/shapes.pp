@@ -18,8 +18,9 @@ function describe(Rect r) -> string {
     return "Rect " + str(r:width) + "x" + str(r:height)
 }
 
-// operators are functions too
-function ==(Rect a, Rect b) -> bool {
+// operators are functions too. `global` makes == usable in every file once
+// this module is loaded, without importing it
+global function ==(Rect a, Rect b) -> bool {
     return a:width == b:width && a:height == b:height
 }
 

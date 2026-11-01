@@ -59,7 +59,14 @@ Functions bound in another module do not have to be imported one by one:
 import "./geometry"
 const v = geometry:vec(3, 4)
 io:print(v.geometry:length())      // geometry:length(v)
+io:print(v.length())               // the same: Vec was declared in geometry
 ```
+
+A dot call also looks at the functions **exported by the module that declared
+the receiver's type**, so the module prefix can usually be left out. Those
+candidates are merged with the ones in scope, and the scorer picks as usual.
+Operators and other functions that should work everywhere can be declared
+`global` instead; see [PACKAGES.md](PACKAGES.md#global-functions).
 
 ## Overloading is the dispatch mechanism
 

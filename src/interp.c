@@ -20,6 +20,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value* out);
 static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out);
 static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic);
+static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl);
 
 /* ------------------------------------------------------------------ errors */
 
@@ -131,6 +132,54 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
     overload_add(set, fn);
 }
 
+/*
+ * `global function f(...)` adds f to a VM-wide overload set as well as to its
+ * module. Every lookup of the name merges that set in, so the function is
+ * usable everywhere once the declaring file is loaded.
+ */
+static ObjOverload* global_set(VM* vm, ObjString* name) {
+    if (vm->globals.count == 0) return NULL;
+    Entry* e = table_find(&vm->globals, name);
+    return e ? (ObjOverload*)e->value.as.o : NULL;
+}
+
+static void global_add(VM* vm, ObjString* name, Obj* fn) {
+    ObjOverload* set = global_set(vm, name);
+    if (!set) {
+        set = overload_new(vm, name);
+        table_set(&vm->globals, name, obj_val(set));
+    }
+    overload_add(set, fn);
+}
+
+/* the module whose scope (or a scope nested in it) is env */
+static ObjModule* module_of_env(VM* vm, ObjEnv* env) {
+    for (; env; env = env->parent) {
+        for (int i = 0; i < vm->modules.count; i++) {
+            ObjModule* m = (ObjModule*)vm->modules.entries[i].value.as.o;
+            if (m->env == env) return m;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * For recv.name(args): the overload set `name` exported by the module that
+ * declared the receiver's type, so `r.area()` works without `r.shapes:area()`.
+ */
+static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
+    ObjModule* m = NULL;
+    if (IS_KIND(recv, OBJ_OBJECT)) {
+        ObjTypeDef* td = AS_OBJECT(recv)->tag;
+        if (td) m = td->module;
+    } else if (IS_KIND(recv, OBJ_ENUM_VALUE)) {
+        m = AS_ENUMV(recv)->en->module;
+    }
+    Value v;
+    if (!m || !module_member(m, name, &v) || !IS_KIND(v, OBJ_OVERLOAD)) return NULL;
+    return (ObjOverload*)v.as.o;
+}
+
 /* ------------------------------------------------------- option / error */
 
 static int variant_index(ObjEnum* en, const char* name) {
@@ -205,7 +254,8 @@ static int score_candidate(VM* vm, Obj* c, int argc, Value* args, Bindings* b) {
     return total;
 }
 
-static PP_NORETURN void no_overload_error(VM* vm, ObjString* name, Obj** cands, int ncands, int argc, Value* args, int line) {
+static PP_NORETURN void no_overload_error_sets(VM* vm, ObjString* name, ObjOverload** sets, int nsets, Obj** cands, int ncands,
+                                                int argc, Value* args, int line) {
     StrBuf sb;
     sb_init(&sb);
     sb_printf(&sb, "no overload of '%s' accepts (", name->chars);
@@ -214,13 +264,21 @@ static PP_NORETURN void no_overload_error(VM* vm, ObjString* name, Obj** cands, 
         sb_puts(&sb, value_type_name(args[i]));
     }
     sb_puts(&sb, ")\n  candidates:");
-    for (int i = 0; i < ncands; i++) {
-        Signature* sig = callable_sig(cands[i]);
-        if (!sig) continue;
-        sb_puts(&sb, "\n    ");
-        sig_to_string(sig, &sb);
+    for (int k = -1; k < nsets; k++) {
+        Obj** items = k < 0 ? cands : sets[k]->items;
+        int count = k < 0 ? ncands : sets[k]->count;
+        for (int i = 0; i < count; i++) {
+            Signature* sig = callable_sig(items[i]);
+            if (!sig) continue;
+            sb_puts(&sb, "\n    ");
+            sig_to_string(sig, &sb);
+        }
     }
     rt_error(vm, line, "%s", sb.data);
+}
+
+static PP_NORETURN void no_overload_error(VM* vm, ObjString* name, Obj** cands, int ncands, int argc, Value* args, int line) {
+    no_overload_error_sets(vm, name, NULL, 0, cands, ncands, argc, args, line);
 }
 
 static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
@@ -240,11 +298,25 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
     return true;
 }
 
-static Obj* resolve_overload(VM* vm, ObjOverload* set, int argc, Value* args, InlineCache* ic, Bindings* out, int line) {
+/*
+ * Picks the best candidate from the set in scope, then the receiver's module
+ * set (dot calls only), then the global set. Earlier sets win ties, so a
+ * local declaration shadows an equally good global one.
+ */
+static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, int argc, Value* args, InlineCache* ic, Bindings* out,
+                             int line) {
+    ObjOverload* sets[IC_SETS] = {set, NULL, NULL};
+    int nsets = 1;
+    if (adl && adl != set) sets[nsets++] = adl;
+    ObjOverload* g = global_set(vm, set->name);
+    if (g && g != set && g != adl) sets[nsets++] = g;
+
     uint8_t kinds[4];
     bool cacheable = ic && ic_kinds(argc, args, kinds);
-    if (cacheable && ic->set == (Obj*)set && ic->set_count == set->count && ic->argc == argc &&
-        memcmp(ic->kinds, kinds, (size_t)argc) == 0) {
+    bool hit = cacheable && ic->argc == argc && memcmp(ic->kinds, kinds, (size_t)argc) == 0;
+    for (int k = 0; hit && k < IC_SETS; k++)
+        hit = ic->sets[k] == (Obj*)sets[k] && ic->counts[k] == (sets[k] ? sets[k]->count : 0);
+    if (hit) {
         Obj* t = ic->target;
         if (t->kind == OBJ_NATIVE) out->count = 0;
         else score_candidate(vm, t, argc, args, out);
@@ -254,18 +326,23 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, int argc, Value* args, In
     int best_score = 0;
     Bindings tmp;
     /* later declarations win ties, so a redefinition replaces an older one */
-    for (int i = set->count - 1; i >= 0; i--) {
-        int s = score_candidate(vm, set->items[i], argc, args, &tmp);
-        if (s > best_score) {
-            best_score = s;
-            best = set->items[i];
-            *out = tmp;
+    for (int k = 0; k < nsets; k++) {
+        ObjOverload* cs = sets[k];
+        for (int i = cs->count - 1; i >= 0; i--) {
+            int s = score_candidate(vm, cs->items[i], argc, args, &tmp);
+            if (s > best_score) {
+                best_score = s;
+                best = cs->items[i];
+                *out = tmp;
+            }
         }
     }
-    if (!best) no_overload_error(vm, set->name, set->items, set->count, argc, args, line);
+    if (!best) no_overload_error_sets(vm, set->name, sets, nsets, NULL, 0, argc, args, line);
     if (cacheable) {
-        ic->set = (Obj*)set;
-        ic->set_count = set->count;
+        for (int k = 0; k < IC_SETS; k++) {
+            ic->sets[k] = (Obj*)sets[k];
+            ic->counts[k] = sets[k] ? sets[k]->count : 0;
+        }
         ic->argc = argc;
         memcpy(ic->kinds, kinds, (size_t)argc);
         ic->target = best;
@@ -373,13 +450,18 @@ static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int
 }
 
 static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic) {
+    return call_value_adl(vm, callee, argc, args, line, ic, NULL);
+}
+
+/* adl: extra candidates from the receiver's module for a dot call, or NULL */
+static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl) {
     if (!IS_OBJ(callee)) rt_error(vm, line, "a value of type %s is not callable", value_type_name(callee));
     Obj* o = callee.as.o;
     Bindings b;
     b.count = 0;
     switch (o->kind) {
         case OBJ_OVERLOAD: {
-            Obj* t = resolve_overload(vm, (ObjOverload*)o, argc, args, ic, &b, line);
+            Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, argc, args, ic, &b, line);
             return invoke(vm, t, argc, args, &b, line);
         }
         case OBJ_FUNCTION:
@@ -541,6 +623,15 @@ static bool require_bool(VM* vm, Value v, const char* what, int line) {
     return v.as.b;
 }
 
+/* an operator in scope, or a global one */
+static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line) {
+    Entry* e = env_find(env, op, NULL);
+    if (e) return e->value;
+    ObjOverload* g = global_set(vm, op);
+    if (!g) rt_error(vm, line, "operator '%s' is not defined", op->chars);
+    return obj_val(g);
+}
+
 static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
     if (enc < 0) return eval(vm, n->as.chain.operands.items[-enc - 1], env);
     int k = enc;
@@ -555,9 +646,7 @@ static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
     int base = vm->sp;
     vm_push(vm, eval_chain_at(vm, n, env, n->as.chain.left[k]));
     vm_push(vm, eval_chain_at(vm, n, env, n->as.chain.right[k]));
-    Entry* e = env_find(env, op, NULL);
-    if (!e) rt_error(vm, n->line, "operator '%s' is not defined", op->chars);
-    Value r = call_value(vm, e->value, 2, &vm->stack[base], n->line, &n->as.chain.ics[k]);
+    Value r = call_value(vm, lookup_operator(vm, env, op, n->line), 2, &vm->stack[base], n->line, &n->as.chain.ics[k]);
     vm->sp = base;
     return r;
 }
@@ -580,7 +669,11 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
         case N_BOOL: return bool_val(n->as.bval);
         case N_IDENT: {
             Entry* e = env_find(env, n->as.str, NULL);
-            if (!e) rt_error(vm, n->line, "undefined name '%s'", n->as.str->chars);
+            if (!e) {
+                ObjOverload* g = global_set(vm, n->as.str);
+                if (g) return obj_val(g);
+                rt_error(vm, n->line, "undefined name '%s'", n->as.str->chars);
+            }
             if (e->flags & VAR_UNINIT) rt_error(vm, n->line, "variable '%s' is used before it was assigned", n->as.str->chars);
             return e->value;
         }
@@ -620,15 +713,23 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             /* dot syntax: recv.f(args) == f(recv, args), recv.mod:f(args) == mod:f(recv, args) */
             Value recv = eval(vm, n->as.method.recv, env);
             vm_push(vm, recv);
+            /* recv.f(args) also sees the functions exported by the module that declared recv's type */
             Node* cn = n->as.method.callee;
-            if (cn->kind == N_IDENT && !env_find(env, cn->as.str, NULL))
-                rt_error(vm, n->line, "no function '%s' to call on a value of type %s", cn->as.str->chars, value_type_name(recv));
-            Value callee = eval(vm, cn, env);
+            ObjOverload* adl = NULL;
+            Value callee;
+            if (cn->kind == N_IDENT) {
+                adl = receiver_module_set(vm, recv, cn->as.str);
+                if (env_find(env, cn->as.str, NULL) || global_set(vm, cn->as.str)) callee = eval(vm, cn, env);
+                else if (adl) callee = obj_val(adl);
+                else rt_error(vm, n->line, "no function '%s' to call on a value of type %s", cn->as.str->chars, value_type_name(recv));
+            } else {
+                callee = eval(vm, cn, env);
+            }
             vm_push(vm, callee);
             int args_base = vm->sp;
             vm_push(vm, recv);
             for (int i = 0; i < n->as.method.args.count; i++) vm_push(vm, eval(vm, n->as.method.args.items[i], env));
-            Value r = call_value(vm, callee, vm->sp - args_base, &vm->stack[args_base], n->line, n->as.method.ic);
+            Value r = call_value_adl(vm, callee, vm->sp - args_base, &vm->stack[args_base], n->line, n->as.method.ic, adl);
             vm->sp = base;
             return r;
         }
@@ -813,6 +914,7 @@ static void hoist_functions(VM* vm, Node* b, ObjEnv* env) {
         vm->cur_line = s->line;
         ObjFunction* fn = function_new(vm, s->as.func.sig, s->as.func.body, env);
         env_add_function(vm, env, s->as.func.sig->name, (Obj*)fn);
+        if (s->as.func.global) global_add(vm, s->as.func.sig->name, (Obj*)fn);
     }
 }
 
@@ -849,9 +951,7 @@ static Value apply_op(VM* vm, ObjEnv* env, ObjString* op, Value a, Value b, int 
     int base = vm->sp;
     vm_push(vm, a);
     vm_push(vm, b);
-    Entry* e = env_find(env, op, NULL);
-    if (!e) rt_error(vm, line, "operator '%s' is not defined", op->chars);
-    Value r = call_value(vm, e->value, 2, &vm->stack[base], line, ic);
+    Value r = call_value(vm, lookup_operator(vm, env, op, line), 2, &vm->stack[base], line, ic);
     vm->sp = base;
     return r;
 }
@@ -940,6 +1040,7 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
     en->ngenerics = n->as.enum_decl.ngenerics;
     en->value_type = n->as.enum_decl.value_type;
     en->env = env;
+    en->module = module_of_env(vm, env);
     int nv = n->as.enum_decl.nvariants;
     en->variants = pp_calloc((size_t)(nv ? nv : 1), sizeof(Variant));
     env_define(vm, env, en->name, obj_val(en), VAR_CONST, NULL);
@@ -1142,6 +1243,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             td->ngenerics = n->as.type_decl.ngenerics;
             td->def = n->as.type_decl.def;
             td->env = env;
+            td->module = module_of_env(vm, env);
             env_define(vm, env, td->name, obj_val(td), VAR_CONST, NULL);
             return EX_NORMAL;
         }
@@ -1440,6 +1542,7 @@ VM* vm_new(int argc, char** argv) {
     vm->argv = argv;
     table_init(&vm->interned);
     table_init(&vm->modules);
+    table_init(&vm->globals);
     table_init(&vm->prec);
     vm->ret = void_val();
     vm->s_and = str_cintern(vm, "&&");

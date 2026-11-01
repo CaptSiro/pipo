@@ -56,7 +56,7 @@ static const struct {
     {"let", T_LET},       {"if", T_IF},             {"else", T_ELSE},       {"for", T_FOR},
     {"in", T_IN},         {"while", T_WHILE},       {"break", T_BREAK},     {"continue", T_CONTINUE},
     {"match", T_MATCH},   {"enum", T_ENUM},         {"true", T_TRUE},       {"false", T_FALSE},
-    {"export", T_EXPORT},
+    {"export", T_EXPORT},   {"global", T_GLOBAL},
     {NULL, T_EOF},
 };
 

@@ -9,6 +9,7 @@ typedef struct ObjString ObjString;
 typedef struct ObjEnv ObjEnv;
 typedef struct ObjTypeDef ObjTypeDef;
 typedef struct ObjEnum ObjEnum;
+typedef struct ObjModule ObjModule;
 typedef struct ObjEnumValue ObjEnumValue;
 typedef struct ObjVariantCtor ObjVariantCtor;
 typedef struct Type Type;
@@ -210,6 +211,7 @@ struct ObjEnum {
     int nvariants;
     Type* value_type;
     ObjEnv* env;
+    ObjModule* module; /* module that declared the enum (NULL for the prelude) */
 };
 
 struct ObjVariantCtor {
@@ -234,15 +236,16 @@ struct ObjTypeDef {
     int ngenerics;
     Type* def;
     ObjEnv* env;
+    ObjModule* module; /* module that declared the type (NULL for the prelude) */
 };
 
-typedef struct {
+struct ObjModule {
     Obj obj;
     ObjString* name;
     ObjString* path;
     ObjEnv* env;
     Table exports; /* exported name -> name of the symbol in env (string value) */
-} ObjModule;
+};
 
 struct ObjEnv {
     Obj obj;

@@ -54,6 +54,7 @@ static void blacken(Obj* o) {
         case OBJ_ENUM: {
             ObjEnum* en = (ObjEnum*)o;
             mark_obj((Obj*)en->env);
+            mark_obj((Obj*)en->module);
             for (int i = 0; i < en->nvariants; i++) {
                 mark_value(en->variants[i].value);
                 mark_obj((Obj*)en->variants[i].singleton);
@@ -68,7 +69,10 @@ static void blacken(Obj* o) {
             for (int i = 0; i < ev->count; i++) mark_value(ev->payload[i]);
             break;
         }
-        case OBJ_TYPEDEF: mark_obj((Obj*)((ObjTypeDef*)o)->env); break;
+        case OBJ_TYPEDEF:
+            mark_obj((Obj*)((ObjTypeDef*)o)->env);
+            mark_obj((Obj*)((ObjTypeDef*)o)->module);
+            break;
         case OBJ_MODULE: {
             ObjModule* m = (ObjModule*)o;
             mark_obj((Obj*)m->name);
@@ -101,12 +105,13 @@ static void free_obj(Obj* o) {
 
 void gc_collect(VM* vm) {
     /* inline caches hold raw pointers; they must never outlive their targets */
-    for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->set = NULL;
+    for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->sets[0] = NULL;
 
     for (int i = 0; i < vm->sp; i++) mark_value(vm->stack[i]);
     for (int i = 0; i < vm->esp; i++) mark_obj((Obj*)vm->envs[i]);
     mark_obj((Obj*)vm->builtins);
     mark_table(&vm->modules);
+    mark_table(&vm->globals);
     mark_value(vm->ret);
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);

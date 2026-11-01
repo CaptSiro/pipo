@@ -39,6 +39,7 @@ typedef enum {
     T_MATCH,
     T_ENUM,
     T_EXPORT,
+    T_GLOBAL,
     T_TRUE,
     T_FALSE
 } TokKind;

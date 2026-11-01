@@ -43,9 +43,10 @@ struct Type {
 };
 
 /* monomorphic inline cache for overload resolution at a call site */
+#define IC_SETS 3
 typedef struct InlineCache {
-    Obj* set;
-    int set_count;
+    Obj* sets[IC_SETS];        /* merged candidate sets: local, receiver's module, global; sets[0] NULL = empty */
+    int counts[IC_SETS];
     int argc;
     uint8_t kinds[4];
     Obj* target;
@@ -149,7 +150,7 @@ struct Node {
             int root;
             int version;
         } chain;
-        struct { Signature* sig; Node* body; } func;
+        struct { Signature* sig; Node* body; bool global; } func;
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;

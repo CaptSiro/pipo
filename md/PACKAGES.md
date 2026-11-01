@@ -27,6 +27,48 @@ import "../shared/util" -> { clamp, + }
   overload set, so `import "./vec" -> { + }` keeps `1 + 2` working.
 * Modules run once and are cached by absolute path. Circular imports see the
   partially initialized module, as in Python.
+* Dot calls look in the receiver's module too: for `r.area()`, if the type of
+  `r` was declared in a module that exports `area`, those overloads take part
+  in the call even though `area` was never imported. `r.area()` is then the
+  same as `r.shapes:area()`. This works for record values tagged with their
+  type (`Rect({...})`, `const Rect r = ...`, `-> Rect`) and for enum values.
+
+## Global functions
+
+A top-level function declared with `global` is added to a VM-wide overload
+set when its module is loaded. From then on the name is usable in every file,
+without importing it. This is meant for operators and other functions that
+should simply work wherever a value of the type shows up:
+
+```
+// shapes.pp
+global function ==(Rect a, Rect b) -> bool {
+    return a:width == b:width && a:height == b:height
+}
+export { Rect, rect, area }
+
+// main.pp
+import io -> { print }
+import "./shapes" -> shapes
+
+const r = shapes:rect(2, 3)
+const s = shapes:rect(2, 2)
+print(r.area())      // 6  (found in the module of Rect)
+print(r == s)        // false
+print(==(r, s))      // false
+```
+
+* `global` is only allowed at the top level of a file, and only before
+  `function` (or a generic list: `global <T>function f(T x)`).
+* A global function is also an ordinary function of its module. It can still
+  be exported, and `shapes:==` keeps working.
+* Global candidates are **merged** into every lookup of the name, so the
+  built-in `==` overloads and any local ones keep working. When a local and a
+  global candidate score the same, the local one wins.
+* Visibility depends on loading, not on importing. A file sees a global
+  function once any file has imported the declaring module, even if it did
+  not import that module itself. Import the module in the files that rely on
+  its globals to make the dependency explicit.
 
 ## Exporting
 

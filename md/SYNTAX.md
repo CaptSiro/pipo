@@ -16,7 +16,7 @@ float       = digits '.' digits exponent? | digits exponent
 string      = '"' ... '"' | "'" ... "'"             (escapes \n \t \r \0 \\ \" \' \xHH \u{H+})
 op          = run of  + - * / % < > = ! & | ^ ~ # ? @ $ \   and  ..
               ('=' and '->' are reserved; 'op=' is compound assignment)
-keyword     = import export function return const let if else for in
+keyword     = import export global function return const let if else for in
               while break continue match enum true false
 contextual  = type precedence over under as
 ```
@@ -56,7 +56,7 @@ name        = ident | op
 
 ```
 let         = ('let' | 'const') type? ident ('=' expression)?
-function_decl = generics? 'function' name params ('->' type)? block
+function_decl = 'global'? generics? 'function' name params ('->' type)? block     'global': top level only
 generics    = '<' ident (',' ident)* '>'
 params      = '(' (param (',' param)*)? ')'
 param       = type? ident

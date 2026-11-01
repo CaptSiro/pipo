@@ -25,7 +25,7 @@
     },
     { "name": "constant.language.pp", "match": "\\b(true|false)\\b" },
     { "name": "keyword.control.pp", "match": "\\b(if|else|for|in|while|break|continue|return|match)\\b" },
-    { "name": "keyword.other.pp", "match": "\\b(import|export|function|const|let|enum|type|precedence|over|under|as)\\b" },
+    { "name": "keyword.other.pp", "match": "\\b(import|export|global|function|const|let|enum|type|precedence|over|under|as)\\b" },
     { "name": "storage.type.pp", "match": "\\b(int|float|string|bool|void|any|range|object|number)\\b" },
     { "name": "entity.name.type.pp", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
     { "name": "entity.name.function.call.pp", "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()" },

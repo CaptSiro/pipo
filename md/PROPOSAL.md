@@ -179,6 +179,79 @@ for p in people {
     print(p) // pretty JSON print
 }
 
+
+interface Str {
+    function str(Str) -> string
+}
+
+type Box = {
+    float volume
+}
+
+// Fails because Box does not satisfy Str constraint
+impl Str for Box; // end of file
+
+function str(Box box) -> string {
+    return str(box:volume)
+}
+
+// Success, Box can now be passed as Str attribute
+impl Str for Box;
+
+<T>interface TypeArgument {
+    <F>function my_function(T, F) -> string
+}
+
+type MyCallback = Arg1 -> ReturnType
+type MyCallback2 = (Arg1, Arg2) -> ReturnType
+type MyCallbackVariadic = (...) -> ReturnType
+
+// must have type definition that is explicity type
+const MyCallback cb = arg -> {
+    // body
+}
+
+// invalid syntax
+const float -> int cb = f -> int(f)
+type ToInt = float -> int
+// valid syntax (int(float) truncates toward zero: 3.7 -> 3, -3.7 -> -3)
+const ToInt cb = f -> int(f)
+// also correct
+const ToInt using_builtin = int
+// also correct
+function to_int_custom(float f) -> int {
+    return int(f)
+}
+const ToInt using_function = to_int_custom
+
+// calling callback:
+const ret = cb(...) 
+// prefered but if it would be hard to implement this is also acceptible
+const ret = cb.call(...)
+
+// using callbacks in functions
+<T>type Consumer = T -> void
+<T>function for_each(T[] array, Consumer<T> consumer) -> void {
+    for a in array {
+        consumer(a)
+    }
+}
+
+// All should be valid because io:print satisfies Consumer<int>
+[1, 2, 3].for_each(io:print)
+[1, 2, 3].for_each(x -> io:print(x))
+[1, 2, 3].for_each((x) -> io:print(x))
+[1, 2, 3].for_each((x) -> {
+    io:print(x)
+})
+
 ```
 
-This might be it. Lets start as a general language like python, but I would like to extend it to be compilable for web
+This might be it. Lets start as a general language like python, but I would like to extend it to be compilable for web.
+
+## Code conventions
+
+- types and interfaces: PascalCase
+- built-in types: idontknowwhatthiscaseiscalled
+- functions: snake_case
+- variables: snake_case

@@ -12,6 +12,7 @@ typedef struct ObjEnum ObjEnum;
 typedef struct ObjModule ObjModule;
 typedef struct ObjEnumValue ObjEnumValue;
 typedef struct ObjVariantCtor ObjVariantCtor;
+typedef struct ObjInterface ObjInterface;
 typedef struct Type Type;
 typedef struct Node Node;
 
@@ -85,6 +86,7 @@ typedef enum {
     OBJ_VARIANT_CTOR, /* constructor of an enum variant, e.g. some(...) */
     OBJ_ENUM_VALUE,   /* instance of an enum variant */
     OBJ_TYPEDEF,      /* `type X = ...` */
+    OBJ_INTERFACE,    /* `interface X { ... }` */
     OBJ_MODULE,
     OBJ_ENV           /* scope */
 } ObjKind;
@@ -163,6 +165,7 @@ typedef struct Signature {
     Param* params;
     int nparams;
     bool variadic;
+    bool implicit_result; /* lambda: the value of the body's last expression is returned */
     Type* ret;
     const char* file;
     int line;
@@ -173,6 +176,7 @@ typedef struct {
     Signature* sig;
     Node* body;
     ObjEnv* closure;
+    bool owns_sig; /* a lambda given the parameter types of a callback type; sig is freed with it */
 } ObjFunction;
 
 typedef Value (*NativeFn)(VM* vm, int argc, Value* args);
@@ -237,6 +241,33 @@ struct ObjTypeDef {
     Type* def;
     ObjEnv* env;
     ObjModule* module; /* module that declared the type (NULL for the prelude) */
+};
+
+/* `impl Iface<args> for target` */
+typedef struct {
+    Type* target;
+    ObjEnv* env; /* where target and args resolve */
+    Type** args;
+    int nargs;
+} Impl;
+
+/*
+ * An interface is closed: its required functions are fixed by the declaration
+ * and cannot grow later (unlike a type, which gains overloads at any time).
+ * `impl` checks the requirements once, when it runs.
+ */
+struct ObjInterface {
+    Obj obj;
+    ObjString* name;
+    ObjString** generics;
+    int ngenerics;
+    Signature** reqs;
+    int nreqs;
+    ObjEnv* env;
+    ObjModule* module;
+    Impl* impls;
+    int nimpls;
+    int capimpls;
 };
 
 struct ObjModule {

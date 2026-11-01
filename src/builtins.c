@@ -26,6 +26,45 @@ void def_native(VM* vm, ObjEnv* env, const char* name, const char* sig, NativeFn
     env_add_function(vm, env, s->name, (Obj*)nf);
 }
 
+/*
+ * Constants exposed by native modules (or the builtins scope):
+ *
+ *     def_const_str(vm, m->env, "nl", "\n");      // io:nl
+ *     def_const(vm, m->env, "max_int", int_val(INT64_MAX));
+ *
+ * They are read-only bindings, so `io:nl = "x"` is rejected like any const.
+ * The value is kept on the VM stack while the name is interned so a GC
+ * triggered by that allocation cannot collect it.
+ */
+void def_const(VM* vm, ObjEnv* env, const char* name, Value v) {
+    vm_push(vm, v);
+    ObjString* s = str_cintern(vm, name);
+    env_define(vm, env, s, v, VAR_CONST, NULL);
+    vm->sp--;
+}
+
+void def_const_str(VM* vm, ObjEnv* env, const char* name, const char* value) {
+    def_const(vm, env, name, obj_val(str_cnew(vm, value)));
+}
+
+/* a native module exports everything it defines */
+void module_export_all(ObjModule* m) {
+    for (int i = 0; i < m->env->vars.count; i++)
+        module_export(m, m->env->vars.entries[i].key, m->env->vars.entries[i].key);
+}
+
+/*
+ * A native module inside a native module, reached as parent:name and
+ * importable as `import parent:name`. Call it from the parent's init while the
+ * parent is on the VM stack:
+ *
+ *     def_submodule(vm, m, "fs", fs_init);      // os:fs
+ */
+void def_submodule(VM* vm, ObjModule* parent, const char* name, NativeModuleInit init) {
+    ObjModule* child = init(vm);
+    def_const(vm, parent->env, name, obj_val(child));
+}
+
 static void def(VM* vm, const char* name, const char* sig, NativeFn fn) {
     def_native(vm, vm->builtins, name, sig, fn);
 }
@@ -716,6 +755,11 @@ static Value n_panic(VM* vm, int argc, Value* a) {
     rt_error(vm, 0, "panic: %s", to_string(vm, a[0])->chars);
 }
 
+/* call(f, args...) == f(args...), so callbacks can also be called as cb.call(x) */
+static Value n_call(VM* vm, int argc, Value* a) {
+    return vm_call(vm, a[0], argc - 1, a + 1);
+}
+
 static Value n_assert(VM* vm, int argc, Value* a) {
     if (!a[0].as.b) {
         if (argc > 1) rt_error(vm, 0, "assertion failed: %s", to_string(vm, a[1])->chars);
@@ -773,6 +817,7 @@ void builtins_register(VM* vm) {
 
     /* conversions & reflection */
     def(vm, "str", "(any value) -> string", n_str);
+    def(vm, "call", "(function f, ...)", n_call);
     def(vm, "int", "(any value) -> int", n_int);
     def(vm, "float", "(any value) -> float", n_float);
     def(vm, "parse_int", "(string s)", n_parse_int);

@@ -3,6 +3,7 @@
  *
  *     import io
  *     io:print("hello", 42)
+ *     io:write("no newline" + io:nl)
  *
  * It is a native module: its functions are written in C, and the module is
  * created the first time something imports it.
@@ -96,14 +97,14 @@ static Value io_write_file(VM* vm, int argc, Value* a) {
 static ObjModule* io_init(VM* vm) {
     ObjModule* m = module_new(vm, "io", "<native io>", vm->builtins);
     vm_push(vm, obj_val(m));
+    def_const_str(vm, m->env, "nl", "\n");
     def_native(vm, m->env, "print", "(...)", io_print);
     def_native(vm, m->env, "write", "(...)", io_write);
     def_native(vm, m->env, "eprint", "(...)", io_eprint);
     def_native(vm, m->env, "input", "(...) -> string", io_input);
     def_native(vm, m->env, "read_file", "(string path)", io_read_file);
     def_native(vm, m->env, "write_file", "(string path, string content)", io_write_file);
-    /* a native module exports everything it defines */
-    for (int i = 0; i < m->env->vars.count; i++) module_export(m, m->env->vars.entries[i].key, m->env->vars.entries[i].key);
+    module_export_all(m);
     vm->sp--;
     return m;
 }

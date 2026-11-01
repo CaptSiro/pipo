@@ -14,3 +14,5 @@ obj 6 hi bob true
 wrote 17 bytes
 ["line one", "line two"]
 fail("cannot read 'definitely/missing/file.txt'")
+const nl
+string true

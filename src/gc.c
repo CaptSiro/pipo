@@ -73,6 +73,13 @@ static void blacken(Obj* o) {
             mark_obj((Obj*)((ObjTypeDef*)o)->env);
             mark_obj((Obj*)((ObjTypeDef*)o)->module);
             break;
+        case OBJ_INTERFACE: {
+            ObjInterface* it = (ObjInterface*)o;
+            mark_obj((Obj*)it->env);
+            mark_obj((Obj*)it->module);
+            for (int i = 0; i < it->nimpls; i++) mark_obj((Obj*)it->impls[i].env);
+            break;
+        }
         case OBJ_MODULE: {
             ObjModule* m = (ObjModule*)o;
             mark_obj((Obj*)m->name);
@@ -98,6 +105,13 @@ static void free_obj(Obj* o) {
         case OBJ_ENUM: free(((ObjEnum*)o)->variants); break;
         case OBJ_ENV: table_free(&((ObjEnv*)o)->vars); break;
         case OBJ_MODULE: table_free(&((ObjModule*)o)->exports); break;
+        case OBJ_INTERFACE: free(((ObjInterface*)o)->impls); break;
+        case OBJ_FUNCTION:
+            if (((ObjFunction*)o)->owns_sig) {
+                free(((ObjFunction*)o)->sig->params);
+                free(((ObjFunction*)o)->sig);
+            }
+            break;
         default: break;
     }
     free(o);
@@ -115,6 +129,7 @@ void gc_collect(VM* vm) {
     mark_value(vm->ret);
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);
+    for (int i = 0; i < vm->nctypes; i++) mark_obj(vm->ctypes[i]->direct);
 
     while (ngray > 0) blacken(gray[--ngray]);
 

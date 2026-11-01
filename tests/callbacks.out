@@ -1,0 +1,24 @@
+3 2 -1
+2
+9 1
+5 20 7 7
+hello
+logged 1 2
+1
+2
+3
+10
+20
+30
+101
+102
+103
+block 1
+block 2
+block 3
+["1!", "2!"]
+Thunk ToInt ToInt
+7
+clicked ok [1, 2, 3] [1, 4, 9]
+function true
+big

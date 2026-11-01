@@ -27,11 +27,54 @@ import "../shared/util" -> { clamp, + }
   overload set, so `import "./vec" -> { + }` keeps `1 + 2` working.
 * Modules run once and are cached by absolute path. Circular imports see the
   partially initialized module, as in Python.
+* Submodules are imported with `:`. See [Submodules and packages](#submodules-and-packages).
 * Dot calls look in the receiver's module too: for `r.area()`, if the type of
   `r` was declared in a module that exports `area`, those overloads take part
   in the call even though `area` was never imported. `r.area()` is then the
   same as `r.shapes:area()`. This works for record values tagged with their
   type (`Rect({...})`, `const Rect r = ...`, `-> Rect`) and for enum values.
+
+## Submodules and packages
+
+A module can contain other modules. A **package** is simply a module that
+re-exports its submodules:
+
+```
+// ui.pp
+export import "./ui/shapes"           // == import "./ui/shapes" + export shapes
+export import "./ui/colors" -> palette
+export import "./ui/shapes" -> { rect }   // re-export single symbols
+
+// main.pp
+import "./ui"
+const ui:shapes:Rect r = ui:shapes:rect(2, 3)
+r.area()                              // == ui:shapes:area(r)
+ui:rect(1, 1)
+```
+
+Importing a submodule directly:
+
+```
+import os:fs                          // bound as `fs`
+import os:fs -> files                 // alias
+import os:fs -> { exists }            // destructure
+import "./ui":shapes                  // files work the same way
+```
+
+`import a:b` resolves `b` step by step:
+
+1. If module `a` exports `b`, and `b` is a module, that module is used.
+2. Otherwise the file `b.pp` in a folder named `a` is loaded: `lib/a/b.pp`
+   for a library module, or `./ui/shapes.pp` for `import "./ui":shapes`.
+   The parent `a` itself does not have to exist, so a plain folder of
+   modules works as a namespace.
+
+Deeper paths (`import a:b:c`) repeat the same step. The name bound by
+default is the last segment.
+
+`export import` is only allowed at the top level, like `export`.
+Dot calls already search the module that **declared** the receiver's type,
+so `r.area()` finds `area` in `ui:shapes` however `r` reached the caller.
 
 ## Global functions
 
@@ -107,6 +150,19 @@ io:print("hello", 42)        // like console.log / System.out.println
 | `input(...) -> string` | prints the prompt, reads one line |
 | `read_file(path)` | `success(text)` or `fail(message)` |
 | `write_file(path, text)` | `success(bytes_written)` or `fail(message)` |
+| `nl` | the constant `"
+"`: `io:write("done" + io:nl)` |
+
+## The `os` module
+
+| member | |
+|--------|-|
+| `platform` | `"windows"`, `"linux"` or `"macos"` |
+| `args() -> string[]` | the script path, then the arguments after it |
+| `fs:exists(path) -> bool` | a file or directory exists |
+| `fs:is_dir(path) -> bool` | the path is a directory |
+
+`os:fs` is a native submodule: `import os:fs` binds it as `fs`.
 
 ## Planned standard packages
 
@@ -115,8 +171,8 @@ The interpreter core keeps only the most basic functions internal
 
 | package | contents (ideas) |
 |---------|------------------|
-| `os`    | args, env vars, exit, processes, platform info |
-| `fs`    | directories, paths, file metadata |
+| `os`    | env vars, exit, processes (`platform` and `args()` exist) |
+| `os:fs` | directories, paths, file metadata (`exists`, `is_dir` exist) |
 | `math`  | trig, logarithms, constants, random |
 | `time`  | wall clock, dates, sleep |
 | `json`  | parse / stringify |
@@ -125,13 +181,23 @@ A package is either a **`.pp` file** in `lib/`, which CMake copies next to
 `pp.exe`, or a **native module** written in C, like `src/mod_io.c`:
 
 ```c
+static ObjModule* fs_init(VM* vm) {
+    ObjModule* m = module_new(vm, "fs", "<native os:fs>", vm->builtins);
+    vm_push(vm, obj_val(m));
+    def_native(vm, m->env, "exists", "(string path) -> bool", fs_exists);
+    module_export_all(m);
+    vm->sp--;
+    return m;
+}
+
 static ObjModule* os_init(VM* vm) {
     ObjModule* m = module_new(vm, "os", "<native os>", vm->builtins);
-    vm_push(vm, obj_val(m));                       /* keep it alive while building */
-    def_native(vm, m->env, "exit", "(int code)", os_exit);
-    /* native modules export everything they define */
-    for (int i = 0; i < m->env->vars.count; i++)
-        module_export(m, m->env->vars.entries[i].key, m->env->vars.entries[i].key);
+    vm_push(vm, obj_val(m));                          /* keep it alive while building */
+    def_const_str(vm, m->env, "platform", "windows");  /* os:platform, read-only */
+    def_const(vm, m->env, "max_int", int_val(INT64_MAX));
+    def_native(vm, m->env, "args", "() -> string[]", os_args);
+    def_submodule(vm, m, "fs", fs_init);               /* os:fs, also `import os:fs` */
+    module_export_all(m);                              /* native modules export everything */
     vm->sp--;
     return m;
 }
@@ -139,7 +205,14 @@ static ObjModule* os_init(VM* vm) {
 void mod_os_register(VM* vm) { vm_register_native_module(vm, "os", os_init); }
 ```
 
+| helper | |
+|--------|-|
+| `def_native(vm, env, name, sig, fn)` | a function, signature in the language's syntax |
+| `def_const(vm, env, name, value)` | a read-only value, e.g. `io:nl` |
+| `def_const_str(vm, env, name, "text")` | shorthand for a string constant |
+| `def_submodule(vm, parent, name, init)` | a native module inside another one |
+| `module_export_all(m)` | export everything defined so far |
+
 Call the register function from `vm_new` (`src/interp.c`), next to
-`mod_io_register`. `vm->argc` / `vm->argv` already hold the command line
-for a future `os:args()`. A package can also be **mixed**: a `.pp` file in
+`mod_io_register`. This is how `src/mod_os.c` is built. A package can also be **mixed**: a `.pp` file in
 `lib/` that imports a native module and wraps it with typed functions.

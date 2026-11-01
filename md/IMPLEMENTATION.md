@@ -29,11 +29,12 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/lexer.c` | tokens, newline/space flags, operator-run splitting |
 | `src/parser.c` | recursive descent parser to AST (`src/ast.h`), types, patterns, native signature parser |
 | `src/interp.c` | evaluator: scopes, calls, overload resolution, match, modules, entry points |
-| `src/types.c` | runtime type matching and scoring, type printing |
+| `src/types.c` | runtime type matching and scoring, type-vs-type checks for callbacks and interfaces, type printing |
 | `src/value.c` | values, objects, hash tables, equality, formatting |
 | `src/gc.c` | mark & sweep collector |
 | `src/builtins.c` | internal (global) functions |
 | `src/mod_io.c` | the native `io` module |
+| `src/mod_os.c` | the native `os` module and its `os:fs` submodule |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
 
@@ -69,7 +70,11 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
   bytecode compiler with resolved variable slots would be the next big step,
   and would also help a future compile-to-web target.
 * No `try`/catch. No string interpolation. No destructuring `let`.
-* Interfaces are not implemented yet; see
-  [DATATYPES_AND_FUNCTIONS.md](DATATYPES_AND_FUNCTIONS.md).
+* Interfaces have no generic bounds or default implementations yet; see
+  [DATATYPES_AND_FUNCTIONS.md](DATATYPES_AND_FUNCTIONS.md#interfaces).
+* A lambda gets the types of its callback type by being copied with a new
+  signature (`adopt_callback_types` in `types.c`). The copied types are
+  resolved once ("concrete" types, `Type.direct`) and deduplicated in
+  `vm->ctypes`, so passing lambdas in a loop allocates no new types.
 * Operators declared only in another module must be written with spaces
   around them when adjacent to other operator characters.

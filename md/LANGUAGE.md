@@ -23,8 +23,9 @@ with `pp`.
 * Strings: `"..."` or `'...'`, escapes `\n \t \r \0 \\ \" \' \xHH \u{1F600}`.
   Strings may span lines.
 * Keywords: `import export global function return const let if else for in while
-  break continue match enum true false`. `type`, `precedence`, `over`, `under`
-  and `as` are contextual and can still be used as names.
+  break continue match enum true false`. `type`, `interface`, `impl`,
+  `precedence`, `over`, `under` and `as` are contextual and can still be used
+  as names.
 
 ### Operators are names
 
@@ -132,7 +133,8 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `T?`                    | `Option<T>`                                  |
 | `A \|\| B`              | union                                        |
 | `{ string name, int age }` | record                                    |
-| `Name<A, B>`            | user type / enum with type arguments         |
+| `Name<A, B>`            | user type / enum / interface with type arguments |
+| `a:b:Name`              | type exported by module `b` inside package `a` |
 | `number`                | prelude alias for `int \|\| float`           |
 
 `type Name = ...` and `type Pair<A, B> = { A first, B second }` define types.
@@ -154,6 +156,71 @@ const f = function(x) { return x * 2 }      // anonymous / closure
 * A function with no `return` returns `void`. Using `void` as a value is an
   error.
 * Up to 4000 nested calls are allowed. Beyond that you get "stack overflow".
+
+## Callbacks
+
+A callback type describes a function by its parameter and return types. It
+can only be written as a **named type**:
+
+```
+type ToInt = float -> int
+type Pair = (int, int) -> int
+type Thunk = () -> string
+type Logger = (...) -> void          // any arguments
+<T>type Consumer = T -> void          // same as: type Consumer<T> = T -> void
+
+const float -> int f = ...           // syntax error: name the type first
+```
+
+Lambdas are short anonymous functions:
+
+```
+const ToInt cb = f -> int(f)
+const Pair add = (a, b) -> a + b
+const Pair mul = (int a, int b) -> {
+    const product = a * b
+    product                          // a block body gives its last expression
+}
+const ToInt builtin = int            // any function that fits works too
+const ToInt mine = to_int_custom
+
+cb(3.7)                              // 3
+cb.call(3.7)                         // the same, through the built-in call(f, ...)
+
+<T>function for_each(T[] items, Consumer<T> f) -> void {
+    for x in items { f(x) }
+}
+[1, 2, 3].for_each(io:print)
+[1, 2, 3].for_each(x -> io:print(x))
+[1, 2, 3].for_each((x) -> { io:print(x) })
+```
+
+**Decisions:**
+* A lambda stored with `const`/`let` needs a declared type: `const f = x -> x`
+  is a syntax error. Passing a lambda as an argument needs no annotation.
+* A value fits a callback type when it can be called with that many
+  arguments, its declared parameter types accept the callback's parameter
+  types, and its declared return type fits. For an overload set such as
+  `io:print` or `int`, one fitting member is enough. Untyped parameters, `any`
+  and generics accept anything. A `void` callback ignores the result.
+* Overloads are chosen by the callback's shape: with `kind(ToInt f)` and
+  `kind(Thunk f)`, `kind(() -> "x")` picks the `Thunk` one.
+* A lambda takes its types from the callback type it is stored or passed as.
+  `const ToInt cb = f -> int(f)` behaves like `(float f) -> int(f)` with return
+  type `int`, and the copy is named after the variable, parameter or field:
+
+  ```
+  cb(2)        // 2: the int is widened to float like for any float parameter
+  cb("12")     // error: no overload of 'cb' accepts (string)
+               //          candidates: cb(float f) -> int
+  ```
+
+  Generic callback types use what the call bound: in `[1, 2].for_each(x -> ...)`
+  with `Consumer<T>`, `x` is an `int`. A `void` callback type does not give the
+  lambda a return type, so its result is simply ignored. Parameters you type
+  yourself, `(int x) -> ...`, keep your type.
+* Inside a match arm, `x -> ...` is the pattern `x` and its body, not a lambda.
+  To return an object literal from a lambda, wrap it: `x -> ({ value: x })`.
 
 ## Control flow
 
@@ -216,6 +283,51 @@ enum string Messages { NOTICE = "Notice", WARNING = "Warning" }
 Prelude helpers: `is_some`, `is_none`, `unwrap`, `unwrap_or`, `is_success`,
 `is_fail` (overloaded for both `Option` and `Error`).
 
+## Interfaces
+
+An interface lists the functions a type must have. Inside the declaration,
+the interface's own name stands for the implementing type:
+
+```
+interface Str {
+    function str(Str) -> string
+}
+
+type Box = { float volume }
+function str(Box box) -> string { return "Box(" + str(box:volume) + ")" }
+
+impl Str for Box                     // checked now: str(Box) -> string exists
+
+function show(Str s) -> string { return s.str() }
+show(Box{ volume: 2.5 })             // any value whose type implements Str
+
+<T>interface Container {
+    function get(Container self, int index) -> T    // parameter names are optional
+    function size(Container) -> int
+}
+impl Container<int> for IntList
+function total(Container<int> c) -> int { ... }
+```
+
+**Decisions:**
+* **Interfaces are closed.** Unlike a type, which can gain overloads at any
+  time, an interface cannot get more functions after it is declared.
+  Declaring the same interface again in the same scope is an error.
+* `impl` runs like any statement. It checks every requirement at that moment
+  and fails with `missing function str(Box) -> string` otherwise. Functions
+  are searched where the `impl` is written, among `global` functions, and in
+  the exports of the module that declared the type. Function declarations are
+  hoisted, so a `function` later in the same block already counts.
+* A requirement parameter typed with the interface name needs a function
+  **written for the type**. Catch-alls such as the built-in `str(any)` or an
+  untyped parameter do not count. A required return type must be declared and
+  must fit.
+* Records, enums and types from other modules (`impl Str for shapes:Rect`) can
+  implement interfaces. Records match nominally: the value must be tagged with
+  the type (`Box{...}`, `const Box b = ...`, `-> Box`).
+* An interface parameter scores below an exact record type, so
+  `describe(Box b)` beats `describe(Str s)` for a `Box`.
+
 ## Objects and arrays
 
 JSON syntax: `{ name: "x", "quoted key": 1, shorthand }` and `[1, 2, 3]`.
@@ -243,14 +355,21 @@ import "./geometry" -> { vec, +, Vec }  // bring exports in; + extends the local
 
 export { vec, length, Vec }             // what importers may see
 export SCALE -> factor
+
+import os:fs                            // submodule: export `fs` of os, or os/fs.pp
+import "./ui":shapes -> { rect }        // works for files too
+export import "./ui/shapes"             // import and re-export in one line
 ```
+
+A package is a module that re-exports its submodules, so importers write
+`ui:shapes:rect(1, 2)` and `const ui:shapes:Rect r = ...`.
 
 Only exported symbols are visible from outside. A module bound to a name is
 used like an object: `geometry:vec(1, 2)`, `const geometry:Vec v = ...`.
 
 Dot syntax does not need the module prefix for functions exported by the
 module that declared the receiver's type: `r.area()` works like
-`r.shapes:area()`. A top-level function declared `global` is visible in every
+`r.shapes:area()`, and like `r.ui:shapes:area()` when shapes is a submodule. A top-level function declared `global` is visible in every
 file once its module has been loaded:
 
 ```

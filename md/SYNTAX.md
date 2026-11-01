@@ -18,7 +18,7 @@ op          = run of  + - * / % < > = ! & | ^ ~ # ? @ $ \   and  ..
               ('=' and '->' are reserved; 'op=' is compound assignment)
 keyword     = import export global function return const let if else for in
               while break continue match enum true false
-contextual  = type precedence over under as
+contextual  = type interface impl precedence over under as
 ```
 
 Statements end at a newline. `;` is optional.
@@ -31,7 +31,7 @@ program     = statement*
 statement   = import | export
             | let
             | function_decl
-            | type_decl | enum_decl | precedence
+            | type_decl | enum_decl | interface | impl | precedence
             | for | while
             | 'return' expression? | 'break' | 'continue'
             | block
@@ -43,14 +43,16 @@ block       = '{' statement* '}'
 ### Modules
 
 ```
-import      = 'import' (ident | string) ('->' (ident | '{' name (',' name)* '}'))?
+import      = 'import' (ident | string) (':' ident)* ('->' (ident | '{' name (',' name)* '}'))?
 export      = 'export' (export_item | '{' export_item (',' export_item)* '}')      top level only
+            | 'export' import                                                   import and re-export
 export_item = name ('->' name)?
 name        = ident | op
 ```
 
 * `import io` loads a library module (native, or `name.pp` in a library directory).
 * `import "./path/file"` loads a file relative to the importing file. `.pp` may be omitted.
+* `import os:fs` / `import "./ui":shapes` load a submodule (an export of the parent, or the file `fs.pp` in the folder `os`).
 
 ### Declarations
 
@@ -60,7 +62,14 @@ function_decl = 'global'? generics? 'function' name params ('->' type)? block   
 generics    = '<' ident (',' ident)* '>'
 params      = '(' (param (',' param)*)? ')'
 param       = type? ident
-type_decl   = 'type' ident generics? '=' type
+type_decl   = generics? 'type' ident generics? '=' type_def
+type_def    = type
+            | fn_params '->' type_def                       callback type, only here
+fn_params   = postfix_type ('||' postfix_type)*              one parameter: float -> int
+            | '(' ((type (',' type)* (',' '...')?) | '...')? ')'
+interface   = generics? 'interface' ident generics? '{' requirement* '}'
+requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)?
+impl        = 'impl' type 'for' type
 enum_decl   = 'enum' type? ident enum_generics? '{' variant (','? variant)* ','? '}'
 enum_generics = '<' ident ('=' type)? (',' ident ('=' type)?)* '>'
 variant     = ident ('(' (type (',' type)*)? ')')? ('=' expression)?
@@ -73,7 +82,7 @@ precedence  = 'precedence' name ('over' | 'under' | 'as') name
 type        = postfix_type ('||' postfix_type)*
 postfix_type = primary_type ('[' ']' | '?')*
 primary_type = prim
-            | (ident ':')? ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec
+            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, ui:shapes:Rect
             | 'function'
             | '{' (type ident ','?)* '}'                         record
             | '(' type ')'
@@ -124,7 +133,10 @@ primary     = literal | ident
             | '[' (expression (',' expression)* ','?)? ']'
             | '{' (key (':' expression)? (',' key (':' expression)?)* ','?)? '}'
             | generics? 'function' name? params ('->' type)? block
+            | lambda
             | if | match
+
+lambda      = (ident | params) '->' (block | expression)    not inside a match pattern or guard
 
 args        = (expression (',' expression)*)?
 literal     = int | float | string | 'true' | 'false'

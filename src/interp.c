@@ -370,7 +370,20 @@ static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env) {
     }
 }
 
-static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep, const char* what, int line) {
+/* lambdas stored in fields of a record type take the callback types of those fields */
+static void adopt_field_callbacks(VM* vm, ObjObject* o) {
+    ObjTypeDef* td = o->tag;
+    if (!td || td->def->kind != TY_RECORD) return;
+    for (int i = 0; i < td->def->nfields; i++) {
+        Entry* e = table_find(&o->fields, td->def->fnames[i]);
+        if (e && IS_KIND(e->value, OBJ_FUNCTION))
+            e->value = adopt_callback_types(vm, td->def->ftypes[i], e->value, td->env, NULL, td->def->fnames[i]);
+    }
+}
+
+/* name: the variable / field that receives the value, names an adopting lambda (may be NULL) */
+static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep, const char* what, int line,
+                       ObjString* name) {
     if (t && t->kind == TY_PRIM && t->prim == PRIM_FLOAT && v.kind == VAL_INT) return float_val((double)v.as.i);
     if (!type_match(vm, t, v, env, b, deep)) {
         StrBuf sb;
@@ -379,7 +392,8 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
         rt_error(vm, line, "%s: expected %s but got %s", what, sb.data, value_type_name(v));
     }
     maybe_tag(vm, t, v, env);
-    return v;
+    if (IS_KIND(v, OBJ_OBJECT)) adopt_field_callbacks(vm, AS_OBJECT(v));
+    return adopt_callback_types(vm, t, v, env, b, name);
 }
 
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
@@ -393,11 +407,13 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
         Value a = args[i];
         Type* pt = sig->params[i].type;
         if (pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && a.kind == VAL_INT) a = float_val((double)a.as.i);
+        a = adopt_callback_types(vm, pt, a, fn->closure, b, sig->params[i].name);
         env_define(vm, env, sig->params[i].name, a, 0, sig->ngenerics ? NULL : pt);
     }
     vm->cur_file = sig->file;
-    ExecStatus st = exec_block(vm, fn->body, env, false, NULL);
-    Value result = st == EX_RETURN ? vm->ret : void_val();
+    Value last = void_val();
+    ExecStatus st = exec_block(vm, fn->body, env, false, sig->implicit_result ? &last : NULL);
+    Value result = st == EX_RETURN ? vm->ret : last;
     vm->ret = void_val();
     if (st == EX_BREAK || st == EX_CONTINUE)
         rt_error(vm, 0, "'%s' used outside of a loop", st == EX_BREAK ? "break" : "continue");
@@ -414,7 +430,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
             }
             char what[160];
             snprintf(what, sizeof what, "return value of '%s'", sig->name->chars);
-            result = coerce_to(vm, sig->ret, result, fn->closure, b, false, what, 0);
+            result = coerce_to(vm, sig->ret, result, fn->closure, b, false, what, 0, NULL);
         }
     }
     pop_env(vm);
@@ -481,7 +497,10 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             }
             if (!type_match(vm, td->def, args[0], td->env, &nb, true))
                 rt_error(vm, line, "value of type %s does not match type '%s'", value_type_name(args[0]), td->name->chars);
-            if (IS_KIND(args[0], OBJ_OBJECT) && td->def->kind == TY_RECORD) AS_OBJECT(args[0])->tag = td;
+            if (IS_KIND(args[0], OBJ_OBJECT) && td->def->kind == TY_RECORD) {
+                AS_OBJECT(args[0])->tag = td;
+                adopt_field_callbacks(vm, AS_OBJECT(args[0]));
+            }
             return args[0];
         }
         default: rt_error(vm, line, "a value of type %s is not callable", value_type_name(callee));
@@ -565,7 +584,7 @@ static void set_object_field(VM* vm, ObjObject* o, ObjString* key, Value v, int 
         if (!found) rt_error(vm, line, "type '%s' has no field '%s'", o->tag->name->chars, key->chars);
         char what[160];
         snprintf(what, sizeof what, "field '%s' of %s", key->chars, o->tag->name->chars);
-        v = coerce_to(vm, ft, v, o->tag->env, NULL, true, what, line);
+        v = coerce_to(vm, ft, v, o->tag->env, NULL, true, what, line, key);
     }
     table_set(&o->fields, key, v);
 }
@@ -979,7 +998,7 @@ static void exec_assign(VM* vm, Node* n, ObjEnv* env) {
             if (e->type) {
                 char what[160];
                 snprintf(what, sizeof what, "cannot assign to '%s'", name->chars);
-                v = coerce_to(vm, e->type, v, where, NULL, true, what, n->line);
+                v = coerce_to(vm, e->type, v, where, NULL, true, what, n->line, name);
                 e = env_find(env, name, &where);
             }
             e->value = v;
@@ -1021,7 +1040,7 @@ static void exec_let(VM* vm, Node* n, ObjEnv* env) {
         if (type) {
             char what[160];
             snprintf(what, sizeof what, "cannot initialize '%s'", n->as.let.name->chars);
-            v = coerce_to(vm, type, v, env, NULL, true, what, n->line);
+            v = coerce_to(vm, type, v, env, NULL, true, what, n->line, n->as.let.name);
         }
     } else if (n->as.let.is_const) {
         v = bool_val(true); /* `const NAME` - a define flag */
@@ -1053,7 +1072,7 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
             if (en->value_type) {
                 char what[160];
                 snprintf(what, sizeof what, "value of %s.%s", en->name->chars, d->name->chars);
-                value = coerce_to(vm, en->value_type, value, env, NULL, true, what, d->value->line);
+                value = coerce_to(vm, en->value_type, value, env, NULL, true, what, d->value->line, NULL);
             }
         } else if (en->value_type && !(en->value_type->kind == TY_PRIM && en->value_type->prim == PRIM_INT)) {
             rt_error(vm, n->line, "variant '%s' of enum '%s' needs a value", d->name->chars, en->name->chars);
@@ -1090,6 +1109,149 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
     }
 }
 
+/* ------------------------------------------------------------- interfaces */
+
+static void exec_interface(VM* vm, Node* n, ObjEnv* env) {
+    ObjString* name = n->as.iface.name;
+    Entry* prev = table_find(&env->vars, name);
+    if (prev) {
+        if (IS_KIND(prev->value, OBJ_INTERFACE))
+            rt_error(vm, n->line,
+                     "interface '%s' is already declared (an interface is closed: list all of its functions in one declaration)",
+                     name->chars);
+        rt_error(vm, n->line, "cannot declare interface '%s': the name is already used by a %s value", name->chars,
+                 value_type_name(prev->value));
+    }
+    ObjInterface* it = (ObjInterface*)alloc_obj(vm, sizeof(ObjInterface), OBJ_INTERFACE);
+    it->name = name;
+    it->generics = n->as.iface.generics;
+    it->ngenerics = n->as.iface.ngenerics;
+    it->reqs = n->as.iface.reqs;
+    it->nreqs = n->as.iface.nreqs;
+    it->env = env;
+    it->module = module_of_env(vm, env);
+    env_define(vm, env, name, obj_val(it), VAR_CONST, NULL);
+}
+
+/* str(Box) -> string: a requirement with the interface name replaced by the implementing type */
+static void requirement_to_string(Signature* sig, ObjString* self, const char* target, StrBuf* sb) {
+    sb_printf(sb, "%s(", sig->name->chars);
+    for (int i = 0; i < sig->nparams; i++) {
+        if (i) sb_puts(sb, ", ");
+        Type* t = sig->params[i].type;
+        if (t && t->kind == TY_NAME && !t->nquals && t->name == self) sb_puts(sb, target);
+        else type_to_string(t, sb);
+    }
+    if (sig->variadic) sb_puts(sb, sig->nparams ? ", ..." : "...");
+    sb_putc(sb, ')');
+    if (sig->ret) {
+        sb_puts(sb, " -> ");
+        type_to_string(sig->ret, sb);
+    }
+}
+
+static void add_binding(VM* vm, Bindings* b, ObjString* name, Type* type, ObjEnv* env, int line) {
+    if (b->count >= PP_MAX_BINDINGS) rt_error(vm, line, "too many generic parameters (max %d)", PP_MAX_BINDINGS);
+    Binding* bd = &b->items[b->count++];
+    memset(bd, 0, sizeof *bd);
+    bd->name = name;
+    bd->type = type;
+    bd->env = env;
+}
+
+/* the module that declared a named type, for looking up its exported functions */
+static ObjModule* type_module(Value tv) {
+    if (IS_KIND(tv, OBJ_TYPEDEF)) return ((ObjTypeDef*)tv.as.o)->module;
+    if (IS_KIND(tv, OBJ_ENUM)) return ((ObjEnum*)tv.as.o)->module;
+    return NULL;
+}
+
+/*
+ * impl Iface for Type: every function the interface lists must exist right
+ * now, written for Type (a catch-all such as the built-in str(any) does not
+ * count). Functions are looked up where the impl is written, among global
+ * functions, and among the exports of the module that declared Type.
+ */
+static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
+    Type* it_t = n->as.impl.iface;
+    Type* target = n->as.impl.target;
+    Value iv;
+    if (it_t->kind != TY_NAME || !resolve_type_value(vm, it_t, env, &iv)) {
+        StrBuf sb;
+        sb_init(&sb);
+        type_to_string(it_t, &sb);
+        rt_error(vm, n->line, "unknown interface '%s'", sb.data);
+    }
+    if (!IS_KIND(iv, OBJ_INTERFACE)) rt_error(vm, n->line, "'%s' is a %s, not an interface", it_t->name->chars, value_type_name(iv));
+    ObjInterface* it = (ObjInterface*)iv.as.o;
+    if (it_t->nargs != it->ngenerics)
+        rt_error(vm, n->line, "interface '%s' takes %d type argument(s) but %d were given", it->name->chars, it->ngenerics,
+                 it_t->nargs);
+
+    StrBuf tname;
+    sb_init(&tname);
+    type_to_string(target, &tname);
+    Value tv = void_val();
+    if (target->kind == TY_NAME) {
+        if (!resolve_type_value(vm, target, env, &tv)) rt_error(vm, n->line, "unknown type '%s'", tname.data);
+        if (IS_KIND(tv, OBJ_INTERFACE))
+            rt_error(vm, n->line, "'%s' is an interface; only types can implement an interface", tname.data);
+        if (!IS_KIND(tv, OBJ_TYPEDEF) && !IS_KIND(tv, OBJ_ENUM)) rt_error(vm, n->line, "'%s' is not a type", tname.data);
+        for (int i = 0; i < it->nimpls; i++) {
+            Value ov;
+            Impl* o = &it->impls[i];
+            if (o->target->kind == TY_NAME && resolve_type_value(vm, o->target, o->env, &ov) && ov.as.o == tv.as.o)
+                rt_error(vm, n->line, "type '%s' already implements interface '%s'", tname.data, it->name->chars);
+        }
+    }
+    ObjModule* tmod = type_module(tv);
+
+    for (int r = 0; r < it->nreqs; r++) {
+        Signature* req = it->reqs[r];
+        Bindings b;
+        b.count = 0;
+        for (int k = 0; k < it->ngenerics; k++) add_binding(vm, &b, it->generics[k], it_t->args[k], env, n->line);
+        add_binding(vm, &b, it->name, target, env, n->line); /* the interface name means the implementing type */
+        for (int k = 0; k < req->ngenerics; k++) add_binding(vm, &b, req->generics[k], NULL, NULL, n->line);
+
+        Type** ptypes = pp_malloc(sizeof(Type*) * (size_t)(req->nparams ? req->nparams : 1));
+        for (int k = 0; k < req->nparams; k++) ptypes[k] = req->params[k].type;
+
+        Value cands[3];
+        int ncands = 0;
+        Entry* e = env_find(env, req->name, NULL);
+        if (e) cands[ncands++] = e->value;
+        ObjOverload* g = global_set(vm, req->name);
+        if (g) cands[ncands++] = obj_val(g);
+        Value mv;
+        if (tmod && module_member(tmod, req->name, &mv)) cands[ncands++] = mv;
+
+        bool ok = false;
+        for (int k = 0; k < ncands && !ok; k++) {
+            if (!is_callable(cands[k])) continue;
+            ok = callable_fits(vm, cands[k].as.o, ptypes, req->nparams, req->variadic, req->ret, it->env, &b, it->name, true);
+        }
+        free(ptypes);
+        if (!ok) {
+            StrBuf sb;
+            sb_init(&sb);
+            requirement_to_string(req, it->name, tname.data, &sb);
+            rt_error(vm, n->line, "type '%s' does not implement interface '%s': missing function %s", tname.data, it->name->chars,
+                     sb.data);
+        }
+    }
+
+    GROW(it->impls, it->nimpls, it->capimpls);
+    Impl* im = &it->impls[it->nimpls++];
+    im->target = target;
+    im->env = env;
+    im->args = it_t->args;
+    im->nargs = it_t->nargs;
+    sb_free(&tname);
+    /* overload choices cached at call sites may change now that values of the type fit the interface */
+    for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->sets[0] = NULL;
+}
+
 static void exec_precedence(VM* vm, Node* n) {
     ObjString* op = n->as.prec.op;
     int rel = n->as.prec.rel;
@@ -1118,7 +1280,6 @@ static void exec_precedence(VM* vm, Node* n) {
     vm->prec_version++;
 }
 
-static ObjModule* load_module(VM* vm, const char* path, bool is_file, int line);
 static void exec_export(VM* vm, Node* n);
 
 static void bind_import(VM* vm, ObjEnv* env, ObjString* name, Value v) {
@@ -1130,8 +1291,54 @@ static void bind_import(VM* vm, ObjEnv* env, ObjString* name, Value v) {
     env_define(vm, env, name, v, VAR_CONST, NULL);
 }
 
+static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int line, bool required);
+
+static void export_name(VM* vm, int line, ObjString* name, ObjString* alias) {
+    ObjModule* m = vm->cur_module;
+    if (!m) rt_error(vm, line, "'export' can only be used in a module file");
+    Entry* prev = table_find(&m->exports, alias);
+    if (prev && AS_STR(prev->value) != name) rt_error(vm, line, "'%s' is already exported", alias->chars);
+    module_export(m, name, alias);
+}
+
+/*
+ * import os:fs - the export `fs` of module os, or else the file os/fs.pp next to
+ * where os would be. The first segment may be missing (a plain directory).
+ */
+static ObjModule* import_target(VM* vm, Node* n) {
+    int nsubs = n->as.import.nsubs;
+    ObjModule* m = load_module_opt(vm, n->as.import.path->chars, n->as.import.is_file, n->line, nsubs == 0);
+    if (nsubs == 0) return m;
+    StrBuf path, shown;
+    sb_init(&path);
+    sb_init(&shown);
+    sb_puts(&path, n->as.import.path->chars);
+    sb_printf(&shown, n->as.import.is_file ? "\"%s\"" : "%s", n->as.import.path->chars);
+    for (int i = 0; i < nsubs; i++) {
+        ObjString* seg = n->as.import.subs[i];
+        sb_printf(&path, "/%s", seg->chars);
+        Value v;
+        if (m && module_member(m, seg, &v)) {
+            if (!IS_KIND(v, OBJ_MODULE))
+                rt_error(vm, n->line, "%s:%s is a %s, not a module (use import %s -> { %s })", shown.data, seg->chars,
+                         value_type_name(v), shown.data, seg->chars);
+            m = (ObjModule*)v.as.o;
+        } else {
+            ObjModule* sub = load_module_opt(vm, path.data, n->as.import.is_file, n->line, false);
+            if (!sub)
+                rt_error(vm, n->line, "cannot find module %s:%s (%s, and there is no file %s.pp)", shown.data, seg->chars,
+                         m ? "it is not exported by its parent" : "the parent module does not exist", path.data);
+            m = sub;
+        }
+        sb_printf(&shown, ":%s", seg->chars);
+    }
+    sb_free(&path);
+    sb_free(&shown);
+    return m;
+}
+
 static void exec_import(VM* vm, Node* n, ObjEnv* env) {
-    ObjModule* m = load_module(vm, n->as.import.path->chars, n->as.import.is_file, n->line);
+    ObjModule* m = import_target(vm, n);
     vm->cur_line = n->line;
     if (n->as.import.destructure) {
         for (int i = 0; i < n->as.import.nnames; i++) {
@@ -1142,6 +1349,12 @@ static void exec_import(VM* vm, Node* n, ObjEnv* env) {
         }
     } else {
         env_define(vm, env, n->as.import.alias, obj_val(m), VAR_CONST, NULL);
+    }
+    if (n->as.import.reexport) {
+        if (n->as.import.destructure)
+            for (int i = 0; i < n->as.import.nnames; i++) export_name(vm, n->line, n->as.import.names[i], n->as.import.names[i]);
+        else
+            export_name(vm, n->line, n->as.import.alias, n->as.import.alias);
     }
 }
 
@@ -1250,6 +1463,8 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         case S_ENUM: exec_enum(vm, n, env); return EX_NORMAL;
         case S_IMPORT: exec_import(vm, n, env); return EX_NORMAL;
         case S_EXPORT: exec_export(vm, n); return EX_NORMAL;
+        case S_INTERFACE: exec_interface(vm, n, env); return EX_NORMAL;
+        case S_IMPL: exec_impl(vm, n, env); return EX_NORMAL;
         case S_PRECEDENCE: exec_precedence(vm, n); return EX_NORMAL;
         case S_FOR: return exec_for(vm, n, env);
         case S_WHILE:
@@ -1341,22 +1556,15 @@ static ExecStatus run_program(VM* vm, Node* program, ObjModule* m, ObjEnv* env, 
 }
 
 static void exec_export(VM* vm, Node* n) {
-    ObjModule* m = vm->cur_module;
-    if (!m) rt_error(vm, n->line, "'export' can only be used in a module file");
-    for (int i = 0; i < n->as.export_.count; i++) {
-        ObjString* alias = n->as.export_.aliases[i];
-        Entry* prev = table_find(&m->exports, alias);
-        if (prev && AS_STR(prev->value) != n->as.export_.names[i])
-            rt_error(vm, n->line, "'%s' is already exported", alias->chars);
-        module_export(m, n->as.export_.names[i], alias);
-    }
+    for (int i = 0; i < n->as.export_.count; i++) export_name(vm, n->line, n->as.export_.names[i], n->as.export_.aliases[i]);
 }
 
 /*
  * import name     - native module `name`, or name.pp in a library directory
  * import "./path" - a file relative to the importing file (.pp is optional)
  */
-static ObjModule* load_module(VM* vm, const char* path, bool is_file, int line) {
+/* required = false: returns NULL instead of failing when no such module exists */
+static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int line, bool required) {
     if (!is_file) {
         for (int i = 0; i < vm->nnative_modules; i++) {
             if (strcmp(vm->native_modules[i].name, path) != 0) continue;
@@ -1409,6 +1617,10 @@ static ObjModule* load_module(VM* vm, const char* path, bool is_file, int line) 
     }
     for (int i = 0; i < ndirs; i++) free(dirs[i]);
     free(dirs);
+    if (!found && !required) {
+        sb_free(&tried);
+        return NULL;
+    }
     if (!found) {
         if (is_file) rt_error(vm, line, "cannot find file \"%s\", tried:%s", path, tried.data);
         rt_error(vm, line, "cannot find module '%s'%s%s%s", path, ndirs ? ", tried:" : "", tried.data,
@@ -1562,6 +1774,7 @@ VM* vm_new(int argc, char** argv) {
     vm->builtins = env_new(vm, NULL);
     builtins_register(vm);
     mod_io_register(vm);
+    mod_os_register(vm);
 
     jmp_buf jb;
     vm->err_jmp = &jb;

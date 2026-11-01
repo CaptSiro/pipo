@@ -351,6 +351,7 @@ const char* value_type_name(Value v) {
         case OBJ_VARIANT_CTOR: return "function";
         case OBJ_ENUM:
         case OBJ_TYPEDEF: return "type";
+        case OBJ_INTERFACE: return "interface";
         case OBJ_ENUM_VALUE: return AS_ENUMV(v)->en->name->chars;
         case OBJ_MODULE: return "module";
         case OBJ_ENV: return "scope";
@@ -501,6 +502,7 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
             break;
         }
         case OBJ_TYPEDEF: sb_printf(sb, "<type %s>", ((ObjTypeDef*)o)->name->chars); break;
+        case OBJ_INTERFACE: sb_printf(sb, "<interface %s>", ((ObjInterface*)o)->name->chars); break;
         case OBJ_MODULE: sb_printf(sb, "<module %s>", ((ObjModule*)o)->name->chars); break;
         case OBJ_ENV: sb_puts(sb, "<scope>"); break;
         case OBJ_ENUM_VALUE: {

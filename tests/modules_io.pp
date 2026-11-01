@@ -45,3 +45,8 @@ match io:read_file(path) {
     fail(reason) -> io:print("read failed:", reason)
 }
 io:print(io:read_file("definitely/missing/file.txt"))
+
+// module constants
+io:write("const nl" + io:nl)
+io:print(type_of(io:nl), io:nl == "
+")

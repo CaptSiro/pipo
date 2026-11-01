@@ -10,7 +10,8 @@ typedef enum {
     TY_NAME,   /* user / generic / enum type, optionally with type arguments */
     TY_ARRAY,
     TY_UNION,
-    TY_RECORD
+    TY_RECORD,
+    TY_FUNC    /* callback type: (A, B) -> R, only as the definition of a named type */
 } TypeKind;
 
 typedef enum {
@@ -31,10 +32,13 @@ struct Type {
     int line;
     Prim prim;           /* TY_PRIM */
     ObjString* name;     /* TY_NAME */
-    ObjString* qual;     /* TY_NAME qualified by a module: qual:name */
-    Type** args;
+    ObjString** quals;   /* TY_NAME qualified by modules: a:b:name has quals [a, b] */
+    int nquals;
+    Type** args;         /* TY_NAME type arguments, TY_FUNC parameter types */
     int nargs;
-    Type* inner;         /* TY_ARRAY */
+    bool variadic;       /* TY_FUNC: (...) -> R */
+    Type* inner;         /* TY_ARRAY element, TY_FUNC return type (NULL = any) */
+    Obj* direct;         /* TY_NAME already resolved (typedef / enum / interface), used by concrete types */
     Type* a;             /* TY_UNION */
     Type* b;
     ObjString** fnames;  /* TY_RECORD */
@@ -81,6 +85,8 @@ typedef enum {
     S_ENUM,
     S_IMPORT,
     S_EXPORT,
+    S_INTERFACE,
+    S_IMPL,
     S_PRECEDENCE,
     S_FOR,
     S_WHILE,
@@ -150,7 +156,7 @@ struct Node {
             int root;
             int version;
         } chain;
-        struct { Signature* sig; Node* body; bool global; } func;
+        struct { Signature* sig; Node* body; bool global; bool lambda; } func;
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;
@@ -167,8 +173,20 @@ struct Node {
             VariantDecl* variants;
             int nvariants;
         } enum_decl;
-        struct { ObjString* path; ObjString* alias; ObjString** names; int nnames; bool destructure; bool is_file; } import;
+        struct {
+            ObjString* path;
+            ObjString** subs; /* import os:fs -> path "os", subs [fs] */
+            int nsubs;
+            ObjString* alias;
+            ObjString** names;
+            int nnames;
+            bool destructure;
+            bool is_file;
+            bool reexport; /* export import ... */
+        } import;
         struct { ObjString** names; ObjString** aliases; int count; } export_;
+        struct { ObjString* name; ObjString** generics; int ngenerics; Signature** reqs; int nreqs; } iface;
+        struct { Type* iface; Type* target; } impl;
         struct { ObjString* op; int rel; ObjString* other; } prec;
         struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;
         struct { Node* cond; Node* body; } while_;

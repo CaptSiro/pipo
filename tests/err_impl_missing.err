@@ -1,0 +1,1 @@
+type 'Box' does not implement interface 'Str': missing function str(Box) -> string

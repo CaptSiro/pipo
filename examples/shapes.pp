@@ -6,7 +6,7 @@ type Rect = {
 }
 
 function rect(number width, number height) -> Rect {
-    return Rect({ width: width, height: height })
+    return Rect{ width: width, height: height }
 }
 
 // "methods" are functions whose first parameter is the datatype

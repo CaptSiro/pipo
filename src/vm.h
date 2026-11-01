@@ -83,6 +83,10 @@ struct VM {
 
     ObjModule* cur_module; /* module whose top level is executing (for export) */
 
+    Type** ctypes; /* concrete types given to lambdas, deduplicated (see types.c) */
+    int nctypes;
+    int capctypes;
+
     ObjString* s_and;
     ObjString* s_or;
     ObjString* s_wild;
@@ -112,6 +116,9 @@ bool same_kind(Value a, Value b);
 bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out);
 void type_to_string(Type* t, StrBuf* sb);
 void sig_to_string(Signature* sig, StrBuf* sb);
+Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, ObjString* name);
+bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* ret, ObjEnv* fenv, Bindings* fb,
+                   ObjString* self, bool impl_mode);
 
 /* gc.c */
 void gc_maybe(VM* vm);
@@ -120,7 +127,12 @@ void gc_collect(VM* vm);
 /* builtins.c / prelude.c */
 void builtins_register(VM* vm);
 void def_native(VM* vm, ObjEnv* env, const char* name, const char* sig, NativeFn fn);
+void def_const(VM* vm, ObjEnv* env, const char* name, Value v);
+void def_const_str(VM* vm, ObjEnv* env, const char* name, const char* value);
+void module_export_all(ObjModule* m);
+void def_submodule(VM* vm, ObjModule* parent, const char* name, NativeModuleInit init);
 void mod_io_register(VM* vm);
+void mod_os_register(VM* vm);
 extern const char* PP_PRELUDE;
 
 #endif

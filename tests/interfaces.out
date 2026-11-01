@@ -1,0 +1,6 @@
+<Box(2.5)>
+<square> <rect 4.0>
+printable Box(2.5) something else
+6
+true false
+<interface Str> interface

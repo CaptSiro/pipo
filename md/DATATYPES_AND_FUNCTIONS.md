@@ -151,29 +151,28 @@ function area(Shape s) -> float {
 io:print(circle(2.0).area())
 ```
 
-## Interfaces (planned, not implemented yet)
+## Interfaces
 
-Interfaces are meant to work much like Rust traits: a named set of
-function signatures that a datatype can satisfy. The binding model above
-already provides the dispatch, so an interface only has to name a
-requirement and let it be used as a type. Notes for that design:
+An interface is a named, **closed** list of functions a type must have. The
+syntax and rules are in [LANGUAGE.md](LANGUAGE.md#interfaces). How it maps
+onto the binding model above:
 
-* **A requirement is a signature with `Self` in the first position**, for
-  example `area(Self) -> number`. A type satisfies it when an overload exists
-  whose first parameter accepts that type.
-* **Explicit vs implicit implementation.** Rust requires `impl Trait for Type`.
-  The implicit check ("the functions exist") falls out of the current
-  dispatcher for free. An explicit `impl` block could be sugar that declares
-  the functions, checks they are complete, and records the relationship so
-  errors are reported at the declaration instead of at the first call.
-* **Interfaces as types.** `function total(Shape[] items)` would need a new
-  type kind in `type_match` (`src/types.c`). Its score should rank between
-  the nominal/exact scores (4–5) and generics (2), so concrete overloads
-  still win.
-* **Generic bounds.** `<T: Shape>function largest(T[] items) -> T` adds a
-  constraint check to generic bindings (`Binding` in `src/vm.h`).
-* **Default implementations** would be candidates with an interface-typed
-  first parameter, which concrete overloads outrank automatically.
+* **A requirement is a signature in which the interface's own name stands for
+  the implementing type**, e.g. `function area(Shape) -> number` inside
+  `interface Shape`. `impl Shape for Circle` looks for an overload of `area`
+  whose parameter is written for `Circle`. Catch-all parameters (untyped,
+  `any`, an unbound generic) do not count, otherwise the built-in `str(any)`
+  would satisfy every `str` requirement.
+* **Explicit implementation.** `impl` is a statement that checks the
+  requirements at the moment it runs and records the relationship. It does not
+  declare functions; they are ordinary overloads. Because a type can gain
+  overloads at any time but an interface cannot gain requirements, a passing
+  `impl` stays valid.
+* **Interfaces as types.** `function total(Shape s)` accepts any value whose
+  type has an `impl`. It scores 4 in `type_match` (`src/types.c`), so a
+  parameter declared with the concrete record type (5) still wins.
+* **Not implemented yet:** generic bounds (`<T: Shape>function largest(T[] items)`)
+  and default implementations.
 
 ## Current limitations
 

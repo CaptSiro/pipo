@@ -20,7 +20,8 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value* out);
 static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out);
 static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic);
-static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl);
+static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl,
+                            ObjOverload* impl);
 
 /* ------------------------------------------------------------------ errors */
 
@@ -180,6 +181,28 @@ static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
     return (ObjOverload*)v.as.o;
 }
 
+/* the type a dot call dispatches on: the record's tag or the enum, or NULL */
+static Table* receiver_impl_table(Value recv) {
+    if (IS_KIND(recv, OBJ_OBJECT)) {
+        ObjTypeDef* td = AS_OBJECT(recv)->tag;
+        return td ? &td->impl_fns : NULL;
+    }
+    if (IS_KIND(recv, OBJ_ENUM_VALUE)) return &AS_ENUMV(recv)->en->impl_fns;
+    return NULL;
+}
+
+/*
+ * For recv.name(args): the functions `impl` recorded for the receiver's type,
+ * so a method required by an interface can be called wherever the value goes,
+ * even if the function was never exported.
+ */
+static ObjOverload* receiver_impl_set(Value recv, ObjString* name) {
+    Table* t = receiver_impl_table(recv);
+    if (!t) return NULL;
+    Entry* e = table_find(t, name);
+    return e ? (ObjOverload*)e->value.as.o : NULL;
+}
+
 /* ------------------------------------------------------- option / error */
 
 static int variant_index(ObjEnum* en, const char* name) {
@@ -300,16 +323,18 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
 
 /*
  * Picks the best candidate from the set in scope, then the receiver's module
- * set (dot calls only), then the global set. Earlier sets win ties, so a
- * local declaration shadows an equally good global one.
+ * set and the functions recorded by `impl` for the receiver's type (dot calls
+ * only), then the global set. Earlier sets win ties, so a local declaration
+ * shadows an equally good global one.
  */
-static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, int argc, Value* args, InlineCache* ic, Bindings* out,
-                             int line) {
-    ObjOverload* sets[IC_SETS] = {set, NULL, NULL};
+static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOverload* impl, int argc, Value* args,
+                             InlineCache* ic, Bindings* out, int line) {
+    ObjOverload* sets[IC_SETS] = {set, NULL, NULL, NULL};
     int nsets = 1;
     if (adl && adl != set) sets[nsets++] = adl;
+    if (impl && impl != set && impl != adl) sets[nsets++] = impl;
     ObjOverload* g = global_set(vm, set->name);
-    if (g && g != set && g != adl) sets[nsets++] = g;
+    if (g && g != set && g != adl && g != impl) sets[nsets++] = g;
 
     uint8_t kinds[4];
     bool cacheable = ic && ic_kinds(argc, args, kinds);
@@ -358,16 +383,36 @@ static void push_frame(VM* vm, const char* name, int line) {
     f->line = line > 0 ? line : vm->cur_line;
 }
 
-static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env) {
-    (void)vm;
-    if (!t || t->kind != TY_NAME || !IS_KIND(v, OBJ_OBJECT)) return;
-    ObjObject* o = AS_OBJECT(v);
-    if (o->tag) return;
-    Value tv;
-    if (resolve_type_value(vm, t, env, &tv) && IS_KIND(tv, OBJ_TYPEDEF)) {
-        ObjTypeDef* td = (ObjTypeDef*)tv.as.o;
-        if (td->def->kind == TY_RECORD) o->tag = td;
+static void adopt_field_callbacks(VM* vm, ObjObject* o);
+
+/*
+ * Tags record values with the record type they were checked against, so they
+ * match nominally later (interfaces, overloads, dot calls). With deep, the
+ * elements of an array were checked too (`const Item[] xs = [{...}]`,
+ * `let Order o = ...` with `type Order = Item[]`), so they are tagged as well.
+ */
+static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
+    if (!t) return;
+    if (t->kind == TY_ARRAY) {
+        if (!deep || !IS_KIND(v, OBJ_ARRAY)) return;
+        ObjArray* a = AS_ARRAY(v);
+        for (int i = 0; i < a->count; i++) {
+            maybe_tag(vm, t->inner, a->items[i], env, deep);
+            if (IS_KIND(a->items[i], OBJ_OBJECT)) adopt_field_callbacks(vm, AS_OBJECT(a->items[i]));
+        }
+        return;
     }
+    if (t->kind != TY_NAME) return;
+    Value tv;
+    if (!resolve_type_value(vm, t, env, &tv) || !IS_KIND(tv, OBJ_TYPEDEF)) return;
+    ObjTypeDef* td = (ObjTypeDef*)tv.as.o;
+    if (td->def->kind == TY_ARRAY) {
+        maybe_tag(vm, td->def, v, td->env, deep); /* alias of an array type */
+        return;
+    }
+    if (td->def->kind != TY_RECORD || !IS_KIND(v, OBJ_OBJECT)) return;
+    ObjObject* o = AS_OBJECT(v);
+    if (!o->tag) o->tag = td;
 }
 
 /* lambdas stored in fields of a record type take the callback types of those fields */
@@ -391,7 +436,7 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
         type_to_string(t, &sb);
         rt_error(vm, line, "%s: expected %s but got %s", what, sb.data, value_type_name(v));
     }
-    maybe_tag(vm, t, v, env);
+    maybe_tag(vm, t, v, env, deep);
     if (IS_KIND(v, OBJ_OBJECT)) adopt_field_callbacks(vm, AS_OBJECT(v));
     return adopt_callback_types(vm, t, v, env, b, name);
 }
@@ -466,18 +511,22 @@ static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int
 }
 
 static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic) {
-    return call_value_adl(vm, callee, argc, args, line, ic, NULL);
+    return call_value_adl(vm, callee, argc, args, line, ic, NULL, NULL);
 }
 
-/* adl: extra candidates from the receiver's module for a dot call, or NULL */
-static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl) {
+/*
+ * adl: extra candidates from the receiver's module for a dot call, or NULL.
+ * impl: functions recorded by `impl` for the receiver's type, or NULL.
+ */
+static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl,
+                            ObjOverload* impl) {
     if (!IS_OBJ(callee)) rt_error(vm, line, "a value of type %s is not callable", value_type_name(callee));
     Obj* o = callee.as.o;
     Bindings b;
     b.count = 0;
     switch (o->kind) {
         case OBJ_OVERLOAD: {
-            Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, argc, args, ic, &b, line);
+            Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, impl, argc, args, ic, &b, line);
             return invoke(vm, t, argc, args, &b, line);
         }
         case OBJ_FUNCTION:
@@ -732,14 +781,20 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             /* dot syntax: recv.f(args) == f(recv, args), recv.mod:f(args) == mod:f(recv, args) */
             Value recv = eval(vm, n->as.method.recv, env);
             vm_push(vm, recv);
-            /* recv.f(args) also sees the functions exported by the module that declared recv's type */
+            /*
+             * recv.f(args) also sees the functions exported by the module that declared recv's type,
+             * and the functions an `impl` found for recv's type
+             */
             Node* cn = n->as.method.callee;
             ObjOverload* adl = NULL;
+            ObjOverload* impl = NULL;
             Value callee;
             if (cn->kind == N_IDENT) {
                 adl = receiver_module_set(vm, recv, cn->as.str);
+                impl = receiver_impl_set(recv, cn->as.str);
                 if (env_find(env, cn->as.str, NULL) || global_set(vm, cn->as.str)) callee = eval(vm, cn, env);
                 else if (adl) callee = obj_val(adl);
+                else if (impl) callee = obj_val(impl);
                 else rt_error(vm, n->line, "no function '%s' to call on a value of type %s", cn->as.str->chars, value_type_name(recv));
             } else {
                 callee = eval(vm, cn, env);
@@ -748,7 +803,7 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             int args_base = vm->sp;
             vm_push(vm, recv);
             for (int i = 0; i < n->as.method.args.count; i++) vm_push(vm, eval(vm, n->as.method.args.items[i], env));
-            Value r = call_value_adl(vm, callee, vm->sp - args_base, &vm->stack[args_base], n->line, n->as.method.ic, adl);
+            Value r = call_value_adl(vm, callee, vm->sp - args_base, &vm->stack[args_base], n->line, n->as.method.ic, adl, impl);
             vm->sp = base;
             return r;
         }
@@ -1206,6 +1261,13 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
     }
     ObjModule* tmod = type_module(tv);
 
+    /* the functions that satisfy the requirements; recorded on the type once every requirement is met */
+    struct {
+        ObjString* name;
+        Obj* fn;
+    }* found = NULL;
+    int nfound = 0, capfound = 0;
+
     for (int r = 0; r < it->nreqs; r++) {
         Signature* req = it->reqs[r];
         Bindings b;
@@ -1227,12 +1289,29 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
         if (tmod && module_member(tmod, req->name, &mv)) cands[ncands++] = mv;
 
         bool ok = false;
+        /* stop at the first fit, like overload checks elsewhere: later overloads may name types not declared yet */
         for (int k = 0; k < ncands && !ok; k++) {
             if (!is_callable(cands[k])) continue;
-            ok = callable_fits(vm, cands[k].as.o, ptypes, req->nparams, req->variadic, req->ret, it->env, &b, it->name, true);
+            Obj* c = cands[k].as.o;
+            Obj** items = &c;
+            int nitems = 1;
+            if (c->kind == OBJ_OVERLOAD) {
+                items = ((ObjOverload*)c)->items;
+                nitems = ((ObjOverload*)c)->count;
+            }
+            for (int i = 0; i < nitems && !ok; i++) {
+                Bindings tb = b;
+                if (!callable_fits(vm, items[i], ptypes, req->nparams, req->variadic, req->ret, it->env, &tb, it->name, true))
+                    continue;
+                ok = true;
+                GROW(found, nfound, capfound);
+                found[nfound].name = req->name;
+                found[nfound++].fn = items[i];
+            }
         }
         free(ptypes);
         if (!ok) {
+            free(found);
             StrBuf sb;
             sb_init(&sb);
             requirement_to_string(req, it->name, tname.data, &sb);
@@ -1247,6 +1326,22 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
     im->env = env;
     im->args = it_t->args;
     im->nargs = it_t->nargs;
+
+    /* dot calls on values of the type can now reach these functions from any module */
+    Table* fns = IS_KIND(tv, OBJ_TYPEDEF) ? &((ObjTypeDef*)tv.as.o)->impl_fns
+                 : IS_KIND(tv, OBJ_ENUM)  ? &((ObjEnum*)tv.as.o)->impl_fns
+                                          : NULL;
+    for (int i = 0; fns && i < nfound; i++) {
+        Entry* e = table_find(fns, found[i].name);
+        ObjOverload* set;
+        if (e) set = (ObjOverload*)e->value.as.o;
+        else {
+            set = overload_new(vm, found[i].name);
+            table_set(fns, found[i].name, obj_val(set));
+        }
+        overload_add(set, found[i].fn);
+    }
+    free(found);
     sb_free(&tname);
     /* overload choices cached at call sites may change now that values of the type fit the interface */
     for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->sets[0] = NULL;
@@ -1775,6 +1870,7 @@ VM* vm_new(int argc, char** argv) {
     builtins_register(vm);
     mod_io_register(vm);
     mod_os_register(vm);
+    mod_pp_register(vm);
 
     jmp_buf jb;
     vm->err_jmp = &jb;

@@ -75,6 +75,8 @@ default is the last segment.
 `export import` is only allowed at the top level, like `export`.
 Dot calls already search the module that **declared** the receiver's type,
 so `r.area()` finds `area` in `ui:shapes` however `r` reached the caller.
+They also search the functions an `impl` recorded for the receiver's type,
+exported or not (see Interfaces in LANGUAGE.md).
 
 ## Global functions
 
@@ -142,16 +144,15 @@ import io
 io:print("hello", 42)        // like console.log / System.out.println
 ```
 
-| function | |
-|----------|-|
-| `print(...)` | arguments separated by spaces, then a newline. Objects are pretty JSON |
-| `write(...)` | the same without the newline |
-| `eprint(...)` | like print, to stderr |
-| `input(...) -> string` | prints the prompt, reads one line |
-| `read_file(path)` | `success(text)` or `fail(message)` |
-| `write_file(path, text)` | `success(bytes_written)` or `fail(message)` |
-| `nl` | the constant `"
-"`: `io:write("done" + io:nl)` |
+| function                 |                                                                        |
+|--------------------------|------------------------------------------------------------------------|
+| `print(...)`             | arguments separated by spaces, then a newline. Objects are pretty JSON |
+| `write(...)`             | the same without the newline                                           |
+| `eprint(...)`            | like print, to stderr                                                  |
+| `input(...) -> string`   | prints the prompt, reads one line                                      |
+| `read_file(path)`        | `success(text)` or `fail(message)`                                     |
+| `write_file(path, text)` | `success(bytes_written)` or `fail(message)`                            |
+| `nl`                     | the constant `"\n"`: `io:write("done" + io:nl)`                        |
 
 ## The `os` module
 
@@ -159,10 +160,31 @@ io:print("hello", 42)        // like console.log / System.out.println
 |--------|-|
 | `platform` | `"windows"`, `"linux"` or `"macos"` |
 | `args() -> string[]` | the script path, then the arguments after it |
+| `join(parts...) -> string` | joins with the platform separator; empty parts are skipped, an absolute part starts over |
+| `join_pp(parts...) -> string` | `join(pp:dir(), parts...)`: a path next to the file the call is written in |
 | `fs:exists(path) -> bool` | a file or directory exists |
 | `fs:is_dir(path) -> bool` | the path is a directory |
 
 `os:fs` is a native submodule: `import os:fs` binds it as `fs`.
+
+## The `pp` module
+
+Where the running code lives, like PHP's `__FILE__`, `__DIR__` and `__LINE__`:
+
+| function | |
+|----------|-|
+| `file() -> string` | absolute path of the file the call is written in |
+| `dir() -> string`  | its directory (the working directory in the REPL) |
+| `line() -> int`    | the line of the call |
+
+They describe the file the **call is written in**, not the entry script, so
+`pp:dir()` inside an imported module is that module's directory. Paths built
+from them do not depend on the directory the script was started from:
+
+```
+import os
+const path = os:join_pp("order.txt")      // == os:join(pp:dir(), "order.txt")
+```
 
 ## Planned standard packages
 

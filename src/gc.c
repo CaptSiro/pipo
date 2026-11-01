@@ -55,6 +55,7 @@ static void blacken(Obj* o) {
             ObjEnum* en = (ObjEnum*)o;
             mark_obj((Obj*)en->env);
             mark_obj((Obj*)en->module);
+            mark_table(&en->impl_fns);
             for (int i = 0; i < en->nvariants; i++) {
                 mark_value(en->variants[i].value);
                 mark_obj((Obj*)en->variants[i].singleton);
@@ -72,6 +73,7 @@ static void blacken(Obj* o) {
         case OBJ_TYPEDEF:
             mark_obj((Obj*)((ObjTypeDef*)o)->env);
             mark_obj((Obj*)((ObjTypeDef*)o)->module);
+            mark_table(&((ObjTypeDef*)o)->impl_fns);
             break;
         case OBJ_INTERFACE: {
             ObjInterface* it = (ObjInterface*)o;
@@ -102,7 +104,11 @@ static void free_obj(Obj* o) {
         case OBJ_ARRAY: free(((ObjArray*)o)->items); break;
         case OBJ_OBJECT: table_free(&((ObjObject*)o)->fields); break;
         case OBJ_OVERLOAD: free(((ObjOverload*)o)->items); break;
-        case OBJ_ENUM: free(((ObjEnum*)o)->variants); break;
+        case OBJ_ENUM:
+            free(((ObjEnum*)o)->variants);
+            table_free(&((ObjEnum*)o)->impl_fns);
+            break;
+        case OBJ_TYPEDEF: table_free(&((ObjTypeDef*)o)->impl_fns); break;
         case OBJ_ENV: table_free(&((ObjEnv*)o)->vars); break;
         case OBJ_MODULE: table_free(&((ObjModule*)o)->exports); break;
         case OBJ_INTERFACE: free(((ObjInterface*)o)->impls); break;

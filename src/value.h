@@ -216,6 +216,7 @@ struct ObjEnum {
     Type* value_type;
     ObjEnv* env;
     ObjModule* module; /* module that declared the enum (NULL for the prelude) */
+    Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
 };
 
 struct ObjVariantCtor {
@@ -241,6 +242,7 @@ struct ObjTypeDef {
     Type* def;
     ObjEnv* env;
     ObjModule* module; /* module that declared the type (NULL for the prelude) */
+    Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
 };
 
 /* `impl Iface<args> for target` */

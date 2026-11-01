@@ -318,6 +318,11 @@ function total(Container<int> c) -> int { ... }
   are searched where the `impl` is written, among `global` functions, and in
   the exports of the module that declared the type. Function declarations are
   hoisted, so a `function` later in the same block already counts.
+* `impl` **records** the function it found for each requirement on the type.
+  A dot call `v.view()` searches those functions after the call site's scope
+  and the exports of the type's module, so a module that only knows the
+  interface can call the method on any value whose type implements it, even
+  when the function is not exported. Plain calls (`view(v)`) are unaffected.
 * A requirement parameter typed with the interface name needs a function
   **written for the type**. Catch-alls such as the built-in `str(any)` or an
   untyped parameter do not count. A required return type must be declared and

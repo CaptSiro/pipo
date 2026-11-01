@@ -35,6 +35,7 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/builtins.c` | internal (global) functions |
 | `src/mod_io.c` | the native `io` module |
 | `src/mod_os.c` | the native `os` module and its `os:fs` submodule |
+| `src/mod_pp.c` | the native `pp` module: location of the running script |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
 

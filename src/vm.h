@@ -133,6 +133,10 @@ void module_export_all(ObjModule* m);
 void def_submodule(VM* vm, ObjModule* parent, const char* name, NativeModuleInit init);
 void mod_io_register(VM* vm);
 void mod_os_register(VM* vm);
+void mod_pp_register(VM* vm);
+
+/* mod_pp.c: directory of the file the running code is written in (caller frees) */
+char* vm_script_dir(VM* vm);
 extern const char* PP_PRELUDE;
 
 #endif

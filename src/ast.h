@@ -47,9 +47,9 @@ struct Type {
 };
 
 /* monomorphic inline cache for overload resolution at a call site */
-#define IC_SETS 3
+#define IC_SETS 4
 typedef struct InlineCache {
-    Obj* sets[IC_SETS];        /* merged candidate sets: local, receiver's module, global; sets[0] NULL = empty */
+    Obj* sets[IC_SETS];        /* merged candidate sets: local, receiver's module, receiver's impls, global; sets[0] NULL = empty */
     int counts[IC_SETS];
     int argc;
     uint8_t kinds[4];

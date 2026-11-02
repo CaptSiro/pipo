@@ -420,16 +420,24 @@ import os:fs                            // submodule: export `fs` of os, or os/f
 import "./ui":shapes -> { rect }        // works for files too
 export import "./ui/shapes"             // import and re-export in one line (an import)
 
-// ... code ...
+export type Vec = { float x, float y } // export in front of a declaration, anywhere in the code
+export function length(Vec v) -> float { ... }
 
-export { vec, length, Vec }             // what importers may see, last in the file
+export { vec, ORIGIN -> zero }          // or list what importers may see, last in the file
 export SCALE -> factor
 ```
 
 A file is laid out as **imports, then code, then exports**. An `import` (or
 `export import`) after any other statement, an `import` inside a block, or a
-statement after an `export` is a syntax error. Exports name symbols, so they
-can list anything declared above them.
+statement after an export list is a syntax error. Export lists name symbols,
+so they can list anything declared above them.
+
+`export` written in front of a declaration (`type`, `enum`, `interface`,
+`function`, `global function`, `const`, `let`) is part of the code, not of the
+export list: it runs the declaration and exports its name, exactly like
+listing the name at the end. Exporting a function declaration
+(`export function f(int) -> int`) exports every overload of `f`, since
+exports are by name.
 
 A package is a module that re-exports its submodules, so importers write
 `ui:shapes:rect(1, 2)` and `const ui:shapes:Rect r = ...`.

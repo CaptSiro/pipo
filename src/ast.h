@@ -188,7 +188,8 @@ struct Node {
             bool is_file;
             bool reexport; /* export import ... */
         } import;
-        struct { ObjString** names; ObjString** aliases; int count; } export_;
+        /* decl: `export function f ...` runs the declaration, then exports its name */
+        struct { ObjString** names; ObjString** aliases; int count; Node* decl; } export_;
         struct {
             ObjString* name;
             ObjString** generics;

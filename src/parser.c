@@ -896,16 +896,20 @@ static void sig_types_to_string(Signature* sig, StrBuf* sb) {
  * differ). The definition is linked to the declaration, so at run time it
  * fills in the function object the declaration created.
  */
+static Node* unwrap_export(Node* s) {
+    return s->kind == S_EXPORT && s->as.export_.decl ? s->as.export_.decl : s;
+}
+
 static void check_declarations(Parser* p, NodeList* stmts) {
     for (int i = 0; i < stmts->count; i++) {
-        Node* d = stmts->items[i];
+        Node* d = unwrap_export(stmts->items[i]);
         if (d->kind != S_FUNCDECL || d->as.func.body) continue;
         StrBuf want;
         sb_init(&want);
         sig_types_to_string(d->as.func.sig, &want);
         Node* def = NULL;
         for (int j = i + 1; j < stmts->count && !def; j++) {
-            Node* s = stmts->items[j];
+            Node* s = unwrap_export(stmts->items[j]);
             if (s->kind != S_FUNCDECL || s->as.func.sig->name != d->as.func.sig->name) continue;
             StrBuf got;
             sb_init(&got);
@@ -1051,7 +1055,42 @@ static Node* parse_import(Parser* p) {
     return n;
 }
 
-/* export name | export name -> alias | export { a, b -> c, + } | export import ... */
+static bool is_generic_prefix(Parser* p);
+
+/* after `export`: a declaration such as `type A = int` or `function f(...)` */
+static bool at_exported_decl(Parser* p) {
+    Token* t = peek(p);
+    switch (t->kind) {
+        case T_FUNCTION:
+        case T_GLOBAL:
+        case T_CONST:
+        case T_LET:
+        case T_ENUM: return true;
+        case T_OP: return is_generic_prefix(p);
+        case T_IDENT: {
+            Token* a = peek_at(p, 1);
+            return (tok_is(t, T_IDENT, "type") || tok_is(t, T_IDENT, "interface")) && a->kind == T_IDENT && !a->nl_before;
+        }
+        default: return false;
+    }
+}
+
+/* the name an exported declaration binds */
+static ObjString* declared_name(Node* d) {
+    switch (d->kind) {
+        case S_FUNCDECL: return d->as.func.sig->name;
+        case S_LET: return d->as.let.name;
+        case S_TYPE: return d->as.type_decl.name;
+        case S_ENUM: return d->as.enum_decl.name;
+        case S_INTERFACE: return d->as.iface.name;
+        default: return NULL;
+    }
+}
+
+/*
+ * export name | export name -> alias | export { a, b -> c, + } | export import ...
+ * | export <declaration>: export type A = int, export function f(...) { ... }
+ */
 static Node* parse_export(Parser* p) {
     Token* kw = advance(p);
     if (p->block_depth > 0) perr(p, kw, "'export' is only allowed at the top level of a file");
@@ -1062,6 +1101,19 @@ static Node* parse_export(Parser* p) {
         return im;
     }
     Node* n = new_node(S_EXPORT, kw->line);
+    if (at_exported_decl(p)) {
+        Token* at = peek(p);
+        Node* d = parse_statement(p);
+        ObjString* name = declared_name(d);
+        if (!name) perr(p, at, "'export' before a statement needs a named declaration (type, enum, interface, function, const or let)");
+        n->as.export_.decl = d;
+        n->as.export_.names = pp_malloc(sizeof(ObjString*));
+        n->as.export_.aliases = pp_malloc(sizeof(ObjString*));
+        n->as.export_.names[0] = name;
+        n->as.export_.aliases[0] = name;
+        n->as.export_.count = 1;
+        return n;
+    }
     int cap = 0, cap2 = 0, n2 = 0;
     bool braces = accept(p, T_LBRACE);
     do {
@@ -1434,7 +1486,7 @@ Node* parse_program(VM* vm, const char* src, const char* file) {
             if (part == EXPORTS)
                 perr(&p, start, "imports must come first in a file, before any other statement (exports start on line %d)",
                      export_line);
-        } else if (s->kind == S_EXPORT) {
+        } else if (s->kind == S_EXPORT && !s->as.export_.decl) {
             if (part != EXPORTS) export_line = start->line;
             part = EXPORTS;
         } else {

@@ -1698,7 +1698,13 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         }
         case S_ENUM: exec_enum(vm, n, env); return EX_NORMAL;
         case S_IMPORT: exec_import(vm, n, env); return EX_NORMAL;
-        case S_EXPORT: exec_export(vm, n); return EX_NORMAL;
+        case S_EXPORT:
+            if (n->as.export_.decl) {
+                if (!vm->cur_module) rt_error(vm, n->line, "'export' can only be used in a module file");
+                exec(vm, n->as.export_.decl, env);
+            }
+            exec_export(vm, n);
+            return EX_NORMAL;
         case S_INTERFACE: exec_interface(vm, n, env); return EX_NORMAL;
         case S_IMPL: exec_impl(vm, n, env); return EX_NORMAL;
         case S_PRECEDENCE: exec_precedence(vm, n); return EX_NORMAL;

@@ -45,6 +45,7 @@ block       = '{' statement* '}'
 import      = 'import' (ident | string) (':' ident)* ('->' (ident | '{' name (',' name)* '}'))?
 export      = 'export' (export_item | '{' export_item (',' export_item)* '}')      top level only
             | 'export' import                                                   import and re-export
+            | 'export' (let | function_decl | type_decl | enum_decl | interface)   a statement, not part of export*
 export_item = name ('->' name)?
 name        = ident | op
 ```

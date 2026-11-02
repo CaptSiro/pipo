@@ -41,6 +41,17 @@ static PP_NORETURN void perr(Parser* p, Token* t, const char* fmt, ...) {
     longjmp(p->jb, 1);
 }
 
+static PP_NORETURN void perr_line(Parser* p, int line, const char* fmt, ...) {
+    fflush(stdout);
+    fprintf(stderr, "%s:%d: syntax error: ", p->file, line);
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+    longjmp(p->jb, 1);
+}
+
 static Token* peek(Parser* p) {
     return &p->toks[p->pos];
 }
@@ -155,6 +166,7 @@ static bool prim_from_name(const char* s, int len, Prim* out) {
 static Node* parse_expression(Parser* p);
 static Node* parse_statement(Parser* p);
 static Node* parse_block(Parser* p);
+static void end_statement(Parser* p);
 static Node* parse_unary(Parser* p);
 static Type* parse_type(Parser* p);
 
@@ -346,7 +358,11 @@ static void parse_generic_params(Parser* p, ObjString*** names, Type*** defaults
     if (!eat_op_prefix(p, ">")) perr(p, peek(p), "expected '>' to close the generic parameter list");
 }
 
-static void parse_params(Parser* p, Signature* sig) {
+/*
+ * unnamed: NULL when every typed parameter needs a name; otherwise a missing
+ * name is allowed (a declaration) and *unnamed gets the first place one is missing
+ */
+static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
     expect(p, T_LPAREN, "'('");
     int cap = 0;
     while (!check(p, T_RPAREN)) {
@@ -362,10 +378,21 @@ static void parse_params(Parser* p, Signature* sig) {
         if (t->kind == T_IDENT && (nk == T_COMMA || nk == T_RPAREN)) {
             advance(p);
             prm.name = intern_tok(p, t);
+            /* (int) is a type without a name: fine in a declaration, an error anywhere else */
+            Prim pr;
+            if (prim_from_name(t->start, t->len, &pr)) {
+                if (!unnamed) perr(p, peek(p), "expected parameter name but found %s", tok_desc(peek(p)));
+                if (!*unnamed) *unnamed = peek(p);
+            }
         } else {
             prm.type = parse_type(p);
             no_inline_fn_type(p);
-            prm.name = intern_tok(p, expect(p, T_IDENT, "parameter name"));
+            if (unnamed && !check(p, T_IDENT)) {
+                if (!*unnamed) *unnamed = peek(p);
+                prm.name = str_cintern(p->vm, "");
+            } else {
+                prm.name = intern_tok(p, expect(p, T_IDENT, "parameter name"));
+            }
         }
         GROW(sig->params, sig->nparams, cap);
         sig->params[sig->nparams++] = prm;
@@ -456,8 +483,36 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     } else {
         sig->name = str_cintern(p->vm, "anonymous");
     }
-    parse_params(p, sig);
+    Token* unnamed = NULL;
+    parse_params(p, sig, statement && named ? &unnamed : NULL);
     if (accept(p, T_ARROW)) sig->ret = parse_type(p);
+    if (statement && named && !check(p, T_LBRACE)) {
+        /*
+         * function a(int) -> float: a declaration, written like an interface
+         * requirement (names are optional, so a lone name is a type). The
+         * definition must follow in the same block.
+         */
+        ObjString* empty = str_cintern(p->vm, "");
+        for (int i = 0; i < sig->nparams; i++) {
+            Param* prm = &sig->params[i];
+            if (prm->type || prm->name == empty) continue;
+            Prim pr;
+            const char* nm = prm->name->chars;
+            if (prim_from_name(nm, (int)strlen(nm), &pr)) {
+                prm->type = new_type(TY_PRIM, kw->line);
+                prm->type->prim = pr;
+            } else {
+                prm->type = new_type(TY_NAME, kw->line);
+                prm->type->name = prm->name;
+            }
+            prm->name = empty;
+        }
+        end_statement(p);
+        Node* n = new_node(S_FUNCDECL, kw->line);
+        n->as.func.sig = sig;
+        return n;
+    }
+    if (unnamed) perr(p, unnamed, "expected parameter name but found %s", tok_desc(unnamed));
     Node* body = parse_block(p);
     Node* n = new_node(statement && named ? S_FUNCDECL : N_FUNC, kw->line);
     n->as.func.sig = sig;
@@ -483,7 +538,7 @@ static Node* parse_lambda(Parser* p) {
         sig->params[0].name = intern_tok(p, start);
         sig->nparams = 1;
     } else {
-        parse_params(p, sig);
+        parse_params(p, sig, NULL);
     }
     expect(p, T_ARROW, "'->'");
     bool saved_nl = p->no_lambda;
@@ -819,6 +874,61 @@ static Node* parse_expression(Parser* p) {
 
 /* ------------------------------------------------------------- statements */
 
+static void sig_types_to_string(Signature* sig, StrBuf* sb) {
+    if (sig->ngenerics) {
+        sb_putc(sb, '<');
+        for (int i = 0; i < sig->ngenerics; i++) sb_printf(sb, i ? ", %s" : "%s", sig->generics[i]->chars);
+        sb_putc(sb, '>');
+    }
+    sb_printf(sb, "%s(", sig->name->chars);
+    for (int i = 0; i < sig->nparams; i++) {
+        if (i) sb_puts(sb, ", ");
+        type_to_string(sig->params[i].type, sb);
+    }
+    if (sig->variadic) sb_puts(sb, sig->nparams ? ", ..." : "...");
+    sb_puts(sb, ") -> ");
+    type_to_string(sig->ret, sb);
+}
+
+/*
+ * Every declaration (function without a body) in a block needs a definition
+ * later in the same block, written with the same types (parameter names may
+ * differ). The definition is linked to the declaration, so at run time it
+ * fills in the function object the declaration created.
+ */
+static void check_declarations(Parser* p, NodeList* stmts) {
+    for (int i = 0; i < stmts->count; i++) {
+        Node* d = stmts->items[i];
+        if (d->kind != S_FUNCDECL || d->as.func.body) continue;
+        StrBuf want;
+        sb_init(&want);
+        sig_types_to_string(d->as.func.sig, &want);
+        Node* def = NULL;
+        for (int j = i + 1; j < stmts->count && !def; j++) {
+            Node* s = stmts->items[j];
+            if (s->kind != S_FUNCDECL || s->as.func.sig->name != d->as.func.sig->name) continue;
+            StrBuf got;
+            sb_init(&got);
+            sig_types_to_string(s->as.func.sig, &got);
+            bool same = strcmp(want.data, got.data) == 0;
+            sb_free(&got);
+            if (!same) continue;
+            if (!s->as.func.body)
+                perr_line(p, s->line, "function %s is already declared on line %d", want.data, d->line);
+            if (s->as.func.global != d->as.func.global)
+                perr_line(p, s->line, "function %s is declared %s on line %d, so its definition must be %s too", want.data,
+                          d->as.func.global ? "'global'" : "without 'global'", d->line,
+                          d->as.func.global ? "'global'" : "without 'global'");
+            def = s;
+        }
+        if (!def)
+            perr_line(p, d->line, "function %s is declared but not defined (the definition must follow in the same block, with the same types)",
+                      want.data);
+        def->as.func.decl = d->as.func.sig;
+        sb_free(&want);
+    }
+}
+
 static Node* parse_block(Parser* p) {
     Token* open = expect(p, T_LBRACE, "'{'");
     int saved = p->depth;
@@ -843,6 +953,7 @@ static Node* parse_block(Parser* p) {
     advance(p);
     p->depth = saved;
     p->block_depth--;
+    check_declarations(p, &b->as.block.stmts);
     return b;
 }
 
@@ -884,6 +995,7 @@ static Node* parse_let(Parser* p) {
 
 static Node* parse_import(Parser* p) {
     Token* kw = advance(p);
+    if (p->block_depth > 0) perr(p, kw, "'import' is only allowed at the top of a file, before any other statement");
     Node* n = new_node(S_IMPORT, kw->line);
     StrBuf path;
     sb_init(&path);
@@ -1057,10 +1169,16 @@ static Node* parse_type_decl(Parser* p, int line, ObjString** gens, int ngen) {
     return n;
 }
 
+static bool at_impl(Parser* p);
+
 /*
  * interface Name {
  *     function str(Name) -> string          // Name stands for the implementing type
  *     <F>function convert(Name, F) -> F
+ *     function show(Name n) -> string {     // default implementation, used when the type has none
+ *         return "<" + n.str() + ">"
+ *     }
+ *     impl Other for Name                   // extends Other: implementing Name implements Other too
  * }
  */
 static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
@@ -1074,10 +1192,23 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
         parse_generic_params(p, &n->as.iface.generics, NULL, &n->as.iface.ngenerics, false);
     }
     expect(p, T_LBRACE, "'{' to open the interface");
-    int cap = 0;
+    int cap = 0, pcap_parents = 0;
     ObjString* empty = str_cintern(p->vm, "");
     while (!check(p, T_RBRACE)) {
         if (accept(p, T_SEMI) || accept(p, T_COMMA)) continue;
+        if (at_impl(p)) {
+            advance(p);
+            Type* parent = parse_type(p);
+            expect(p, T_FOR, "'for'");
+            Token* self = peek(p);
+            Type* target = parse_type(p);
+            if (target->kind != TY_NAME || target->nquals || target->nargs || target->name != n->as.iface.name)
+                perr(p, self, "inside an interface, 'impl' extends another interface: write 'impl Other for %s'",
+                     n->as.iface.name->chars);
+            GROW(n->as.iface.parents, n->as.iface.nparents, pcap_parents);
+            n->as.iface.parents[n->as.iface.nparents++] = parent;
+            continue;
+        }
         Signature* sig = pp_calloc(1, sizeof(Signature));
         sig->file = p->file;
         if (is_generic_prefix(p)) parse_generic_params(p, &sig->generics, NULL, &sig->ngenerics, false);
@@ -1105,8 +1236,18 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
         }
         expect(p, T_RPAREN, "')'");
         if (accept(p, T_ARROW)) sig->ret = parse_type(p);
-        if (check(p, T_LBRACE)) perr(p, peek(p), "interface functions have no body, implement them as ordinary functions");
+        Node* body = NULL;
+        if (check(p, T_LBRACE)) {
+            for (int i = 0; i < sig->nparams; i++)
+                if (sig->params[i].name == empty)
+                    perr(p, peek(p), "the parameters of a default implementation need names (parameter %d of '%s' has none)", i + 1,
+                         sig->name->chars);
+            body = parse_block(p);
+        }
+        int old_cap = cap;
         GROW(n->as.iface.reqs, n->as.iface.nreqs, cap);
+        if (cap != old_cap) n->as.iface.bodies = pp_realloc(n->as.iface.bodies, sizeof(Node*) * (size_t)cap);
+        n->as.iface.bodies[n->as.iface.nreqs] = body;
         n->as.iface.reqs[n->as.iface.nreqs++] = sig;
     }
     expect(p, T_RBRACE, "'}' to close the interface");
@@ -1278,11 +1419,33 @@ Node* parse_program(VM* vm, const char* src, const char* file) {
     }
     Node* block = new_node(N_BLOCK, 1);
     block->as.block.scoped = true;
+    /* a file is: imports, then the code, then exports */
+    enum { IMPORTS, CODE, EXPORTS } part = IMPORTS;
+    int code_line = 0, export_line = 0;
     while (!check(&p, T_EOF)) {
         if (accept(&p, T_SEMI)) continue;
         if (check(&p, T_RBRACE)) perr(&p, peek(&p), "unexpected '}'");
-        nl_push(&block->as.block.stmts, parse_statement(&p));
+        Token* start = peek(&p);
+        Node* s = parse_statement(&p);
+        if (s->kind == S_IMPORT) {
+            if (part == CODE)
+                perr(&p, start, "imports must come first in a file, before any other statement (code starts on line %d)",
+                     code_line);
+            if (part == EXPORTS)
+                perr(&p, start, "imports must come first in a file, before any other statement (exports start on line %d)",
+                     export_line);
+        } else if (s->kind == S_EXPORT) {
+            if (part != EXPORTS) export_line = start->line;
+            part = EXPORTS;
+        } else {
+            if (part == EXPORTS)
+                perr(&p, start, "exports must be the last statements of a file (exports start on line %d)", export_line);
+            if (part == IMPORTS) code_line = start->line;
+            part = CODE;
+        }
+        nl_push(&block->as.block.stmts, s);
     }
+    check_declarations(&p, &block->as.block.stmts);
     free(tl.toks);
     return block;
 }
@@ -1307,7 +1470,7 @@ Signature* parse_native_signature(VM* vm, const char* name, const char* sig_src)
     sig->name = str_cintern(vm, name);
     sig->file = "<internal>";
     if (check(&p, T_OP) && peek(&p)->start[0] == '<') parse_generic_params(&p, &sig->generics, NULL, &sig->ngenerics, false);
-    parse_params(&p, sig);
+    parse_params(&p, sig, NULL);
     if (accept(&p, T_ARROW)) sig->ret = parse_type(&p);
     free(tl.toks);
     return sig;

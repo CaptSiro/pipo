@@ -254,6 +254,14 @@ static int follow(TRef* r, Value* sample) {
 
 static bool type_accepts(VM* vm, TRef p, TRef a, bool strict);
 
+/* child is parent or extends it, directly or through other interfaces */
+bool interface_extends(ObjInterface* child, ObjInterface* parent) {
+    if (child == parent) return true;
+    for (int i = 0; i < child->nparents; i++)
+        if (interface_extends(child->parents[i], parent)) return true;
+    return false;
+}
+
 static bool interface_covers(VM* vm, ObjInterface* it, TRef a) {
     for (int i = 0; i < it->nimpls; i++)
         if (type_accepts(vm, tref(it->impls[i].target, it->impls[i].env, NULL), a, true)) return true;
@@ -320,7 +328,10 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
         }
         if (IS_KIND(pv, OBJ_TYPEDEF) || IS_KIND(pv, OBJ_ENUM)) return at->kind == TY_NAME && av.as.o == pv.as.o;
         if (IS_KIND(pv, OBJ_INTERFACE)) {
-            if (at->kind == TY_NAME && av.as.o == pv.as.o) return true;
+            /* a Comparator can be passed where an Equals is expected when Comparator extends Equals */
+            if (at->kind == TY_NAME && IS_KIND(av, OBJ_INTERFACE) &&
+                interface_extends((ObjInterface*)av.as.o, (ObjInterface*)pv.as.o))
+                return true;
             return interface_covers(vm, (ObjInterface*)pv.as.o, a);
         }
         rt_error(vm, pt->line, "'%s' is not a type", pt->name->chars);
@@ -564,6 +575,11 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
         }
     }
     return NULL;
+}
+
+/* t with generic parameters replaced by what b binds them to and names resolved: valid in any env (NULL = any) */
+Type* concrete_type(VM* vm, Type* t, ObjEnv* env, Bindings* b) {
+    return concretize(vm, t, env, b, 0);
 }
 
 /*

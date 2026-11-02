@@ -1,0 +1,1 @@
+'B' is an interface; only types can implement an interface (to extend 'A', write 'impl A for B' inside interface 'B')

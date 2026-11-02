@@ -1,0 +1,1 @@
+type 'Point' does not implement interface 'Equals': missing function ==(Point, Point) -> bool

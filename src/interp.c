@@ -443,6 +443,12 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
 
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
     Signature* sig = fn->sig;
+    if (!fn->body) {
+        StrBuf sb;
+        sb_init(&sb);
+        sig_to_string(sig, &sb);
+        rt_error(vm, line, "function %s (declared on line %d) is called before its definition has run", sb.data, sig->line);
+    }
     push_frame(vm, sig->name->chars, line);
     const char* saved_file = vm->cur_file;
     int saved_line = vm->cur_line;
@@ -692,12 +698,15 @@ static bool require_bool(VM* vm, Value v, const char* what, int line) {
 }
 
 /* an operator in scope, or a global one */
-static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line) {
+/* adl / impl: the left operand's candidates (see eval_chain_at), used when op is not in scope */
+static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line, ObjOverload* adl, ObjOverload* impl) {
     Entry* e = env_find(env, op, NULL);
     if (e) return e->value;
     ObjOverload* g = global_set(vm, op);
-    if (!g) rt_error(vm, line, "operator '%s' is not defined", op->chars);
-    return obj_val(g);
+    if (g) return obj_val(g);
+    if (adl) return obj_val(adl);
+    if (impl) return obj_val(impl);
+    rt_error(vm, line, "operator '%s' is not defined", op->chars);
 }
 
 static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
@@ -712,9 +721,15 @@ static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
         return bool_val(require_bool(vm, eval_chain_at(vm, n, env, n->as.chain.right[k]), "operand of '&&' / '||'", n->line));
     }
     int base = vm->sp;
-    vm_push(vm, eval_chain_at(vm, n, env, n->as.chain.left[k]));
+    Value lhs = eval_chain_at(vm, n, env, n->as.chain.left[k]);
+    vm_push(vm, lhs);
     vm_push(vm, eval_chain_at(vm, n, env, n->as.chain.right[k]));
-    Value r = call_value(vm, lookup_operator(vm, env, op, n->line), 2, &vm->stack[base], n->line, &n->as.chain.ics[k]);
+    /* a + b works like a.+(b): it also sees the functions of the left operand's module and impls */
+    ObjOverload* adl = receiver_module_set(vm, lhs, op);
+    ObjOverload* impl = receiver_impl_set(lhs, op);
+    Value callee = lookup_operator(vm, env, op, n->line, adl, impl);
+    vm_push(vm, callee);
+    Value r = call_value_adl(vm, callee, 2, &vm->stack[base], n->line, &n->as.chain.ics[k], adl, impl);
     vm->sp = base;
     return r;
 }
@@ -980,16 +995,34 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
     rt_error(vm, n->line, "no match arm matched the value %s", sb.data);
 }
 
-static void hoist_functions(VM* vm, Node* b, ObjEnv* env) {
-    NodeList* sl = &b->as.block.stmts;
-    for (int i = 0; i < sl->count; i++) {
-        Node* s = sl->items[i];
-        if (s->kind != S_FUNCDECL) continue;
-        vm->cur_line = s->line;
-        ObjFunction* fn = function_new(vm, s->as.func.sig, s->as.func.body, env);
-        env_add_function(vm, env, s->as.func.sig->name, (Obj*)fn);
-        if (s->as.func.global) global_add(vm, s->as.func.sig->name, (Obj*)fn);
+/*
+ * function f(...) { ... } runs where it is written: f exists from that line on.
+ * A declaration (no body) creates the function object early; its definition
+ * fills that same object in, so everything that captured it (an impl, a
+ * variable, a call site cache) gets the body.
+ */
+static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
+    Signature* sig = n->as.func.sig;
+    if (n->as.func.decl) {
+        Entry* e = table_find(&env->vars, sig->name);
+        if (e && IS_KIND(e->value, OBJ_OVERLOAD)) {
+            ObjOverload* set = (ObjOverload*)e->value.as.o;
+            for (int i = 0; i < set->count; i++) {
+                if (set->items[i]->kind != OBJ_FUNCTION) continue;
+                ObjFunction* f = (ObjFunction*)set->items[i];
+                if (f->sig != n->as.func.decl || f->body) continue;
+                f->sig = sig; /* same types, the definition's parameter names */
+                f->body = n->as.func.body;
+                return;
+            }
+        }
     }
+    ObjFunction* fn = function_new(vm, sig, n->as.func.body, env);
+    int base = vm->sp;
+    vm_push(vm, obj_val(fn));
+    env_add_function(vm, env, sig->name, (Obj*)fn);
+    if (n->as.func.global) global_add(vm, sig->name, (Obj*)fn);
+    vm->sp = base;
 }
 
 static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value* out) {
@@ -999,7 +1032,6 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
         push_env(vm, env);
         pushed = true;
     }
-    hoist_functions(vm, b, env);
     if (out) *out = void_val();
     ExecStatus st = EX_NORMAL;
     NodeList* sl = &b->as.block.stmts;
@@ -1025,7 +1057,11 @@ static Value apply_op(VM* vm, ObjEnv* env, ObjString* op, Value a, Value b, int 
     int base = vm->sp;
     vm_push(vm, a);
     vm_push(vm, b);
-    Value r = call_value(vm, lookup_operator(vm, env, op, line), 2, &vm->stack[base], line, ic);
+    ObjOverload* adl = receiver_module_set(vm, a, op);
+    ObjOverload* impl = receiver_impl_set(a, op);
+    Value callee = lookup_operator(vm, env, op, line, adl, impl);
+    vm_push(vm, callee);
+    Value r = call_value_adl(vm, callee, 2, &vm->stack[base], line, ic, adl, impl);
     vm->sp = base;
     return r;
 }
@@ -1182,10 +1218,34 @@ static void exec_interface(VM* vm, Node* n, ObjEnv* env) {
     it->generics = n->as.iface.generics;
     it->ngenerics = n->as.iface.ngenerics;
     it->reqs = n->as.iface.reqs;
+    it->bodies = n->as.iface.bodies;
     it->nreqs = n->as.iface.nreqs;
     it->env = env;
     it->module = module_of_env(vm, env);
+    /* rooted by env while the parents are resolved */
     env_define(vm, env, name, obj_val(it), VAR_CONST, NULL);
+    if (n->as.iface.nparents) {
+        it->parent_types = n->as.iface.parents;
+        it->parents = pp_malloc(sizeof(ObjInterface*) * (size_t)n->as.iface.nparents);
+        for (int i = 0; i < n->as.iface.nparents; i++) {
+            Type* pt = n->as.iface.parents[i];
+            Value pv;
+            if (pt->kind != TY_NAME || !resolve_type_value(vm, pt, env, &pv)) {
+                StrBuf sb;
+                sb_init(&sb);
+                type_to_string(pt, &sb);
+                rt_error(vm, pt->line, "interface '%s' cannot extend unknown interface '%s'", name->chars, sb.data);
+            }
+            if (!IS_KIND(pv, OBJ_INTERFACE))
+                rt_error(vm, pt->line, "interface '%s' can only extend interfaces, but '%s' is a %s", name->chars,
+                         pt->name->chars, value_type_name(pv));
+            ObjInterface* parent = (ObjInterface*)pv.as.o;
+            if (pt->nargs != parent->ngenerics)
+                rt_error(vm, pt->line, "interface '%s' takes %d type argument(s) but %d were given", parent->name->chars,
+                         parent->ngenerics, pt->nargs);
+            it->parents[it->nparents++] = parent;
+        }
+    }
 }
 
 /* str(Box) -> string: a requirement with the interface name replaced by the implementing type */
@@ -1221,45 +1281,96 @@ static ObjModule* type_module(Value tv) {
     return NULL;
 }
 
-/*
- * impl Iface for Type: every function the interface lists must exist right
- * now, written for Type (a catch-all such as the built-in str(any) does not
- * count). Functions are looked up where the impl is written, among global
- * functions, and among the exports of the module that declared Type.
- */
-static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
-    Type* it_t = n->as.impl.iface;
-    Type* target = n->as.impl.target;
-    Value iv;
-    if (it_t->kind != TY_NAME || !resolve_type_value(vm, it_t, env, &iv)) {
-        StrBuf sb;
-        sb_init(&sb);
-        type_to_string(it_t, &sb);
-        rt_error(vm, n->line, "unknown interface '%s'", sb.data);
+/* the table `impl` records a named type's functions in, NULL for other types */
+static Table* type_impl_table(Value tv) {
+    if (IS_KIND(tv, OBJ_TYPEDEF)) return &((ObjTypeDef*)tv.as.o)->impl_fns;
+    if (IS_KIND(tv, OBJ_ENUM)) return &((ObjEnum*)tv.as.o)->impl_fns;
+    return NULL;
+}
+
+static void record_impl_fn(VM* vm, Table* fns, ObjString* name, Obj* fn) {
+    Entry* e = table_find(fns, name);
+    ObjOverload* set;
+    if (e) set = (ObjOverload*)e->value.as.o;
+    else {
+        set = overload_new(vm, name);
+        table_set(fns, name, obj_val(set));
     }
-    if (!IS_KIND(iv, OBJ_INTERFACE)) rt_error(vm, n->line, "'%s' is a %s, not an interface", it_t->name->chars, value_type_name(iv));
-    ObjInterface* it = (ObjInterface*)iv.as.o;
-    if (it_t->nargs != it->ngenerics)
-        rt_error(vm, n->line, "interface '%s' takes %d type argument(s) but %d were given", it->name->chars, it->ngenerics,
-                 it_t->nargs);
+    overload_add(set, fn);
+}
+
+/*
+ * The default implementation of requirement r for this impl: the requirement's
+ * body with the interface name (and the interface's generic parameters)
+ * replaced by the types of the impl, closed over the scope the interface was
+ * declared in. Generic parameters of the requirement itself become `any`.
+ */
+static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
+    Signature* req = it->reqs[r];
+    Signature* ns = pp_malloc(sizeof(Signature));
+    *ns = *req;
+    ns->generics = NULL;
+    ns->ngenerics = 0;
+    ns->params = pp_malloc(sizeof(Param) * (size_t)(req->nparams ? req->nparams : 1));
+    for (int i = 0; i < req->nparams; i++) {
+        ns->params[i].name = req->params[i].name;
+        ns->params[i].type = concrete_type(vm, req->params[i].type, it->env, b);
+    }
+    ns->ret = concrete_type(vm, req->ret, it->env, b);
+    ObjFunction* fn = function_new(vm, ns, it->bodies[r], it->env);
+    fn->owns_sig = true;
+    return fn;
+}
+
+/*
+ * Implements interface `it` (with type arguments args, written in env) for
+ * target. Every function the interface lists must exist right now, written
+ * for the target (a catch-all such as the built-in str(any) does not count),
+ * unless the interface gives a default body. Functions are looked up where
+ * the impl is written, among global functions, among the exports of the
+ * module that declared the target, and among the functions earlier impls
+ * recorded for it. The interfaces `it` extends are implemented first.
+ *
+ * via: the interface whose extension caused this impl (NULL for a written
+ * impl); then a target that already implements `it` is fine.
+ */
+static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Type* target, ObjEnv* env, int line,
+                           ObjInterface* via) {
+    if (nargs != it->ngenerics)
+        rt_error(vm, line, "interface '%s' takes %d type argument(s) but %d were given", it->name->chars, it->ngenerics, nargs);
 
     StrBuf tname;
     sb_init(&tname);
     type_to_string(target, &tname);
     Value tv = void_val();
     if (target->kind == TY_NAME) {
-        if (!resolve_type_value(vm, target, env, &tv)) rt_error(vm, n->line, "unknown type '%s'", tname.data);
+        if (!resolve_type_value(vm, target, env, &tv)) rt_error(vm, line, "unknown type '%s'", tname.data);
         if (IS_KIND(tv, OBJ_INTERFACE))
-            rt_error(vm, n->line, "'%s' is an interface; only types can implement an interface", tname.data);
-        if (!IS_KIND(tv, OBJ_TYPEDEF) && !IS_KIND(tv, OBJ_ENUM)) rt_error(vm, n->line, "'%s' is not a type", tname.data);
+            rt_error(vm, line,
+                     "'%s' is an interface; only types can implement an interface (to extend '%s', write 'impl %s for %s' "
+                     "inside interface '%s')",
+                     tname.data, it->name->chars, it->name->chars, tname.data, tname.data);
+        if (!IS_KIND(tv, OBJ_TYPEDEF) && !IS_KIND(tv, OBJ_ENUM)) rt_error(vm, line, "'%s' is not a type", tname.data);
         for (int i = 0; i < it->nimpls; i++) {
             Value ov;
             Impl* o = &it->impls[i];
-            if (o->target->kind == TY_NAME && resolve_type_value(vm, o->target, o->env, &ov) && ov.as.o == tv.as.o)
-                rt_error(vm, n->line, "type '%s' already implements interface '%s'", tname.data, it->name->chars);
+            if (o->target->kind == TY_NAME && resolve_type_value(vm, o->target, o->env, &ov) && ov.as.o == tv.as.o) {
+                if (via) { /* already implemented, e.g. Equals written before Comparator */
+                    sb_free(&tname);
+                    return;
+                }
+                rt_error(vm, line, "type '%s' already implements interface '%s'", tname.data, it->name->chars);
+            }
         }
     }
     ObjModule* tmod = type_module(tv);
+    Table* fns = type_impl_table(tv);
+
+    /* the interface name means the implementing type, its generics mean the impl's type arguments */
+    Bindings b;
+    b.count = 0;
+    for (int k = 0; k < it->ngenerics; k++) add_binding(vm, &b, it->generics[k], args[k], env, line);
+    add_binding(vm, &b, it->name, target, env, line);
 
     /* the functions that satisfy the requirements; recorded on the type once every requirement is met */
     struct {
@@ -1267,19 +1378,18 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
         Obj* fn;
     }* found = NULL;
     int nfound = 0, capfound = 0;
+    int* defaults = NULL; /* requirements that take their default body */
+    int ndefaults = 0, capdefaults = 0;
 
     for (int r = 0; r < it->nreqs; r++) {
         Signature* req = it->reqs[r];
-        Bindings b;
-        b.count = 0;
-        for (int k = 0; k < it->ngenerics; k++) add_binding(vm, &b, it->generics[k], it_t->args[k], env, n->line);
-        add_binding(vm, &b, it->name, target, env, n->line); /* the interface name means the implementing type */
-        for (int k = 0; k < req->ngenerics; k++) add_binding(vm, &b, req->generics[k], NULL, NULL, n->line);
+        Bindings rb = b;
+        for (int k = 0; k < req->ngenerics; k++) add_binding(vm, &rb, req->generics[k], NULL, NULL, line);
 
         Type** ptypes = pp_malloc(sizeof(Type*) * (size_t)(req->nparams ? req->nparams : 1));
         for (int k = 0; k < req->nparams; k++) ptypes[k] = req->params[k].type;
 
-        Value cands[3];
+        Value cands[4];
         int ncands = 0;
         Entry* e = env_find(env, req->name, NULL);
         if (e) cands[ncands++] = e->value;
@@ -1287,6 +1397,8 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
         if (g) cands[ncands++] = obj_val(g);
         Value mv;
         if (tmod && module_member(tmod, req->name, &mv)) cands[ncands++] = mv;
+        Entry* ie = fns ? table_find(fns, req->name) : NULL;
+        if (ie) cands[ncands++] = ie->value;
 
         bool ok = false;
         /* stop at the first fit, like overload checks elsewhere: later overloads may name types not declared yet */
@@ -1300,7 +1412,7 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
                 nitems = ((ObjOverload*)c)->count;
             }
             for (int i = 0; i < nitems && !ok; i++) {
-                Bindings tb = b;
+                Bindings tb = rb;
                 if (!callable_fits(vm, items[i], ptypes, req->nparams, req->variadic, req->ret, it->env, &tb, it->name, true))
                     continue;
                 ok = true;
@@ -1310,41 +1422,70 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
             }
         }
         free(ptypes);
+        if (!ok && it->bodies && it->bodies[r]) {
+            GROW(defaults, ndefaults, capdefaults);
+            defaults[ndefaults++] = r;
+            ok = true;
+        }
         if (!ok) {
             free(found);
+            free(defaults);
             StrBuf sb;
             sb_init(&sb);
             requirement_to_string(req, it->name, tname.data, &sb);
-            rt_error(vm, n->line, "type '%s' does not implement interface '%s': missing function %s", tname.data, it->name->chars,
+            rt_error(vm, line, "type '%s' does not implement interface '%s': missing function %s", tname.data, it->name->chars,
                      sb.data);
         }
+    }
+
+    /* `impl Equals for Comparator` inside Comparator: implementing Comparator implements Equals too */
+    for (int i = 0; i < it->nparents; i++) {
+        Type* pt = it->parent_types[i];
+        Type** pargs = NULL;
+        if (pt->nargs) {
+            pargs = pp_malloc(sizeof(Type*) * (size_t)pt->nargs);
+            for (int k = 0; k < pt->nargs; k++) pargs[k] = concrete_type(vm, pt->args[k], it->env, &b);
+        }
+        impl_interface(vm, it->parents[i], pargs, pt->nargs, target, env, line, it);
     }
 
     GROW(it->impls, it->nimpls, it->capimpls);
     Impl* im = &it->impls[it->nimpls++];
     im->target = target;
     im->env = env;
-    im->args = it_t->args;
-    im->nargs = it_t->nargs;
+    im->args = args;
+    im->nargs = nargs;
 
-    /* dot calls on values of the type can now reach these functions from any module */
-    Table* fns = IS_KIND(tv, OBJ_TYPEDEF) ? &((ObjTypeDef*)tv.as.o)->impl_fns
-                 : IS_KIND(tv, OBJ_ENUM)  ? &((ObjEnum*)tv.as.o)->impl_fns
-                                          : NULL;
-    for (int i = 0; fns && i < nfound; i++) {
-        Entry* e = table_find(fns, found[i].name);
-        ObjOverload* set;
-        if (e) set = (ObjOverload*)e->value.as.o;
-        else {
-            set = overload_new(vm, found[i].name);
-            table_set(fns, found[i].name, obj_val(set));
-        }
-        overload_add(set, found[i].fn);
+    /* dot calls and operators on values of the type can now reach these functions from any module */
+    for (int i = 0; fns && i < nfound; i++) record_impl_fn(vm, fns, found[i].name, found[i].fn);
+    for (int i = 0; i < ndefaults; i++) {
+        int r = defaults[i];
+        int base = vm->sp;
+        ObjFunction* fn = default_impl(vm, it, r, &b);
+        vm_push(vm, obj_val(fn));
+        /* a type without a declaration of its own (int, string[], ...) gets the default where the impl is written */
+        if (fns) record_impl_fn(vm, fns, it->reqs[r]->name, (Obj*)fn);
+        else env_add_function(vm, env, it->reqs[r]->name, (Obj*)fn);
+        vm->sp = base;
     }
     free(found);
+    free(defaults);
     sb_free(&tname);
     /* overload choices cached at call sites may change now that values of the type fit the interface */
     for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->sets[0] = NULL;
+}
+
+static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
+    Type* it_t = n->as.impl.iface;
+    Value iv;
+    if (it_t->kind != TY_NAME || !resolve_type_value(vm, it_t, env, &iv)) {
+        StrBuf sb;
+        sb_init(&sb);
+        type_to_string(it_t, &sb);
+        rt_error(vm, n->line, "unknown interface '%s'", sb.data);
+    }
+    if (!IS_KIND(iv, OBJ_INTERFACE)) rt_error(vm, n->line, "'%s' is a %s, not an interface", it_t->name->chars, value_type_name(iv));
+    impl_interface(vm, (ObjInterface*)iv.as.o, it_t->args, it_t->nargs, n->as.impl.target, env, n->line, NULL);
 }
 
 static void exec_precedence(VM* vm, Node* n) {
@@ -1543,7 +1684,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         }
         case S_LET: exec_let(vm, n, env); return EX_NORMAL;
         case S_ASSIGN: exec_assign(vm, n, env); return EX_NORMAL;
-        case S_FUNCDECL: return EX_NORMAL; /* hoisted by exec_block */
+        case S_FUNCDECL: exec_funcdecl(vm, n, env); return EX_NORMAL;
         case S_TYPE: {
             ObjTypeDef* td = (ObjTypeDef*)alloc_obj(vm, sizeof(ObjTypeDef), OBJ_TYPEDEF);
             td->name = n->as.type_decl.name;

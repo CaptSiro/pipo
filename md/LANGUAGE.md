@@ -149,8 +149,26 @@ function name(int a, b) -> int { ... }      // b is untyped
 const f = function(x) { return x * 2 }      // anonymous / closure
 ```
 
-* Functions are values and closures. Declarations are **hoisted** within
-  their block, so they can be called before the line they are declared on.
+* Functions are values and closures. A `function` statement runs where it
+  is written: the function exists from that line on (there is no hoisting).
+  Names inside a body are looked up when the body runs, so two functions can
+  call each other as long as both are written before the first call.
+* **Declarations.** A function written without a body states its signature,
+  like an interface requirement (parameter names are optional, so a lone name
+  is a type). The definition must follow in the same block with the same
+  types; the parameter names may differ:
+
+  ```
+  function a(int) -> float
+  function b(int x) -> float { return a(x) }
+  function a(int y) -> float { return b(y) }
+  ```
+
+  The declaration creates the function object, and the definition fills that
+  same object in. So the function can be used before its body is written: an
+  `impl` checked in between counts it, and a variable or call site that
+  captured it gets the body. Calling it before the definition has run is an
+  error. A `global` declaration needs a `global` definition.
 * Return types are checked. `-> void` forbids returning a value. Omitting
   the return type allows anything.
 * A function with no `return` returns `void`. Using `void` as a value is an
@@ -309,6 +327,28 @@ impl Container<int> for IntList
 function total(Container<int> c) -> int { ... }
 ```
 
+A requirement can have a **default implementation**, and an interface can
+**extend** another one with `impl Parent for Name` inside its body:
+
+```
+interface Equals {
+    function ==(Equals a, Equals b) -> bool
+    function !=(Equals a, Equals b) -> bool {     // used when the type has no != of its own
+        return !(a == b)
+    }
+}
+
+interface Comparator {
+    function <(Comparator, Comparator) -> bool
+    function <=(Comparator, Comparator) -> bool
+    function >(Comparator a, Comparator b) -> bool { return !(a <= b) }
+    function >=(Comparator a, Comparator b) -> bool { return !(a < b) }
+    impl Equals for Comparator                     // every Comparator is an Equals
+}
+
+impl Comparator for Money    // needs ==, <, <=; gets !=, >, >= from the defaults
+```
+
 **Decisions:**
 * **Interfaces are closed.** Unlike a type, which can gain overloads at any
   time, an interface cannot get more functions after it is declared.
@@ -316,8 +356,8 @@ function total(Container<int> c) -> int { ... }
 * `impl` runs like any statement. It checks every requirement at that moment
   and fails with `missing function str(Box) -> string` otherwise. Functions
   are searched where the `impl` is written, among `global` functions, and in
-  the exports of the module that declared the type. Function declarations are
-  hoisted, so a `function` later in the same block already counts.
+  the exports of the module that declared the type. Only functions written (or
+  declared, see [Functions](#functions)) before the `impl` count.
 * `impl` **records** the function it found for each requirement on the type.
   A dot call `v.view()` searches those functions after the call site's scope
   and the exports of the type's module, so a module that only knows the
@@ -332,6 +372,25 @@ function total(Container<int> c) -> int { ... }
   the type (`Box{...}`, `const Box b = ...`, `-> Box`).
 * An interface parameter scores below an exact record type, so
   `describe(Box b)` beats `describe(Str s)` for a `Box`.
+* **Default implementations** are used only for requirements the type has no
+  function for (searched as above, plus functions earlier `impl`s recorded for
+  the type). The default is copied for the type: the interface name (and the
+  interface's type parameters) in its signature become the impl's types, and
+  its body runs in the scope where the interface was declared. It is recorded
+  on the type like a found function, so `a != b` and `a.!=(b)` reach it from
+  any module. For a type without a declaration (`impl Str for int`) the
+  default is declared where the `impl` is written. Its parameters need names.
+* **Extension.** `impl Equals for Comparator` inside `Comparator` means
+  `impl Comparator for X` also runs `impl Equals for X` (after Comparator's own
+  requirements are checked). If X already implements Equals, that one is kept;
+  writing `impl Equals for X` after `impl Comparator for X` is an
+  "already implements" error. A parameter typed `Equals` accepts a value typed
+  `Comparator`. The parent must be declared before the interface; type
+  arguments may use the interface's generics (`impl Bag<T> for Sack`).
+* **Binary operators** search like dot calls: `a == b` also sees the exports of
+  the module that declared `a`'s type and the functions `impl` recorded for it.
+  That is how a default declared in one module (`!(a == b)`) finds the `==`
+  written for the type in another.
 
 ## Objects and arrays
 
@@ -357,14 +416,20 @@ import io                               // library module (native or lib/io.pp)
 import io -> console                    // alias: console:print(...)
 import "./geometry"                     // file next to this one, .pp optional
 import "./geometry" -> { vec, +, Vec }  // bring exports in; + extends the local overload set
-
-export { vec, length, Vec }             // what importers may see
-export SCALE -> factor
-
 import os:fs                            // submodule: export `fs` of os, or os/fs.pp
 import "./ui":shapes -> { rect }        // works for files too
-export import "./ui/shapes"             // import and re-export in one line
+export import "./ui/shapes"             // import and re-export in one line (an import)
+
+// ... code ...
+
+export { vec, length, Vec }             // what importers may see, last in the file
+export SCALE -> factor
 ```
+
+A file is laid out as **imports, then code, then exports**. An `import` (or
+`export import`) after any other statement, an `import` inside a block, or a
+statement after an `export` is a syntax error. Exports name symbols, so they
+can list anything declared above them.
 
 A package is a module that re-exports its submodules, so importers write
 `ui:shapes:rect(1, 2)` and `const ui:shapes:Rect r = ...`.

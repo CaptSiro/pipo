@@ -80,6 +80,7 @@ static void blacken(Obj* o) {
             mark_obj((Obj*)it->env);
             mark_obj((Obj*)it->module);
             for (int i = 0; i < it->nimpls; i++) mark_obj((Obj*)it->impls[i].env);
+            for (int i = 0; i < it->nparents; i++) mark_obj((Obj*)it->parents[i]);
             break;
         }
         case OBJ_MODULE: {
@@ -111,7 +112,10 @@ static void free_obj(Obj* o) {
         case OBJ_TYPEDEF: table_free(&((ObjTypeDef*)o)->impl_fns); break;
         case OBJ_ENV: table_free(&((ObjEnv*)o)->vars); break;
         case OBJ_MODULE: table_free(&((ObjModule*)o)->exports); break;
-        case OBJ_INTERFACE: free(((ObjInterface*)o)->impls); break;
+        case OBJ_INTERFACE:
+            free(((ObjInterface*)o)->impls);
+            free(((ObjInterface*)o)->parents);
+            break;
         case OBJ_FUNCTION:
             if (((ObjFunction*)o)->owns_sig) {
                 free(((ObjFunction*)o)->sig->params);

@@ -156,7 +156,11 @@ struct Node {
             int root;
             int version;
         } chain;
-        struct { Signature* sig; Node* body; bool global; bool lambda; } func;
+        /*
+         * S_FUNCDECL without a body is a declaration (`function a(int) -> float`);
+         * decl: on a definition, the signature of the declaration it fulfils
+         */
+        struct { Signature* sig; Node* body; bool global; bool lambda; Signature* decl; } func;
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;
@@ -185,7 +189,16 @@ struct Node {
             bool reexport; /* export import ... */
         } import;
         struct { ObjString** names; ObjString** aliases; int count; } export_;
-        struct { ObjString* name; ObjString** generics; int ngenerics; Signature** reqs; int nreqs; } iface;
+        struct {
+            ObjString* name;
+            ObjString** generics;
+            int ngenerics;
+            Signature** reqs;
+            Node** bodies; /* default implementation per requirement, NULL = none */
+            int nreqs;
+            Type** parents; /* impl Parent for Name: the interfaces this one extends */
+            int nparents;
+        } iface;
         struct { Type* iface; Type* target; } impl;
         struct { ObjString* op; int rel; ObjString* other; } prec;
         struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;

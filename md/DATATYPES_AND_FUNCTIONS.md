@@ -171,8 +171,15 @@ onto the binding model above:
 * **Interfaces as types.** `function total(Shape s)` accepts any value whose
   type has an `impl`. It scores 4 in `type_match` (`src/types.c`), so a
   parameter declared with the concrete record type (5) still wins.
-* **Not implemented yet:** generic bounds (`<T: Shape>function largest(T[] items)`)
-  and default implementations.
+* **Default implementations** are bound functions too: when `impl` finds no
+  function for a requirement that has a body, it creates one from the body
+  with the interface name replaced by the implementing type and records it on
+  the type. A function written for the type always wins over the default.
+* **Extension** (`impl Equals for Comparator` inside `Comparator`) makes the
+  child's `impl` run the parent's `impl` for the same type, so the type ends
+  up recorded in both interfaces, and `Comparator` is accepted wherever
+  `Equals` is expected.
+* **Not implemented yet:** generic bounds (`<T: Shape>function largest(T[] items)`).
 
 ## Current limitations
 

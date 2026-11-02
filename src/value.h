@@ -256,7 +256,10 @@ typedef struct {
 /*
  * An interface is closed: its required functions are fixed by the declaration
  * and cannot grow later (unlike a type, which gains overloads at any time).
- * `impl` checks the requirements once, when it runs.
+ * `impl` checks the requirements once, when it runs. A requirement with a
+ * body is optional: a type without its own function gets a copy of the
+ * default. An interface that extends others (`impl Equals for Comparator`)
+ * makes every implementing type implement them as well.
  */
 struct ObjInterface {
     Obj obj;
@@ -264,7 +267,11 @@ struct ObjInterface {
     ObjString** generics;
     int ngenerics;
     Signature** reqs;
+    Node** bodies; /* default implementation per requirement, NULL = none */
     int nreqs;
+    Type** parent_types; /* impl Parent<args> for Name, args may use the generics */
+    ObjInterface** parents; /* the interfaces this one extends, resolved when declared */
+    int nparents;
     ObjEnv* env;
     ObjModule* module;
     Impl* impls;

@@ -71,7 +71,7 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
   bytecode compiler with resolved variable slots would be the next big step,
   and would also help a future compile-to-web target.
 * No `try`/catch. No string interpolation. No destructuring `let`.
-* Interfaces have no generic bounds or default implementations yet; see
+* Interfaces have no generic bounds yet; see
   [DATATYPES_AND_FUNCTIONS.md](DATATYPES_AND_FUNCTIONS.md#interfaces).
 * A lambda gets the types of its callback type by being copied with a new
   signature (`adopt_callback_types` in `types.c`). The copied types are

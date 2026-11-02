@@ -1,7 +1,3 @@
-// exports may come before the definitions
-export { Point, point, add, double, Color }
-export SCALE -> factor
-
 type Point = { int x, int y }
 
 enum Color { RED, GREEN }
@@ -20,3 +16,7 @@ function add(int a, int b) -> int {
 function double(Point p) -> Point {
     return point(p:x * 2, p:y * 2)
 }
+
+// exports are the last statements of a file
+export { Point, point, add, double, Color }
+export SCALE -> factor

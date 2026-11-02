@@ -26,10 +26,9 @@ Statements end at a newline. `;` is optional.
 ## Program
 
 ```
-program     = statement*
+program     = import* statement* export*                       imports first, exports last
 
-statement   = import | export
-            | let
+statement   = let
             | function_decl
             | type_decl | enum_decl | interface | impl | precedence
             | for | while
@@ -59,6 +58,8 @@ name        = ident | op
 ```
 let         = ('let' | 'const') type? ident ('=' expression)?
 function_decl = 'global'? generics? 'function' name params ('->' type)? block     'global': top level only
+            | 'global'? generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)?
+                                                            declaration: defined later in the same block
 generics    = '<' ident (',' ident)* '>'
 params      = '(' (param (',' param)*)? ')'
 param       = type? ident
@@ -67,8 +68,10 @@ type_def    = type
             | fn_params '->' type_def                       callback type, only here
 fn_params   = postfix_type ('||' postfix_type)*              one parameter: float -> int
             | '(' ((type (',' type)* (',' '...')?) | '...')? ')'
-interface   = generics? 'interface' ident generics? '{' requirement* '}'
-requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)?
+interface   = generics? 'interface' ident generics? '{' (requirement | extends)* '}'
+requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)? block?
+                                                            block: default implementation, parameters need names
+extends     = 'impl' type 'for' ident                        ident: the interface's own name
 impl        = 'impl' type 'for' type
 enum_decl   = 'enum' type? ident enum_generics? '{' variant (','? variant)* ','? '}'
 enum_generics = '<' ident ('=' type)? (',' ident ('=' type)?)* '>'

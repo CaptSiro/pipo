@@ -245,6 +245,29 @@ const ret = cb.call(...)
     io:print(x)
 })
 
+interface Equals {
+    // can include argument names, but it still just an interface method that needs to be implemented
+    function ==(Equals a, Equals b) -> boolean
+    // default implementation if != is not defined
+    function !=(Equals a, Equals b) -> boolean {
+        return !(a == b)
+    }
+}
+
+interface Comparator {
+    function <(Comparator, Comparator) -> boolean
+    function <=(Comparator, Comparator) -> boolean
+    function >(Comparator a, Comparator b) -> boolean {
+        return !(a <= b)
+    }
+    function >=(Comparator a, Comparator b) -> boolean {
+        return !(a < b)
+    }
+    
+    // extending Equals interface
+    impl Equals for Comparator
+}
+
 ```
 
 This might be it. Lets start as a general language like python, but I would like to extend it to be compilable for web.
@@ -252,6 +275,6 @@ This might be it. Lets start as a general language like python, but I would like
 ## Code conventions
 
 - types and interfaces: PascalCase
-- built-in types: idontknowwhatthiscaseiscalled
+- built-in types: flatcase
 - functions: snake_case
 - variables: snake_case

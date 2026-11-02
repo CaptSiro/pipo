@@ -119,6 +119,8 @@ void sig_to_string(Signature* sig, StrBuf* sb);
 Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, ObjString* name);
 bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* ret, ObjEnv* fenv, Bindings* fb,
                    ObjString* self, bool impl_mode);
+Type* concrete_type(VM* vm, Type* t, ObjEnv* env, Bindings* b);
+bool interface_extends(ObjInterface* child, ObjInterface* parent);
 
 /* gc.c */
 void gc_maybe(VM* vm);

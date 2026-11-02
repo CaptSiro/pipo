@@ -62,6 +62,24 @@ A `sort` comparator returns a number (negative means a comes first) or a bool
 `chr(code)`, `concat(a, b)`, `repeat(s, n)`, `slice(s, start[, end])`,
 `contains(s, sub)`, `index_of(s, sub) -> int?`, `reverse(s)`.
 
+`format(fmt, ...) -> string` formats like C `printf`: `format("%d + %.2f = %s", 1, 2.5, "x")`.
+Specs are `%[flags][width][.precision][length]conversion`, and each one is
+checked against its argument:
+
+| conversion          | argument                                                      |
+|---------------------|---------------------------------------------------------------|
+| `d i`               | int                                                           |
+| `u o x X`           | int, printed as unsigned 64-bit (`%u` of `-1` is 2^64 - 1)    |
+| `f F e E g G a A`   | float or int                                                  |
+| `c`                 | int code point (UTF-8 encoded) or a 1-character string        |
+| `s`                 | any value, printed like `str()`; precision cuts to that many bytes |
+| `%%`                | a literal `%`                                                 |
+
+Flags are `- + space 0 #`. Width and precision can be `*`, taken from the next
+(int) argument. Length modifiers (`l`, `ll`, `h`, ...) are accepted and ignored.
+A wrong argument type, too few or too many arguments, `%n`, `%p` or an unknown
+conversion is a runtime error.
+
 ## Math
 
 `abs`, `min`, `max`, `floor`, `ceil`, `round` (these three return `int`),

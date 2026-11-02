@@ -218,6 +218,228 @@ static Value n_range_step(VM* vm, int argc, Value* a) {
 
 static Value n_str(VM* vm, int argc, Value* a) { return obj_val(to_string(vm, a[0])); }
 
+/*
+ * format("%d + %.2f = %s", 1, 2.5, "x"): C printf-style formatting, checked.
+ *
+ *   %[flags][width][.precision][length]conversion
+ *   flags      - + space 0 #
+ *   width      digits or * (taken from the next argument, an int)
+ *   precision  .digits or .*
+ *   length     h hh l ll z j t L are accepted and ignored (ints are 64-bit)
+ *   d i        int                      u o x X   int, printed as unsigned 64-bit
+ *   f F e E g G a A   float or int      c         int code point or 1-character string
+ *   s          any value, printed like str(); precision cuts it to that many bytes
+ *   %%         a literal %
+ *
+ * Each spec is parsed and checked against its argument here, then rebuilt and
+ * handed to the C library with the matching C type, so the script's string is
+ * never used as a C format (no %n, no type confusion).
+ */
+#define FMT_MAX_WIDTH 1000000
+
+typedef struct {
+    VM* vm;
+    StrBuf* sb;
+    ObjString* fmt;
+    int argc;
+    Value* args;
+    int next;
+} FmtState;
+
+static PP_NORETURN void fmt_error(FmtState* st, const char* msg, ...) {
+    char buf[256];
+    va_list ap;
+    va_start(ap, msg);
+    vsnprintf(buf, sizeof buf, msg, ap);
+    va_end(ap);
+    sb_free(st->sb);
+    rt_error(st->vm, 0, "format: %s", buf);
+}
+
+static Value fmt_arg(FmtState* st, char conv) {
+    if (st->next >= st->argc)
+        fmt_error(st, "'%%%c' has no argument (%d argument(s) given)", conv, st->argc - 1);
+    return st->args[st->next++];
+}
+
+/* digits or * */
+static int fmt_number(FmtState* st, int* i, const char* what) {
+    const char* s = st->fmt->chars;
+    if (s[*i] == '*') {
+        (*i)++;
+        Value v = fmt_arg(st, '*');
+        if (v.kind != VAL_INT) fmt_error(st, "'*' %s needs an int argument but got %s", what, value_type_name(v));
+        if (v.as.i > FMT_MAX_WIDTH || v.as.i < -FMT_MAX_WIDTH) fmt_error(st, "%s %" PRId64 " is too large", what, v.as.i);
+        return (int)v.as.i;
+    }
+    int n = 0;
+    while (s[*i] >= '0' && s[*i] <= '9') {
+        n = n * 10 + (s[*i] - '0');
+        if (n > FMT_MAX_WIDTH) fmt_error(st, "%s is too large (max %d)", what, FMT_MAX_WIDTH);
+        (*i)++;
+    }
+    return n;
+}
+
+/* UTF-8 bytes of code point cp into out (at least 5 bytes), or 0 if it is not a valid code point */
+static int utf8_encode(int64_t cp, char* out) {
+    if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return 0;
+    if (cp < 0x80) {
+        out[0] = (char)cp;
+        return 1;
+    }
+    if (cp < 0x800) {
+        out[0] = (char)(0xC0 | (cp >> 6));
+        out[1] = (char)(0x80 | (cp & 0x3F));
+        return 2;
+    }
+    if (cp < 0x10000) {
+        out[0] = (char)(0xE0 | (cp >> 12));
+        out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (cp & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (cp >> 18));
+    out[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (cp & 0x3F));
+    return 4;
+}
+
+static Value n_format(VM* vm, int argc, Value* a) {
+    StrBuf sb;
+    sb_init(&sb);
+    FmtState st = {vm, &sb, AS_STR(a[0]), argc, a, 1};
+    const char* s = st.fmt->chars;
+    int len = st.fmt->len;
+    for (int i = 0; i < len; i++) {
+        if (s[i] != '%') {
+            int j = i;
+            while (j < len && s[j] != '%') j++;
+            sb_append(&sb, s + i, (size_t)(j - i));
+            i = j - 1;
+            continue;
+        }
+        int start = i++;
+        if (i < len && s[i] == '%') {
+            sb_putc(&sb, '%');
+            continue;
+        }
+
+        /* the spec we hand to C: '%', flags, width, precision, then our own length + conversion */
+        char spec[32];
+        int n = 0;
+        spec[n++] = '%';
+        bool left = false;
+        while (i < len && s[i] && strchr("-+ 0#", s[i])) {
+            if (s[i] == '-') left = true;
+            if (n < 8) spec[n++] = s[i];
+            i++;
+        }
+        int width = fmt_number(&st, &i, "width");
+        if (width < 0) { /* a negative * width means left-aligned, like C */
+            left = true;
+            width = -width;
+            spec[n++] = '-';
+        }
+        int prec = -1;
+        if (i < len && s[i] == '.') {
+            i++;
+            prec = fmt_number(&st, &i, "precision");
+            if (prec < 0) prec = -1; /* a negative * precision means none, like C */
+        }
+        while (i < len && s[i] && strchr("hlzjtL", s[i])) i++;
+        if (i >= len) fmt_error(&st, "the spec at position %d has no conversion character", start);
+        char conv = s[i];
+
+        if (width) n += snprintf(spec + n, sizeof spec - (size_t)n, "%d", width);
+        if (prec >= 0) n += snprintf(spec + n, sizeof spec - (size_t)n, ".%d", prec);
+
+        switch (conv) {
+            case 'd':
+            case 'i': {
+                Value v = fmt_arg(&st, conv);
+                if (v.kind != VAL_INT) fmt_error(&st, "'%%%c' needs an int but got %s", conv, value_type_name(v));
+                snprintf(spec + n, sizeof spec - (size_t)n, "%s", PRId64);
+                sb_printf(&sb, spec, v.as.i);
+                break;
+            }
+            case 'u':
+            case 'o':
+            case 'x':
+            case 'X': {
+                Value v = fmt_arg(&st, conv);
+                if (v.kind != VAL_INT) fmt_error(&st, "'%%%c' needs an int but got %s", conv, value_type_name(v));
+                const char* m = conv == 'u' ? PRIu64 : conv == 'o' ? PRIo64 : conv == 'x' ? PRIx64 : PRIX64;
+                snprintf(spec + n, sizeof spec - (size_t)n, "%s", m);
+                sb_printf(&sb, spec, (uint64_t)v.as.i);
+                break;
+            }
+            case 'f':
+            case 'F':
+            case 'e':
+            case 'E':
+            case 'g':
+            case 'G':
+            case 'a':
+            case 'A': {
+                Value v = fmt_arg(&st, conv);
+                double d;
+                if (v.kind == VAL_FLOAT) d = v.as.f;
+                else if (v.kind == VAL_INT) d = (double)v.as.i;
+                else fmt_error(&st, "'%%%c' needs a float or int but got %s", conv, value_type_name(v));
+                spec[n++] = conv;
+                spec[n] = '\0';
+                sb_printf(&sb, spec, d);
+                break;
+            }
+            case 'c': {
+                Value v = fmt_arg(&st, conv);
+                char buf[5];
+                int blen;
+                if (v.kind == VAL_INT) {
+                    blen = utf8_encode(v.as.i, buf);
+                    if (!blen) fmt_error(&st, "'%%c' got %" PRId64 ", which is not a Unicode code point", v.as.i);
+                } else if (IS_KIND(v, OBJ_STRING) && AS_STR(v)->len >= 1 && AS_STR(v)->len <= 4) {
+                    blen = AS_STR(v)->len;
+                    memcpy(buf, AS_STR(v)->chars, (size_t)blen);
+                } else {
+                    fmt_error(&st, "'%%c' needs an int code point or a 1-character string but got %s", value_type_name(v));
+                }
+                if (prec >= 0) fmt_error(&st, "'%%c' does not take a precision");
+                /* pad by characters, not bytes */
+                if (!left) for (int k = 1; k < width; k++) sb_putc(&sb, ' ');
+                sb_append(&sb, buf, (size_t)blen);
+                if (left) for (int k = 1; k < width; k++) sb_putc(&sb, ' ');
+                break;
+            }
+            case 's': {
+                Value v = fmt_arg(&st, conv);
+                StrBuf tmp;
+                sb_init(&tmp);
+                if (IS_KIND(v, OBJ_STRING)) sb_append(&tmp, AS_STR(v)->chars, (size_t)AS_STR(v)->len);
+                else value_format(&tmp, v, true, 0);
+                spec[n++] = 's';
+                spec[n] = '\0';
+                sb_printf(&sb, spec, tmp.data);
+                sb_free(&tmp);
+                break;
+            }
+            case 'n':
+            case 'p': fmt_error(&st, "'%%%c' is not supported", conv);
+            default:
+                fmt_error(&st, "unknown conversion '%%%c' (use d i u o x X f F e E g G a A c s or %%%%)", conv);
+        }
+    }
+    if (st.next < argc) {
+        int extra = argc - st.next;
+        fmt_error(&st, "%d argument(s) left over: the format uses %d of %d", extra, st.next - 1, argc - 1);
+    }
+    Value r = new_string(vm, sb.data ? sb.data : "", (int)sb.len);
+    sb_free(&sb);
+    return r;
+}
+
 static Value n_type_of(VM* vm, int argc, Value* a) { return obj_val(str_cnew(vm, value_type_name(a[0]))); }
 
 static bool parse_int_str(ObjString* s, int64_t* out) {
@@ -860,6 +1082,7 @@ void builtins_register(VM* vm) {
     def(vm, "remove_key", "(object o, string key) -> bool", n_remove_key);
 
     /* strings */
+    def(vm, "format", "(string format, ...) -> string", n_format);
     def(vm, "split", "(string s, string separator) -> string[]", n_split);
     def(vm, "upper", "(string s) -> string", n_upper);
     def(vm, "lower", "(string s) -> string", n_lower);

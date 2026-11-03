@@ -28,6 +28,8 @@ io:print([1] + [2, 3])
 * Modules, `import` / `export`, the `io` module: [md/PACKAGES.md](md/PACKAGES.md)
 * Syntax highlighting for CLion: [md/SYNTAX_HIGHLIGHTING.md](md/SYNTAX_HIGHLIGHTING.md)
 * Original idea: [md/PROPOSAL.md](md/PROPOSAL.md)
+* Draft: extensible syntax from `.pp` files (brackets, lazy parameters, macros): [md/PROPOSAL_SYNTAX.md](md/PROPOSAL_SYNTAX.md)
+* Superseded draft: replacing `x[i]` with an `@` operator: [md/PROPOSAL_AT.md](md/PROPOSAL_AT.md)
 
 Quick start (Windows, CLion toolchain): see [md/IMPLEMENTATION.md](md/IMPLEMENTATION.md), then
 

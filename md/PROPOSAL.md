@@ -7,6 +7,45 @@ Uses the .pp file extension
 I would like to create a new programming language that serves similar purpose to Javascript, Python, or Lua. 
 It is a toy language that does not need to be bleeding edge performant but it would be nice for it to be decently fast. 
 
+## Language spirit
+
+These are the principles every feature is measured against. When a proposal
+breaks one of them, it has to say why.
+
+1. **A tiny core, everything else in `.pp` files.** The parser knows only a short,
+   fixed list of constructs: `import`, `export`, `function`, `type`, `enum`,
+   `interface`, `impl`, `let`, `const`, `if`, `else`, `for`, `while`, `match`,
+   `return`, `break`, `continue`, literals, `.` calls and `:` attributes.
+   Everything else (operators, indexing, short-circuit logic, containers,
+   embedded languages like HTML) should be writable as library code. Where C is
+   needed for speed, it hides behind a `native` declaration in a `.pp` file.
+2. **Names, not syntax.** Behaviour lives behind names that anyone can extend.
+   `+`, `==`, `in` and `#` are ordinary overload sets, and the same should hold for
+   every other symbol the language uses. If something can only be done by the
+   core, the core is too big.
+3. **One rule instead of many special cases.** A new feature should be a
+   general rule that also explains things that already exist. `a.f(b)` is just
+   `f(a, b)`; a new construct should be "just" something in the same way.
+4. **The parser never guesses.** Every piece of code can be parsed from its
+   tokens alone, without knowing what a name means at runtime. When two readings
+   are possible, a local, visible rule decides between them (a space, a marker,
+   a bracket), never the program's other declarations. Precedence is the one
+   deliberate exception: operator chains are stored flat and arranged at
+   runtime.
+5. **Explicit over magic.** Extensions are visible where they are used: an
+   `impl` line, a `name!` macro call, a declared type. Reading a line tells you
+   whether ordinary rules apply.
+6. **Behaviour is bound to data, not stored in it.** There are no classes.
+   Functions take their receiver as the first parameter, and any module can add
+   behaviour to any type.
+7. **Dynamic, but checked.** Types are checked when code runs, and a mistake is
+   a clear error with a location, never a silent conversion. Values that can be
+   used wrongly (a mutable map key, a `void` result) are rejected, not
+   tolerated.
+8. **Load time is compile time.** Code that transforms code runs when a module
+   loads, using the same interpreter and the same language. A future web
+   compiler runs it the same way.
+
 ## Syntax
 
 The syntax uses a minimal set of keywords for implementation with one special symbol. Example:

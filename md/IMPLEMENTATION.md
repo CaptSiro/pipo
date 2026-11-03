@@ -31,12 +31,13 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/interp.c` | evaluator: scopes, calls, overload resolution, match, modules, entry points |
 | `src/types.c` | runtime type matching and scoring, type-vs-type checks for callbacks and interfaces, type printing |
 | `src/value.c` | values, objects, hash tables, equality, formatting |
+| `src/collections.c` | tuples, value hashing, the hash table behind `std:map` / `std:set` and their constructors |
 | `src/gc.c` | mark & sweep collector |
 | `src/builtins.c` | internal (global) functions |
 | `src/modules/io.c` | the native `io` module |
 | `src/modules/os.c` | the native `os` module and its `os:fs` submodule |
 | `src/modules/pp.c` | the native `pp` module: location of the running script |
-| `src/modules/std.c` | C half of `lib/std.pp`: `in(number, Range)` |
+| `src/modules/std.c` | C half of `lib/std.pp`: `in(number, range)`, `has(range, number)`, the `std:map` / `std:set` functions |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
 

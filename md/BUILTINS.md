@@ -19,9 +19,11 @@ before yours and defines them. For you they behave exactly like the others.
 | `== !=`     | `(any, any)` deep equality                          |
 | `< > <= >=` | numbers or strings                                  |
 | `!`         | `(bool)`                                            |
-| `#`         | length of a string (bytes), array, object or range  |
+| `#`         | length of a string (bytes), array, object, range, tuple, map or set |
 | `...`       | `(int end)`, `(int start, int end)` exclusive range |
 | `...=`      | `(int end)`, `(int start, int end)` inclusive range |
+| `[]`        | `x[i]`: `(any[] array, int index)`, `(string s, int index)`, `(object o, string key)`, tuples |
+| `[]=`       | `x[i] = v`: `(any[] array, int index, any value)`, `(object o, string key, any value)` |
 
 ## Input / output
 
@@ -46,6 +48,11 @@ Not global. Printing and reading come from the `io` module
 `contains(a, x)`, `index_of(a, x) -> int?`, `reverse(a)`, `sort(a)`,
 `sort(a, compare)`, `join(a, sep)`, `map(a, f)`, `filter(a, f)`,
 `reduce(a, f, initial)`, `copy(x)`.
+
+`tuple(first, ...)` builds a tuple (`tuple<int, string>` for `tuple(1, "a")`); see
+[LANGUAGE.md](LANGUAGE.md#tuples). `copy` also copies maps and sets, and returns a
+tuple unchanged. The functions of `std:map` and `std:set` are in `lib/std.pp`
+([LANGUAGE.md](LANGUAGE.md#maps-and-sets)).
 
 `sort`, `reverse`, `concat`, `slice`, `map` and `filter` return new arrays.
 A `sort` comparator returns a number (negative means a comes first) or a bool

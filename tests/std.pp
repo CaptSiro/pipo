@@ -18,16 +18,16 @@ io:print_nl(0.5 in range(1.0, 0.0, -0.25), 0 in range(1.0, 0.0, -0.25), 0 in 0..
 // in binds looser than + and ..., tighter than == and &&
 io:print_nl(1 + 1 in 0...2, 2 in 0...3 == true, !(4 in 0...4) && true)
 
-// ---- has(number, range): is x one of the elements a for loop visits
-io:print_nl(has(8, range(2, 20, 3)), has(9, range(2, 20, 3)), has(20, range(2, 20, 3)), has(2, range(2, 20, 3)))
-io:print_nl(has(3, 5...=1), has(1, 5...=1), has(0, 5...=1), has(5, 0...5), has(0, 0...0))
-io:print_nl(has(0.5, range(0, 1, 0.25)), has(0.6, range(0, 1, 0.25)), has(1, range(0, 1, 0.25)))
+// ---- has(range, number): is x one of the elements a for loop visits
+io:print_nl(has(range(2, 20, 3), 8), has(range(2, 20, 3), 9), has(range(2, 20, 3), 20), has(range(2, 20, 3), 2))
+io:print_nl(has(5...=1, 3), has(5...=1, 1), has(5...=1, 0), has(0...5, 5), has(0...0, 0))
+io:print_nl(has(range(0, 1, 0.25), 0.5), has(range(0, 1, 0.25), 0.6), has(range(0, 1, 0.25), 1))
 // floats: 3 * 0.1 is 0.30000000000000004, still counted as the element 0.3
-io:print_nl(has(0.3, range(0, 1, 0.1)), has(0.35, range(0, 1, 0.1)), has(2.0, 0...5), has(2.5, 0...5))
-io:print_nl(has(1.0 / 0.0, 0...5), has(-0.75, range(0, -2, -0.25)), has(-2, range(0, -2, -0.25)))
+io:print_nl(has(range(0, 1, 0.1), 0.3), has(range(0, 1, 0.1), 0.35), has(0...5, 2.0), has(0...5, 2.5))
+io:print_nl(has(0...5, 1.0 / 0.0), has(range(0, -2, -0.25), -0.75), has(range(0, -2, -0.25), -2))
 
 // ---- the operators are ordinary functions
-io:print_nl(std:in(2, 0...3), std:has(3, 0...3), [0, 3, 6].map(x -> x in 0...5))
+io:print_nl(std:in(2, 0...3), std:has(0...3, 3), [0, 3, 6].map(x -> x in 0...5))
 io:print_nl(in(3, 0...3), in(2, 0...3), in(2, [1, 2]), in("ell", "hello"), in(0.5, range(0, 1, 0.25)))
 const check = in
 io:print_nl(check("a", "cat"), !in(5, 0...5), in(1, 0...3) && in(1, [1]))

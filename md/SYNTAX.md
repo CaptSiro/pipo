@@ -47,7 +47,7 @@ export      = 'export' (export_item | '{' export_item (',' export_item)* '}')   
             | 'export' import                                                   import and re-export
             | 'export' (let | function_decl | type_decl | enum_decl | interface)   a statement, not part of export*
 export_item = name ('->' name)?
-name        = ident | op
+name        = ident | op | '[]' | '[]='                  '[]' only in name positions; elsewhere it is an empty array
 ```
 
 * `import io` loads a library module (native, or `name.pp` in a library directory).
@@ -73,11 +73,13 @@ interface   = generics? 'interface' ident generics? '{' (requirement | extends)*
 requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)? block?
                                                             block: default implementation, parameters need names
 extends     = 'impl' type 'for' ident                        ident: the interface's own name
-impl        = 'impl' type 'for' type
+impl        = generics? 'impl' type 'for' type             <K, V>impl Index<K, V> for map<K, V>
 enum_decl   = 'enum' type? ident enum_generics? '{' variant (','? variant)* ','? '}'
 enum_generics = '<' ident ('=' type)? (',' ident ('=' type)?)* '>'
 variant     = ident ('(' (type (',' type)*)? ')')? ('=' expression)?
 precedence  = 'precedence' name ('over' | 'under' | 'as') name
+native      = 'native' string? generics? 'function' name '(' ... ')' ('->' type)?   body in C, library modules only
+            | 'native' 'type' ident generics?                                    a type implemented in C (map, set)
 ```
 
 ### Types
@@ -86,7 +88,8 @@ precedence  = 'precedence' name ('over' | 'under' | 'as') name
 type        = postfix_type ('||' postfix_type)*
 postfix_type = primary_type ('[' ']' | '?')*
 primary_type = prim
-            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, ui:shapes:Rect
+            | 'tuple' '<' type (',' type)* '>'                  type arguments required: tuple<int, string>
+            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, std:map<K, V>
             | 'function'
             | '{' (type ident ','?)* '}'                         record
             | '(' type ')'
@@ -113,7 +116,9 @@ path        = ident (':' ident)*
 
 ```
 assignment  = target ('=' | op '=') expression
-target      = ident | postfix ':' name | postfix '[' expression ']'
+target      = ident | postfix ':' name | postfix '[' args ']'      x[a, b] = v calls []=(x, a, b, v)
+op_assign   = target op '=' expression                      statement only: op=(target, value) in place if one
+                                                            accepts, else target = target op value
 
 expression  = unary (op unary)*              precedence resolved at runtime;
                                              an op on a new line ends the expression
@@ -125,7 +130,8 @@ unary       = op '(' args ')' postfix_ops    classic call of an operator: +(a, b
 
 postfix     = primary postfix_op*
 postfix_op  = '(' args ')'                   call
-            | '[' expression ']'             index (no space before '[')
+            | '[' expression (',' expression)* ']'
+                                             x[a, b] calls [](x, a, b) (no space before '[')
             | ':' name                       attribute: object field, module export, enum variant
             | '.' name (':' name)* '(' args ')'
                                              a.f(x) == f(a, x)

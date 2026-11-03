@@ -195,7 +195,9 @@ static Value n_len(VM* vm, int argc, Value* a) {
     if (IS_KIND(v, OBJ_ARRAY)) return int_val(AS_ARRAY(v)->count);
     if (IS_KIND(v, OBJ_OBJECT)) return int_val(AS_OBJECT(v)->fields.count);
     if (IS_KIND(v, OBJ_RANGE)) return int_val(range_length(AS_RANGE(v)));
-    rt_error(vm, 0, "'#' expects a string, array, object or range, got %s", value_type_name(v));
+    if (IS_KIND(v, OBJ_TUPLE)) return int_val(AS_TUPLE(v)->count);
+    if (IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET)) return int_val(AS_MAP(v)->live);
+    rt_error(vm, 0, "'#' expects a string, array, object, range, tuple, map or set, got %s", value_type_name(v));
 }
 
 static Value make_range(VM* vm, int64_t start, int64_t end, bool inclusive) {
@@ -684,7 +686,21 @@ static Value n_copy(VM* vm, int argc, Value* a) {
         r->tag = x->tag;
         return obj_val(r);
     }
-    return v;
+    if (IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET)) {
+        ObjMap* x = AS_MAP(v);
+        ObjMap* r = map_new(vm, v.as.o->kind);
+        for (int i = 0; i < x->count; i++)
+            if (x->entries[i].live) map_put(r, x->entries[i].key, x->entries[i].hash, x->entries[i].value);
+        return obj_val(r);
+    }
+    return v; /* tuples cannot change, so they need no copy */
+}
+
+/* tuple(1, "a"): a fixed-size, immutable group of values, typed tuple<int, string> */
+static Value n_tuple(VM* vm, int argc, Value* a) {
+    ObjTuple* t = tuple_new(vm, argc);
+    for (int i = 0; i < argc; i++) t->items[i] = a[i];
+    return obj_val(t);
 }
 
 /* --- sorting (merge sort; GC is paused because a comparator may run code) */
@@ -1081,6 +1097,12 @@ void builtins_register(VM* vm) {
     def(vm, "filter", "(any[] array, function predicate)", n_filter);
     def(vm, "reduce", "(any[] array, function f, any initial)", n_reduce);
     def(vm, "copy", "(any value)", n_copy);
+    def(vm, "tuple", "(any first, ...)", n_tuple);
+    {
+        Entry* e = table_find(&vm->builtins->vars, str_cintern(vm, "tuple"));
+        ObjOverload* set = (ObjOverload*)e->value.as.o;
+        vm->tuple_ctor = set->items[0];
+    }
 
     /* objects */
     def(vm, "keys", "(object o) -> string[]", n_keys);

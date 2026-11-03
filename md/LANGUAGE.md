@@ -39,7 +39,34 @@ lexer knows about: built-ins, plus every `function <op>` and
 Operators declared only in another module are not known while this file is
 lexed, so write them with spaces around them (`a <> b`).
 
-`x += y` works for any operator `op` as `x = x op y`.
+### `target op= value`
+
+As a statement, `x op= y` (with `x` a variable, `a:field` or `c[i]`) first looks for
+a function named `op=` that accepts `(x, y)`, searched like a binary operator. If
+one exists, it runs **in place** and nothing is written back. Otherwise the
+statement means `x = x op y`:
+
+```
+<T>function +=(T[] items, T[] more) -> void { for m in more { items.push(m) } }
+const ys = [1]
+ys += [2, 3]          // in place: +=(ys, [2, 3]); works on a const, the binding does not change
+let n = 1
+n += 1                // there is no +=(int, int): n = n + 1
+counts[word] += 1     // []=(counts, word, [](counts, word) + 1); counts and word evaluated once
+x <= 5                // <= accepts (int, int): a comparison, never x = x < 5
+```
+
+**Decisions:**
+* The choice is made per call by **overload matching**, not by whether the name
+  exists, so an `op=` written for arrays does not break `n += 1` for ints.
+* It only applies to whole statements. Assignment is not an expression, so
+  `if x <= 5` and `f(a != b)` are always operator calls.
+* `==` never decomposes: the part before `=` would be `=`. `<=`, `>=`, `!=` and
+  `...=` exist as built-in functions, so they are always comparisons (or ranges).
+* The right side is the whole expression, as in assignment: `a += b == c` is
+  `a += (b == c)`.
+* With neither an `op=` nor an `op` that fits, the error names both:
+  `'-=' needs an overload of '-=' (in place) or of '-' accepting (object, int)`.
 
 ## Calling functions
 
@@ -131,6 +158,8 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `any`                   | anything (same as leaving the type out)      |
 | `object range function type` | any record / range / callable / type    |
 | `T[]`                   | array of T                                   |
+| `tuple<A, B, ...>`      | tuple: exactly these elements, in this order (at least one) |
+| `std:map<K, V>`, `std:set<T>` | hash map / set from `lib/std.pp`; bare `std:map` is any map |
 | `T?`                    | `Option<T>`                                  |
 | `A \|\| B`              | union                                        |
 | `{ string name, int age }` | record                                    |
@@ -268,9 +297,9 @@ errors don't add up across the steps. `r:start`, `r:end` and `r:step` read a ran
 `x in y` calls the function `in(x, y)`, which can also be called directly (`in(3, 0...3)`) or passed as a value (`const check = in`). `lib/std.pp` defines it for arrays
 (`2 in [1, 2]`), strings (`"ell" in "hello"`) and ranges (`3 in 0...5`). For
 ranges it checks only the bounds, in the range's direction: `0...5` is
-`[0, 5)`, `5...=1` is `[1, 5]`, and `2.5 in 0...5` is true. `has(x, r)` asks
+`[0, 5)`, `5...=1` is `[1, 5]`, and `2.5 in 0...5` is true. `has(r, x)` asks
 whether `x` is one of the elements a `for` loop visits instead, so
-`2 in range(0, 10, 3)` is true but `has(2, range(0, 10, 3))` is false. A module
+`2 in range(0, 10, 3)` is true but `has(range(0, 10, 3), 2)` is false. A module
 can add more `in` overloads, like any other operator.
 
 ## match
@@ -362,6 +391,19 @@ interface Comparator {
 impl Comparator for Money    // needs ==, <, <=; gets !=, >, >= from the defaults
 ```
 
+An `impl` can have generic parameters of its own. They tie the type's
+parameters to the interface's:
+
+```
+<T>type Stack = { T[] items }
+<T>impl std:Index<int, T> for Stack<T>          // indexing a Stack<string> gives strings
+<K, V>impl Index<K, V> for map<K, V>            // in lib/std.pp
+```
+
+The impl's generics are bound by the value being checked, so a parameter typed
+`std:Index<string, int>` accepts a map whose keys are strings and values ints. A
+default implementation copied for a generic impl gets `any` in their place.
+
 **Decisions:**
 * **Interfaces are closed.** Unlike a type, which can gain overloads at any
   time, an interface cannot get more functions after it is declared.
@@ -412,8 +454,154 @@ Both are reference values. Use `copy(x)` for a shallow copy.
 Access is `o:field`, `o["field"]`, `xs[0]` or `xs[-1]`. `io:print`
 pretty-prints objects as JSON.
 
+### Indexing is a function
+
+`c[a]` calls the function `[]` with `(c, a)`, and `c[a] = v` calls `[]=` with
+`(c, a, v)`. The brackets are the function's name, like `+` is an operator's. The
+built-in overloads cover arrays, strings, objects and tuples, and any module can
+add more:
+
+```
+type Matrix = { int cols, float[] cells }
+function [](Matrix m, int row, int col) -> float { return m:cells[row * m:cols + col] }
+function []=(Matrix m, int row, int col, float v) -> void { m:cells[row * m:cols + col] = v }
+mx[1, 0] = 3.0                             // several indices: []=(mx, 1, 0, 3.0)
+
+<T>function [](T[] items, range r) -> T[] { return items.slice(r:start, r:end) }
+xs[1...3]                                  // a slice
+```
+
+* Like a binary operator, `c[a]` also sees the functions of the module that
+  declared `c`'s type and the ones `impl` recorded for it, so a type that
+  implements `std:Index` can be indexed in every module.
+* `[]` and `[]=` are names only where a name is expected: after `function`, after
+  `.` (`xs.[](0)`, `xs.[]=(0, 9)`), after `:`, and in import / export lists. In
+  an expression, `[]` is an empty array, so `[](xs, 0)` calls an array. Write
+  `xs.[](0)` instead.
+* A type with `[]` but no `[]=` is read-only: `t[0] = 1` on a tuple is an error.
+* When no user code declares a `[]` / `[]=` anywhere, indexing a built-in
+  collection skips the overload lookup.
+
+### `std:Index`
+
+`lib/std.pp` declares what indexing means for collections that have keys:
+
+```
+export <K, V>interface Index {
+    function find(Index collection, K key) -> V?
+    function put(Index collection, K key, V value) -> void
+    function [](Index collection, K key) -> V { ... }              // find(key), or an error naming the key
+    function []=(Index collection, K key, V value) -> void { ... } // put(key, value)
+}
+<K, V>impl Index<K, V> for map<K, V>
+```
+
+A type only writes `find` and `put`; `[]` and `[]=` come from the defaults:
+
+```
+type Board = { int width, string[] cells }
+function find(Board b, tuple<int, int> at) -> string? { ... }
+function put(Board b, tuple<int, int> at, string value) -> void { ... }
+impl std:Index<tuple<int, int>, string> for Board
+
+board[tuple(2, 1)] = "@"
+<K, V>function show(std:Index<K, V> c, K key) -> string { return str(c[key]) }
+```
+
+A missing key is the error `map has no key "b" (find(key) gives an Option instead)`.
+
 **Decision:** `#s`, `s[i]` and `slice` work on bytes. `for` and `chars()` work on
 UTF-8 code points.
+
+## Tuples
+
+`tuple` is a built-in type whose type arguments are its elements, so they are
+required: `tuple<int>`, `tuple<string, float>` and `tuple<string, number, int, float>`
+are types, and plain `tuple` is a syntax error.
+
+```
+const tuple<string, int> entry = tuple("john", 22)
+entry[0]                     // "john"; entry[-1] is 22
+#entry                       // 2
+entry[0] = "x"               // error: a tuple cannot be changed
+
+match entry {
+    tuple("root", _) -> "admin"
+    tuple(name, age) if age >= 18 -> name + " (adult)"
+    _ -> "?"
+}
+if tuple(x, y) = point { ... }
+for i, item in entry { ... }
+
+<K, V>function swap(tuple<K, V> p) -> tuple<V, K> { return tuple(p[1], p[0]) }
+```
+
+**Decisions:**
+* A value fits `tuple<A, B>` only if it has **exactly** two elements and each one
+  fits. Dispatch looks at every element (a tuple is short), and the score is 2
+  plus the weakest element's, so `tuple<int, string>` beats `tuple<any, any>`.
+* `tuple(...)` builds one from at least one value. In a pattern, `tuple(a, b)`
+  matches a tuple of exactly two elements.
+* Tuples are **immutable** values. `==` compares them element by element, and
+  they can be map keys and set elements (`tuple(x, y)` as a grid coordinate).
+  `copy(t)` returns `t`. They print as `tuple(1, "a")`.
+
+## Maps and sets
+
+`lib/std.pp` provides two hash containers, written in C:
+
+```
+import std
+
+let std:map<string, int> ages = std:map()
+ages.put("john", 22)
+ages["anna"] = 31                   // the same as put (std:Index)
+ages["anna"]                        // 31; a missing key is an error
+ages.find("bob")                    // none(): find returns an Option
+ages.find("bob").unwrap_or(0)       // 0
+ages["anna"] += 1                   // 32
+"john" in ages                      // true, also ages.has("john")
+ages.remove("john")                 // some(22), none() if it was not there
+for name, age in ages { }           // for name in ages: keys only
+ages.keys(), ages.values()          // arrays, in insertion order
+ages.entries()                      // [tuple("anna", 31)]
+
+const std:set<int> seen = std:set([1, 2, 2])     // set{1, 2}
+seen.add(3)                         // true; false when it was already there
+seen.remove(1)                      // true; false when it was not there
+2 in seen, seen.has(2)
+a | b, a & b, a - b                 // union, intersection, difference (also a.union(b), ...)
+```
+
+| | `std:map<K, V>` | `std:set<T>` |
+|-|-----------------|--------------|
+| create | `std:map()`, `std:map([tuple(k, v), ...])`, `std:map({ a: 1 })`, `std:map(other)` | `std:set()`, `std:set([...])`, `std:set(0...10)`, `std:set(other)` |
+| read | `find(m, k) -> V?`, `m[k]`, `has`, `k in m` | `has`, `x in s` |
+| change | `put(m, k, v)`, `m[k] = v`, `remove(m, k) -> V?`, `clear` | `add(s, x) -> bool`, `remove(s, x) -> bool`, `clear` |
+| all | `keys`, `values`, `entries -> tuple<K, V>[]`, `#m`, `for k, v in m` | `values -> T[]`, `#s`, `for x in s`, `for i, x in s` |
+
+**Decisions:**
+* The functions are `global` in `lib/std.pp`, so after `import std` they work in
+  every file, as dot calls and as plain calls (`put(m, k, v)`).
+* **Keys must be values that cannot change**: bool, int, float, string, enum
+  values and tuples of those. An array, object, map or set as a key is a runtime
+  error that suggests a tuple. Keys are compared with `==`, so `1` and `1.0` are
+  the same key.
+* Both keep **insertion order** (printing, `for`, `keys()`). Putting an existing
+  key keeps its place. `==` ignores the order. They print as `map{"a": 1}` and
+  `set{1, 2}`.
+* Like arrays, dispatch looks only at the first entry, and a declaration
+  (`const std:map<string, int> m = ...`) checks them all. A generic `K` is bound
+  by the first key, so `m.find(1.0)` and `m[1.0]` on a map of ints find no
+  overload, just as `1.0 in [1]` doesn't.
+* Adding or removing entries while a `for` loop walks the same map is allowed,
+  but which of the new entries the loop visits is not specified.
+* The types are declared in `lib/std.pp` with `native type map<K, V>`, so they are
+  written `std:map<K, V>`. Importing them by name (`import std -> { map }`) would
+  hide the built-in `map(array, f)` in that file, so use the `std:` prefix.
+* Interfaces work as for other types: `impl std:Str for std:map`,
+  `impl std:Str for tuple<int, int>`. A map implements `std:Index`, which is
+  where `m[k]` and `m[k] = v` come from.
 
 ## Arithmetic
 

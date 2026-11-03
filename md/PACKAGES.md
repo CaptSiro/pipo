@@ -306,5 +306,9 @@ void mod_geometry_register(VM* vm) {
 * Declarations without a C body fail when the module loads:
   `module 'geometry' has no native implementation named 'dot'`. C entries
   without a declaration are simply unused.
+* `native type map<K, V>` binds a type the interpreter implements in C. Only
+  `map` and `set` exist (the containers in `src/collections.c`), and the generic
+  parameters must match them. `lib/std.pp` uses it to export `std:map` and
+  `std:set`.
 * Don't register a pure native module (`vm_register_native_module`) under the
   same name. It is found first, and the `.pp` file would be ignored.

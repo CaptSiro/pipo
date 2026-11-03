@@ -88,7 +88,11 @@ typedef enum {
     OBJ_TYPEDEF,      /* `type X = ...` */
     OBJ_INTERFACE,    /* `interface X { ... }` */
     OBJ_MODULE,
-    OBJ_ENV           /* scope */
+    OBJ_ENV,          /* scope */
+    OBJ_TUPLE,        /* fixed size, immutable: tuple(1, "a") */
+    OBJ_MAP,          /* std:map<K, V>, an ObjMap */
+    OBJ_SET,          /* std:set<T>, an ObjMap without values */
+    OBJ_NATIVE_TYPE   /* a type implemented in C (std:map, std:set), bound by `native type` */
 } ObjKind;
 
 struct Obj {
@@ -105,6 +109,8 @@ struct Obj {
 #define AS_OBJECT(v) ((ObjObject*)(v).as.o)
 #define AS_RANGE(v) ((ObjRange*)(v).as.o)
 #define AS_ENUMV(v) ((ObjEnumValue*)(v).as.o)
+#define AS_TUPLE(v) ((ObjTuple*)(v).as.o)
+#define AS_MAP(v) ((ObjMap*)(v).as.o)
 
 struct ObjString {
     Obj obj;
@@ -144,6 +150,49 @@ typedef struct {
     Table fields;
     ObjTypeDef* tag; /* nominal type the object was declared as, or NULL */
 } ObjObject;
+
+/* tuple(1, "a"): immutable, so it can be a map key or set element */
+typedef struct {
+    Obj obj;
+    int count;
+    Value items[];
+} ObjTuple;
+
+/*
+ * Hash table keyed by values (OBJ_MAP and OBJ_SET; a set leaves `value`
+ * unused). Entries keep insertion order; removing one only marks it dead, and
+ * dead entries are dropped when the index is rebuilt. `index` is open
+ * addressing (linear probing) into entries, -1 = empty slot.
+ * Keys must be hashable (value_hash): bool, number, string, enum value, tuple.
+ */
+typedef struct {
+    Value key;
+    Value value;
+    uint32_t hash;
+    bool live;
+} MapEntry;
+
+typedef struct {
+    Obj obj;
+    MapEntry* entries;
+    int count; /* used entries, dead ones included */
+    int cap;
+    int live;  /* entries that are not dead: the size of the map */
+    int32_t* index;
+    int index_cap; /* power of two, or 0 */
+} ObjMap;
+
+typedef enum { NT_MAP, NT_SET } NativeTypeKind;
+
+/* std:map / std:set as a type: matches OBJ_MAP / OBJ_SET values, calling it constructs one */
+typedef struct {
+    Obj obj;
+    ObjString* name;
+    NativeTypeKind which;
+    int ngenerics;
+    ObjModule* module; /* the module whose `native type` bound it (lib/std.pp) */
+    Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
+} ObjNativeType;
 
 /*
  * iterates start, start+step, ... while (step > 0 ? v < end : v > end).
@@ -266,12 +315,14 @@ struct ObjTypeDef {
     Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
 };
 
-/* `impl Iface<args> for target` */
+/* `impl Iface<args> for target`, `<K, V>impl Index<K, V> for std:map<K, V>` */
 typedef struct {
     Type* target;
     ObjEnv* env; /* where target and args resolve */
     Type** args;
     int nargs;
+    ObjString** generics; /* the impl's own generic parameters, bound by the value being matched */
+    int ngenerics;
 } Impl;
 
 /*
@@ -341,6 +392,15 @@ ObjModule* module_new(VM* vm, const char* name, const char* path, ObjEnv* parent
 void module_export(ObjModule* m, ObjString* name, ObjString* alias);
 bool module_member(ObjModule* m, ObjString* name, Value* out);
 int64_t range_length(ObjRange* r);
+
+ObjTuple* tuple_new(VM* vm, int count);
+bool value_hash(Value v, uint32_t* out); /* false: not hashable (array, object, function, ...) */
+ObjMap* map_new(VM* vm, ObjKind kind);   /* OBJ_MAP or OBJ_SET */
+MapEntry* map_find(ObjMap* m, Value key, uint32_t hash);
+void map_put(ObjMap* m, Value key, uint32_t hash, Value value);
+bool map_remove(ObjMap* m, Value key, uint32_t hash, Value* old);
+void map_clear(ObjMap* m);
+void map_free(ObjMap* m);
 
 void table_init(Table* t);
 void table_free(Table* t);

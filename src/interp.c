@@ -122,7 +122,14 @@ void env_define(VM* vm, ObjEnv* env, ObjString* name, Value v, uint8_t flags, Ty
  * declaration in an inner scope extends (a copy of) the set visible from the
  * outer scope, so `function +(Vec a, Vec b)` keeps the built-in `+` working.
  */
+/* remembers names like +=, so `x += v` only looks for an in-place += when one was ever declared */
+static void note_function_name(VM* vm, ObjString* name) {
+    if (name->len >= 2 && name->chars[name->len - 1] == '=' && !table_find(&vm->opeq_names, name))
+        table_set(&vm->opeq_names, name, void_val());
+}
+
 void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
+    note_function_name(vm, name);
     Entry* e = table_find(&env->vars, name);
     if (e) {
         if (IS_KIND(e->value, OBJ_OVERLOAD)) {
@@ -133,6 +140,7 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
                  value_type_name(e->value));
     }
     ObjOverload* set = overload_new(vm, name);
+    if (env != vm->builtins && (name == vm->s_index || name == vm->s_index_set)) vm->index_overloads++;
     env_define(vm, env, name, obj_val(set), VAR_CONST, NULL);
     Entry* outer = env->parent ? env_find(env->parent, name, NULL) : NULL;
     if (outer) {
@@ -159,9 +167,11 @@ static ObjOverload* global_set(VM* vm, ObjString* name) {
 }
 
 static void global_add(VM* vm, ObjString* name, Obj* fn) {
+    note_function_name(vm, name);
     ObjOverload* set = global_set(vm, name);
     if (!set) {
         set = overload_new(vm, name);
+        if (name == vm->s_index || name == vm->s_index_set) vm->index_overloads++;
         table_set(&vm->globals, name, obj_val(set));
     }
     overload_add(set, fn);
@@ -189,6 +199,8 @@ static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
         if (td) m = td->module;
     } else if (IS_KIND(recv, OBJ_ENUM_VALUE)) {
         m = AS_ENUMV(recv)->en->module;
+    } else if (IS_KIND(recv, OBJ_MAP) || IS_KIND(recv, OBJ_SET)) {
+        m = (IS_KIND(recv, OBJ_MAP) ? vm->t_map : vm->t_set)->module;
     }
     Value v;
     if (!m || !module_member(m, name, &v) || !IS_KIND(v, OBJ_OVERLOAD)) return NULL;
@@ -196,12 +208,16 @@ static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
 }
 
 /* the type a dot call dispatches on: the record's tag or the enum, or NULL */
+static VM* the_vm; /* for receiver_impl_table, which has no VM parameter */
+
 static Table* receiver_impl_table(Value recv) {
     if (IS_KIND(recv, OBJ_OBJECT)) {
         ObjTypeDef* td = AS_OBJECT(recv)->tag;
         return td ? &td->impl_fns : NULL;
     }
     if (IS_KIND(recv, OBJ_ENUM_VALUE)) return &AS_ENUMV(recv)->en->impl_fns;
+    if (IS_KIND(recv, OBJ_MAP)) return &the_vm->t_map->impl_fns;
+    if (IS_KIND(recv, OBJ_SET)) return &the_vm->t_set->impl_fns;
     return NULL;
 }
 
@@ -342,8 +358,9 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
  * only), then the global set. Earlier sets win ties, so a local declaration
  * shadows an equally good global one.
  */
+/* quiet: return NULL instead of failing when no candidate accepts the arguments */
 static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOverload* impl, int argc, Value* args,
-                             InlineCache* ic, Bindings* out, int line) {
+                             InlineCache* ic, Bindings* out, int line, bool quiet) {
     ObjOverload* sets[IC_SETS] = {set, NULL, NULL, NULL};
     int nsets = 1;
     if (adl && adl != set) sets[nsets++] = adl;
@@ -378,7 +395,10 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOver
             }
         }
     }
-    if (!best) no_overload_error_sets(vm, set->name, sets, nsets, NULL, 0, argc, args, line);
+    if (!best) {
+        if (quiet) return NULL;
+        no_overload_error_sets(vm, set->name, sets, nsets, NULL, 0, argc, args, line);
+    }
     if (cacheable) {
         for (int k = 0; k < IC_SETS; k++) {
             ic->sets[k] = (Obj*)sets[k];
@@ -579,7 +599,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
     b.count = 0;
     switch (o->kind) {
         case OBJ_OVERLOAD: {
-            Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, impl, argc, args, ic, &b, line);
+            Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, impl, argc, args, ic, &b, line, false);
             return invoke(vm, t, argc, args, &b, line);
         }
         case OBJ_FUNCTION:
@@ -605,6 +625,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             }
             return args[0];
         }
+        case OBJ_NATIVE_TYPE: return native_type_construct(vm, (ObjNativeType*)o, argc, args, line);
         default: rt_error(vm, line, "a value of type %s is not callable", value_type_name(callee));
     }
 }
@@ -672,7 +693,11 @@ static Value get_index(VM* vm, Value obj, Value idx, int line) {
         if (!e) rt_error(vm, line, "%s has no field '%s'", value_type_name(obj), AS_STR(idx)->chars);
         return e->value;
     }
-    rt_error(vm, line, "a value of type %s cannot be indexed", value_type_name(obj));
+    if (IS_KIND(obj, OBJ_TUPLE)) {
+        ObjTuple* t = AS_TUPLE(obj);
+        return t->items[norm_index(vm, idx, t->count, line)];
+    }
+    rt_error(vm, line, "no overload of '[]' accepts (%s, %s)", value_type_name(obj), value_type_name(idx));
 }
 
 static Type* record_field_type(ObjTypeDef* td, ObjString* name, bool* found) {
@@ -710,7 +735,71 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
         set_object_field(vm, AS_OBJECT(obj), AS_STR(idx), v, line);
         return;
     }
-    rt_error(vm, line, "cannot assign by index into a value of type %s", value_type_name(obj));
+    if (IS_KIND(obj, OBJ_TUPLE)) rt_error(vm, line, "a tuple cannot be changed; build a new one with tuple(...)");
+    rt_error(vm, line, "no overload of '[]=' accepts (%s, %s, %s)", value_type_name(obj), value_type_name(idx),
+             value_type_name(v));
+}
+
+/* the built-in overloads of [] and []=: arrays, strings, objects */
+static Value n_index_get(VM* vm, int argc, Value* a) { return get_index(vm, a[0], a[1], 0); }
+
+static Value n_index_set(VM* vm, int argc, Value* a) {
+    set_index(vm, a[0], a[1], a[2], 0);
+    return void_val();
+}
+
+/* [](any, any) / []=(any, any, any): tuples (which have no other type to name here), and the error for everything else */
+static Value n_index_get_any(VM* vm, int argc, Value* a) {
+    if (IS_KIND(a[0], OBJ_TUPLE)) return get_index(vm, a[0], a[1], 0);
+    rt_error(vm, 0, "no overload of '[]' accepts (%s, %s)", value_type_name(a[0]), value_type_name(a[1]));
+}
+
+static Value n_index_set_any(VM* vm, int argc, Value* a) {
+    if (IS_KIND(a[0], OBJ_TUPLE)) rt_error(vm, 0, "a tuple cannot be changed; build a new one with tuple(...)");
+    rt_error(vm, 0, "no overload of '[]=' accepts (%s, %s, %s)", value_type_name(a[0]), value_type_name(a[1]),
+             value_type_name(a[2]));
+}
+
+/*
+ * The built-in [] / []= is the only candidate a call could pick: the scope sees
+ * the builtins' set unchanged, there is no global overload, and the receiver is
+ * a built-in collection (no impl or module functions of its own).
+ */
+static bool builtin_bracket(VM* vm, ObjEnv* env, ObjString* name, Value recv) {
+    if (IS_KIND(recv, OBJ_OBJECT) ? AS_OBJECT(recv)->tag != NULL
+                                  : !(IS_KIND(recv, OBJ_ARRAY) || IS_KIND(recv, OBJ_STRING) || IS_KIND(recv, OBJ_TUPLE)))
+        return false;
+    if (vm->index_overloads == 0) return true; /* nobody declared a [] or []= anywhere */
+    Entry* e = env_find(env, name, NULL);
+    Obj* builtin = name == vm->s_index ? vm->index_builtin : vm->index_set_builtin;
+    return e && IS_OBJ(e->value) && e->value.as.o == builtin && !global_set(vm, name);
+}
+
+static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line, ObjOverload* adl, ObjOverload* impl);
+
+/*
+ * x[a, b] calls [](x, a, b) and x[a, b] = v calls []=(x, a, b, v). Like a binary
+ * operator, the call also sees the functions of the receiver's module and the
+ * ones `impl` recorded for its type, so a type that implements std:Index can be
+ * indexed anywhere. args[0] is the receiver; all of args is on the value stack.
+ */
+static Value call_bracket(VM* vm, ObjEnv* env, ObjString* name, int argc, Value* args, int line, InlineCache* ic) {
+    Value recv = args[0];
+    if (builtin_bracket(vm, env, name, recv)) {
+        if (name == vm->s_index && argc == 2) return get_index(vm, recv, args[1], line);
+        if (name == vm->s_index_set && argc == 3) {
+            set_index(vm, recv, args[1], args[2], line);
+            return void_val();
+        }
+    }
+    int base = vm->sp;
+    ObjOverload* adl = receiver_module_set(vm, recv, name);
+    ObjOverload* impl = receiver_impl_set(recv, name);
+    Value callee = lookup_operator(vm, env, name, line, adl, impl);
+    vm_push(vm, callee);
+    Value r = call_value_adl(vm, callee, argc, args, line, ic, adl, impl);
+    vm->sp = base;
+    return r;
 }
 
 /* --------------------------------------------------------- operator chains */
@@ -880,11 +969,9 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
         case N_FIELD: return get_field(vm, eval(vm, n->as.field.obj, env), n->as.field.name, n->line);
         case N_INDEX: {
             int base = vm->sp;
-            Value obj = eval(vm, n->as.index.obj, env);
-            vm_push(vm, obj);
-            Value idx = eval(vm, n->as.index.index, env);
-            vm_push(vm, idx);
-            Value r = get_index(vm, obj, idx, n->line);
+            vm_push(vm, eval(vm, n->as.index.obj, env));
+            for (int i = 0; i < n->as.index.args.count; i++) vm_push(vm, eval(vm, n->as.index.args.items[i], env));
+            Value r = call_bracket(vm, env, vm->s_index, vm->sp - base, &vm->stack[base], n->line, n->as.index.ic);
             vm->sp = base;
             return r;
         }
@@ -957,6 +1044,18 @@ static bool is_unit_ctor(Value c) {
     return false;
 }
 
+/* the built-in tuple(...) (or an overload set that extends it) */
+static bool is_tuple_ctor(VM* vm, Value c) {
+    if (!IS_OBJ(c)) return false;
+    if (c.as.o == vm->tuple_ctor) return true;
+    if (IS_KIND(c, OBJ_OVERLOAD)) {
+        ObjOverload* s = (ObjOverload*)c.as.o;
+        for (int i = 0; i < s->count; i++)
+            if (s->items[i] == vm->tuple_ctor) return true;
+    }
+    return false;
+}
+
 static bool match_pattern(VM* vm, Pattern* p, Value v, ObjEnv* env, uint8_t flags) {
     switch (p->kind) {
         case P_WILD: return true;
@@ -969,6 +1068,13 @@ static bool match_pattern(VM* vm, Pattern* p, Value v, ObjEnv* env, uint8_t flag
         }
         case P_VARIANT: {
             Value c = eval(vm, p->ctor, env);
+            if (p->has_parens && is_tuple_ctor(vm, c)) {
+                /* tuple(a, b) matches a tuple of exactly that many elements */
+                if (!IS_KIND(v, OBJ_TUPLE) || AS_TUPLE(v)->count != p->nsubs) return false;
+                for (int i = 0; i < p->nsubs; i++)
+                    if (!match_pattern(vm, p->subs[i], AS_TUPLE(v)->items[i], env, flags)) return false;
+                return true;
+            }
             if (!is_variantish(c)) {
                 if (p->has_parens) rt_error(vm, p->line, "pattern does not name an enum variant");
                 return values_equal(c, v); /* qualified constant, e.g. Config.MAX */
@@ -1080,6 +1186,23 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     vm->sp = base;
 }
 
+/* native type map<K, V>: bind a type the interpreter implements (in a library module only) */
+static void exec_native_type(VM* vm, Node* n, ObjEnv* env) {
+    ObjString* name = n->as.type_decl.name;
+    ObjModule* m = vm->cur_module;
+    if (!m || !m->natives)
+        rt_error(vm, n->line, "native type '%s' can only be declared in a library module with a C half", name->chars);
+    ObjNativeType* t = NULL;
+    if (str_equals(name, "map")) t = vm->t_map;
+    else if (str_equals(name, "set")) t = vm->t_set;
+    if (!t) rt_error(vm, n->line, "there is no native type named '%s' (the interpreter provides map and set)", name->chars);
+    if (n->as.type_decl.ngenerics != t->ngenerics)
+        rt_error(vm, n->line, "native type '%s' takes %d generic parameter(s), but %d were declared", name->chars, t->ngenerics,
+                 n->as.type_decl.ngenerics);
+    if (!t->module) t->module = m;
+    env_define(vm, env, name, obj_val(t), VAR_CONST, NULL);
+}
+
 static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
     if (n->as.func.native) {
@@ -1136,15 +1259,57 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
     return st;
 }
 
-static Value apply_op(VM* vm, ObjEnv* env, ObjString* op, Value a, Value b, int line, InlineCache* ic) {
+/* the candidate set for an operator name like lookup_operator, or NULL when the name does not exist */
+static ObjOverload* operator_set(VM* vm, ObjEnv* env, ObjString* name, ObjOverload* adl, ObjOverload* impl) {
+    Entry* e = env_find(env, name, NULL);
+    if (e && IS_KIND(e->value, OBJ_OVERLOAD)) return (ObjOverload*)e->value.as.o;
+    ObjOverload* g = global_set(vm, name);
+    if (g) return g;
+    return adl ? adl : impl;
+}
+
+/*
+ * The in-place half of `target op= value`: calls an overload of `op=` that
+ * accepts (current, value), searched like a binary operator. Returns false when
+ * there is none, and the caller writes back target = op(current, value).
+ */
+static bool try_in_place(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
+    ObjString* name = n->as.assign.opeq;
+    if (!table_find(&vm->opeq_names, name)) return false; /* no function by that name exists anywhere */
     int base = vm->sp;
-    vm_push(vm, a);
-    vm_push(vm, b);
-    ObjOverload* adl = receiver_module_set(vm, a, op);
-    ObjOverload* impl = receiver_impl_set(a, op);
-    Value callee = lookup_operator(vm, env, op, line, adl, impl);
-    vm_push(vm, callee);
-    Value r = call_value_adl(vm, callee, 2, &vm->stack[base], line, ic, adl, impl);
+    vm_push(vm, cur);
+    vm_push(vm, rhs);
+    ObjOverload* adl = receiver_module_set(vm, cur, name);
+    ObjOverload* impl = receiver_impl_set(cur, name);
+    ObjOverload* set = operator_set(vm, env, name, adl, impl);
+    if (!set) {
+        vm->sp = base;
+        return false;
+    }
+    Bindings b;
+    b.count = 0;
+    Obj* t = resolve_overload(vm, set, adl, impl, 2, &vm->stack[base], n->as.assign.ic2, &b, n->line, true);
+    if (t) invoke(vm, t, 2, &vm->stack[base], &b, n->line);
+    vm->sp = base;
+    return t != NULL;
+}
+
+/* the write-back half of `target op= value`: op(cur, rhs), or an error naming both op= and op */
+static Value apply_compound(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
+    ObjString* op = n->as.assign.op;
+    int base = vm->sp;
+    vm_push(vm, cur);
+    vm_push(vm, rhs);
+    ObjOverload* adl = receiver_module_set(vm, cur, op);
+    ObjOverload* impl = receiver_impl_set(cur, op);
+    ObjOverload* set = operator_set(vm, env, op, adl, impl);
+    Bindings b;
+    b.count = 0;
+    Obj* t = set ? resolve_overload(vm, set, adl, impl, 2, &vm->stack[base], n->as.assign.ic, &b, n->line, true) : NULL;
+    if (!t)
+        rt_error(vm, n->line, "'%s' needs an overload of '%s' (in place) or of '%s' accepting (%s, %s); there is none",
+                 n->as.assign.opeq->chars, n->as.assign.opeq->chars, op->chars, value_type_name(cur), value_type_name(rhs));
+    Value r = invoke(vm, t, 2, &vm->stack[base], &b, n->line);
     vm->sp = base;
     return r;
 }
@@ -1162,12 +1327,17 @@ static void exec_assign(VM* vm, Node* n, ObjEnv* env) {
             ObjEnv* where;
             Entry* e = env_find(env, name, &where);
             if (!e) rt_error(vm, n->line, "assignment to undeclared variable '%s' (declare it with 'let')", name->chars);
-            if (e->flags & VAR_CONST) rt_error(vm, n->line, "cannot assign to constant '%s'", name->chars);
             Value v = rhs;
             if (op) {
                 if (e->flags & VAR_UNINIT) rt_error(vm, n->line, "variable '%s' is used before it was assigned", name->chars);
-                v = apply_op(vm, env, op, e->value, rhs, n->line, n->as.assign.ic);
+                /* an in-place op= changes the value, not the binding, so it works on a const too */
+                if (try_in_place(vm, env, n, e->value, rhs)) break;
                 e = env_find(env, name, &where);
+                if (e->flags & VAR_CONST) rt_error(vm, n->line, "cannot assign to constant '%s'", name->chars);
+                v = apply_compound(vm, env, n, e->value, rhs);
+                e = env_find(env, name, &where);
+            } else if (e->flags & VAR_CONST) {
+                rt_error(vm, n->line, "cannot assign to constant '%s'", name->chars);
             }
             if (e->type) {
                 char what[160];
@@ -1185,18 +1355,28 @@ static void exec_assign(VM* vm, Node* n, ObjEnv* env) {
             if (!IS_KIND(obj, OBJ_OBJECT))
                 rt_error(vm, n->line, "cannot assign field '%s' on a value of type %s", target->as.field.name->chars, value_type_name(obj));
             Value v = rhs;
-            if (op) v = apply_op(vm, env, op, get_field(vm, obj, target->as.field.name, n->line), rhs, n->line, n->as.assign.ic);
+            if (op) {
+                Value cur = get_field(vm, obj, target->as.field.name, n->line);
+                if (try_in_place(vm, env, n, cur, rhs)) break;
+                v = apply_compound(vm, env, n, cur, rhs);
+            }
             set_object_field(vm, AS_OBJECT(obj), target->as.field.name, v, n->line);
             break;
         }
         case N_INDEX: {
-            Value obj = eval(vm, target->as.index.obj, env);
-            vm_push(vm, obj);
-            Value idx = eval(vm, target->as.index.index, env);
-            vm_push(vm, idx);
+            /* x[a] op= v: x and a are evaluated once; [](x, a) once; then op=(cur, v) or []=(x, a, op(cur, v)) */
+            int args = vm->sp;
+            vm_push(vm, eval(vm, target->as.index.obj, env));
+            for (int i = 0; i < target->as.index.args.count; i++) vm_push(vm, eval(vm, target->as.index.args.items[i], env));
+            int argc = vm->sp - args;
             Value v = rhs;
-            if (op) v = apply_op(vm, env, op, get_index(vm, obj, idx, n->line), rhs, n->line, n->as.assign.ic);
-            set_index(vm, obj, idx, v, n->line);
+            if (op) {
+                Value cur = call_bracket(vm, env, vm->s_index, argc, &vm->stack[args], n->line, target->as.index.ic);
+                if (try_in_place(vm, env, n, cur, rhs)) break;
+                v = apply_compound(vm, env, n, cur, rhs);
+            }
+            vm_push(vm, v);
+            call_bracket(vm, env, vm->s_index_set, argc + 1, &vm->stack[args], n->line, n->as.assign.ic3);
             break;
         }
         default: rt_error(vm, n->line, "invalid assignment target");
@@ -1361,6 +1541,7 @@ static void add_binding(VM* vm, Bindings* b, ObjString* name, Type* type, ObjEnv
 static ObjModule* type_module(Value tv) {
     if (IS_KIND(tv, OBJ_TYPEDEF)) return ((ObjTypeDef*)tv.as.o)->module;
     if (IS_KIND(tv, OBJ_ENUM)) return ((ObjEnum*)tv.as.o)->module;
+    if (IS_KIND(tv, OBJ_NATIVE_TYPE)) return ((ObjNativeType*)tv.as.o)->module;
     return NULL;
 }
 
@@ -1368,10 +1549,12 @@ static ObjModule* type_module(Value tv) {
 static Table* type_impl_table(Value tv) {
     if (IS_KIND(tv, OBJ_TYPEDEF)) return &((ObjTypeDef*)tv.as.o)->impl_fns;
     if (IS_KIND(tv, OBJ_ENUM)) return &((ObjEnum*)tv.as.o)->impl_fns;
+    if (IS_KIND(tv, OBJ_NATIVE_TYPE)) return &((ObjNativeType*)tv.as.o)->impl_fns;
     return NULL;
 }
 
 static void record_impl_fn(VM* vm, Table* fns, ObjString* name, Obj* fn) {
+    note_function_name(vm, name);
     Entry* e = table_find(fns, name);
     ObjOverload* set;
     if (e) set = (ObjOverload*)e->value.as.o;
@@ -1418,7 +1601,7 @@ static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
  * impl); then a target that already implements `it` is fine.
  */
 static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Type* target, ObjEnv* env, int line,
-                           ObjInterface* via) {
+                           ObjInterface* via, ObjString** gens, int ngens) {
     if (nargs != it->ngenerics)
         rt_error(vm, line, "interface '%s' takes %d type argument(s) but %d were given", it->name->chars, it->ngenerics, nargs);
 
@@ -1433,7 +1616,8 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
                      "'%s' is an interface; only types can implement an interface (to extend '%s', write 'impl %s for %s' "
                      "inside interface '%s')",
                      tname.data, it->name->chars, it->name->chars, tname.data, tname.data);
-        if (!IS_KIND(tv, OBJ_TYPEDEF) && !IS_KIND(tv, OBJ_ENUM)) rt_error(vm, line, "'%s' is not a type", tname.data);
+        if (!IS_KIND(tv, OBJ_TYPEDEF) && !IS_KIND(tv, OBJ_ENUM) && !IS_KIND(tv, OBJ_NATIVE_TYPE))
+            rt_error(vm, line, "'%s' is not a type", tname.data);
         for (int i = 0; i < it->nimpls; i++) {
             Value ov;
             Impl* o = &it->impls[i];
@@ -1449,11 +1633,19 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
     ObjModule* tmod = type_module(tv);
     Table* fns = type_impl_table(tv);
 
-    /* the interface name means the implementing type, its generics mean the impl's type arguments */
+    /*
+     * The interface name means the implementing type, its generics mean the impl's type arguments.
+     * The impl's own generics (<K, V>impl ...) stay unbound: they accept anything, and a default
+     * implementation gets `any` in their place.
+     */
+    Bindings gb;
+    gb.count = 0;
+    for (int k = 0; k < ngens; k++) add_binding(vm, &gb, gens[k], NULL, NULL, line);
     Bindings b;
     b.count = 0;
     for (int k = 0; k < it->ngenerics; k++) add_binding(vm, &b, it->generics[k], args[k], env, line);
     add_binding(vm, &b, it->name, target, env, line);
+    for (int k = 0; k < b.count; k++) b.items[k].parent = &gb;
 
     /* the functions that satisfy the requirements; recorded on the type once every requirement is met */
     struct {
@@ -1529,7 +1721,7 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
             pargs = pp_malloc(sizeof(Type*) * (size_t)pt->nargs);
             for (int k = 0; k < pt->nargs; k++) pargs[k] = concrete_type(vm, pt->args[k], it->env, &b);
         }
-        impl_interface(vm, it->parents[i], pargs, pt->nargs, target, env, line, it);
+        impl_interface(vm, it->parents[i], pargs, pt->nargs, target, env, line, it, gens, ngens);
     }
 
     GROW(it->impls, it->nimpls, it->capimpls);
@@ -1538,6 +1730,8 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
     im->env = env;
     im->args = args;
     im->nargs = nargs;
+    im->generics = gens;
+    im->ngenerics = ngens;
 
     /* dot calls and operators on values of the type can now reach these functions from any module */
     for (int i = 0; fns && i < nfound; i++) record_impl_fn(vm, fns, found[i].name, found[i].fn);
@@ -1568,7 +1762,8 @@ static void exec_impl(VM* vm, Node* n, ObjEnv* env) {
         rt_error(vm, n->line, "unknown interface '%s'", sb.data);
     }
     if (!IS_KIND(iv, OBJ_INTERFACE)) rt_error(vm, n->line, "'%s' is a %s, not an interface", it_t->name->chars, value_type_name(iv));
-    impl_interface(vm, (ObjInterface*)iv.as.o, it_t->args, it_t->nargs, n->as.impl.target, env, n->line, NULL);
+    impl_interface(vm, (ObjInterface*)iv.as.o, it_t->args, it_t->nargs, n->as.impl.target, env, n->line, NULL,
+                   n->as.impl.generics, n->as.impl.ngenerics);
 }
 
 static void exec_precedence(VM* vm, Node* n) {
@@ -1744,6 +1939,26 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
             st = run_iteration(vm, n, env, int_val(idx), ch, flags);
             HANDLE_STATUS()
         }
+    } else if (IS_KIND(it, OBJ_TUPLE)) {
+        ObjTuple* t = AS_TUPLE(it);
+        for (int i = 0; i < t->count; i++) {
+            st = run_iteration(vm, n, env, int_val(i), t->items[i], flags);
+            HANDLE_STATUS()
+        }
+    } else if (IS_KIND(it, OBJ_MAP) || IS_KIND(it, OBJ_SET)) {
+        /* map: for key / for key, value; set: for item / for i, item. Re-read each step: the body may grow the table */
+        ObjMap* m = AS_MAP(it);
+        bool is_map = IS_KIND(it, OBJ_MAP);
+        int64_t idx = 0;
+        for (int i = 0; i < m->count; i++) {
+            if (!m->entries[i].live) continue;
+            MapEntry e = m->entries[i];
+            if (is_map) st = n->as.for_.var2 ? run_iteration(vm, n, env, e.key, e.value, flags)
+                                            : run_iteration(vm, n, env, void_val(), e.key, flags);
+            else st = run_iteration(vm, n, env, int_val(idx), e.key, flags);
+            idx++;
+            HANDLE_STATUS()
+        }
     } else if (IS_KIND(it, OBJ_OBJECT)) {
         ObjObject* o = AS_OBJECT(it);
         for (int i = 0; i < o->fields.count; i++) {
@@ -1777,6 +1992,10 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         case S_ASSIGN: exec_assign(vm, n, env); return EX_NORMAL;
         case S_FUNCDECL: exec_funcdecl(vm, n, env); return EX_NORMAL;
         case S_TYPE: {
+            if (!n->as.type_decl.def) {
+                exec_native_type(vm, n, env);
+                return EX_NORMAL;
+            }
             ObjTypeDef* td = (ObjTypeDef*)alloc_obj(vm, sizeof(ObjTypeDef), OBJ_TYPEDEF);
             td->name = n->as.type_decl.name;
             td->generics = n->as.type_decl.generics;
@@ -2100,11 +2319,15 @@ VM* vm_new(int argc, char** argv) {
     table_init(&vm->interned);
     table_init(&vm->modules);
     table_init(&vm->globals);
+    table_init(&vm->opeq_names);
     table_init(&vm->prec);
     vm->ret = void_val();
     vm->s_and = str_cintern(vm, "&&");
     vm->s_or = str_cintern(vm, "||");
     vm->s_wild = str_cintern(vm, "_");
+    vm->s_index = str_cintern(vm, "[]");
+    vm->s_index_set = str_cintern(vm, "[]=");
+    the_vm = vm;
 
     static const struct {
         const char* op;
@@ -2116,8 +2339,36 @@ VM* vm_new(int argc, char** argv) {
     };
     for (int i = 0; precs[i].op; i++) table_set(&vm->prec, str_cintern(vm, precs[i].op), float_val(precs[i].prec));
 
+    /* std:map and std:set are permanent: outside the object list, never collected */
+    static const struct {
+        const char* name;
+        NativeTypeKind which;
+        int ngenerics;
+    } ntypes[] = {{"map", NT_MAP, 2}, {"set", NT_SET, 1}};
+    for (int i = 0; i < 2; i++) {
+        ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
+        t->obj.kind = OBJ_NATIVE_TYPE;
+        t->obj.permanent = true;
+        t->name = str_cintern(vm, ntypes[i].name);
+        t->which = ntypes[i].which;
+        t->ngenerics = ntypes[i].ngenerics;
+        table_init(&t->impl_fns);
+        if (t->which == NT_MAP) vm->t_map = t;
+        else vm->t_set = t;
+    }
+
     vm->builtins = env_new(vm, NULL);
     builtins_register(vm);
+    /* x[i] / x[i] = v: overloads like any other, the built-in collections first */
+    def_native(vm, vm->builtins, "[]", "(any[] array, int index)", n_index_get);
+    def_native(vm, vm->builtins, "[]", "(string s, int index) -> string", n_index_get);
+    def_native(vm, vm->builtins, "[]", "(object o, string key)", n_index_get);
+    def_native(vm, vm->builtins, "[]", "(any value, any key)", n_index_get_any); /* tuples, and the error for the rest */
+    def_native(vm, vm->builtins, "[]=", "(any[] array, int index, any value) -> void", n_index_set);
+    def_native(vm, vm->builtins, "[]=", "(object o, string key, any value) -> void", n_index_set);
+    def_native(vm, vm->builtins, "[]=", "(any value, any key, any new_value) -> void", n_index_set_any);
+    vm->index_builtin = table_find(&vm->builtins->vars, vm->s_index)->value.as.o;
+    vm->index_set_builtin = table_find(&vm->builtins->vars, vm->s_index_set)->value.as.o;
     mod_io_register(vm);
     mod_os_register(vm);
     mod_pp_register(vm);

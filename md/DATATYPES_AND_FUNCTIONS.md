@@ -179,6 +179,9 @@ onto the binding model above:
   child's `impl` run the parent's `impl` for the same type, so the type ends
   up recorded in both interfaces, and `Comparator` is accepted wherever
   `Equals` is expected.
+* **Generic impls** (`<T>impl std:Index<int, T> for Stack<T>`) leave the impl's
+  generics unbound while the requirements are checked, and bind them from the
+  value when a parameter typed with the interface is matched.
 * **Not implemented yet:** generic bounds (`<T: Shape>function largest(T[] items)`).
 
 ## Current limitations

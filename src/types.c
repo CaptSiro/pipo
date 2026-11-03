@@ -28,7 +28,7 @@ static Binding* find_binding(Bindings* b, ObjString* name) {
 
 static bool is_callable_obj(Obj* o) {
     return o->kind == OBJ_FUNCTION || o->kind == OBJ_NATIVE || o->kind == OBJ_OVERLOAD ||
-           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF;
+           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF || o->kind == OBJ_NATIVE_TYPE;
 }
 
 bool same_kind(Value a, Value b) {
@@ -39,6 +39,7 @@ bool same_kind(Value a, Value b) {
     if (x->kind != y->kind) return is_callable_obj(x) && is_callable_obj(y);
     if (x->kind == OBJ_OBJECT) return ((ObjObject*)x)->tag == ((ObjObject*)y)->tag;
     if (x->kind == OBJ_ENUM_VALUE) return ((ObjEnumValue*)x)->en == ((ObjEnumValue*)y)->en;
+    if (x->kind == OBJ_TUPLE) return ((ObjTuple*)x)->count == ((ObjTuple*)y)->count;
     return true;
 }
 
@@ -52,7 +53,8 @@ static int prim_match(Prim p, Value v) {
         case PRIM_RANGE: return IS_KIND(v, OBJ_RANGE) ? 4 : 0;
         case PRIM_FUNCTION: return is_callable(v) ? 3 : 0;
         case PRIM_OBJECT: return IS_KIND(v, OBJ_OBJECT) ? 2 : 0;
-        case PRIM_TYPE: return IS_KIND(v, OBJ_TYPEDEF) || IS_KIND(v, OBJ_ENUM) || IS_KIND(v, OBJ_INTERFACE) ? 3 : 0;
+        case PRIM_TYPE:
+            return IS_KIND(v, OBJ_TYPEDEF) || IS_KIND(v, OBJ_ENUM) || IS_KIND(v, OBJ_INTERFACE) || IS_KIND(v, OBJ_NATIVE_TYPE) ? 3 : 0;
         case PRIM_ANY: return 1;
     }
     return 0;
@@ -136,6 +138,38 @@ static bool is_record_typedef(Value tv) {
 
 static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv* env, Bindings* b);
 
+static int min_score(int a, int b) { return a < b ? a : b; }
+
+/*
+ * std:map<K, V> / std:set<T> (or bare std:map, any keys and values). Like an
+ * array, dispatch looks at the first entry only and a declaration (deep)
+ * checks them all: 2 + the weakest element score, 3 when empty.
+ */
+static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
+    if (t->nargs && t->nargs != nt->ngenerics)
+        rt_error(vm, t->line, "type 'std:%s' takes %d type argument(s) but %d were given", nt->name->chars, nt->ngenerics,
+                 t->nargs);
+    if (!IS_KIND(v, nt->which == NT_MAP ? OBJ_MAP : OBJ_SET)) return 0;
+    if (!t->nargs) return 4;
+    ObjMap* m = AS_MAP(v);
+    if (m->live == 0) return 3;
+    int best = 5;
+    for (int i = 0; i < m->count; i++) {
+        MapEntry* e = &m->entries[i];
+        if (!e->live) continue;
+        int k = type_match(vm, t->args[0], e->key, env, b, deep);
+        if (!k) return 0;
+        best = min_score(best, k);
+        if (nt->which == NT_MAP) {
+            int x = type_match(vm, t->args[1], e->value, env, b, deep);
+            if (!x) return 0;
+            best = min_score(best, x);
+        }
+        if (!deep) break;
+    }
+    return 2 + best;
+}
+
 static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
     Binding* bd = t->nquals || t->direct ? NULL : find_binding(b, t->name);
     if (bd) {
@@ -167,6 +201,7 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
         return 4;
     }
     if (IS_KIND(tv, OBJ_INTERFACE)) return match_interface(vm, (ObjInterface*)tv.as.o, t, v, env, b);
+    if (IS_KIND(tv, OBJ_NATIVE_TYPE)) return match_native(vm, (ObjNativeType*)tv.as.o, t, v, env, b, deep);
     rt_error(vm, t->line, "'%s' is not a type", t->name->chars);
 }
 
@@ -205,6 +240,19 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
             if (!is_callable(v)) return 0;
             return callable_fits(vm, v.as.o, t->args, t->nargs, t->variadic, t->inner, env, b, NULL, false) ? 3 : 0;
         case TY_NAME: return match_named(vm, t, v, env, b, deep);
+        case TY_TUPLE: {
+            /* exactly as many elements as type arguments, each one fitting: 2 + the weakest */
+            if (!IS_KIND(v, OBJ_TUPLE)) return 0;
+            ObjTuple* tp = AS_TUPLE(v);
+            if (tp->count != t->nargs) return 0;
+            int best = 5;
+            for (int i = 0; i < tp->count; i++) {
+                int x = type_match(vm, t->args[i], tp->items[i], env, b, deep);
+                if (!x) return 0;
+                best = min_score(best, x);
+            }
+            return 2 + best;
+        }
     }
     return 0;
 }
@@ -262,9 +310,21 @@ bool interface_extends(ObjInterface* child, ObjInterface* parent) {
     return false;
 }
 
+/* the generic parameters of a generic impl, unbound: they accept anything until a value binds them */
+static void impl_bindings(Impl* im, Bindings* b) {
+    b->count = im->ngenerics < PP_MAX_BINDINGS ? im->ngenerics : PP_MAX_BINDINGS;
+    for (int i = 0; i < b->count; i++) {
+        memset(&b->items[i], 0, sizeof(Binding));
+        b->items[i].name = im->generics[i];
+    }
+}
+
 static bool interface_covers(VM* vm, ObjInterface* it, TRef a) {
-    for (int i = 0; i < it->nimpls; i++)
-        if (type_accepts(vm, tref(it->impls[i].target, it->impls[i].env, NULL), a, true)) return true;
+    for (int i = 0; i < it->nimpls; i++) {
+        Bindings ib;
+        impl_bindings(&it->impls[i], &ib);
+        if (type_accepts(vm, tref(it->impls[i].target, it->impls[i].env, &ib), a, true)) return true;
+    }
     return false;
 }
 
@@ -327,6 +387,14 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
             return type_accepts(vm, tref(td->def, td->env, &nb), a, strict);
         }
         if (IS_KIND(pv, OBJ_TYPEDEF) || IS_KIND(pv, OBJ_ENUM)) return at->kind == TY_NAME && av.as.o == pv.as.o;
+        if (IS_KIND(pv, OBJ_NATIVE_TYPE)) {
+            /* map<K, V> accepts map<K2, V2> when the arguments do; a bare std:map accepts any map */
+            if (at->kind != TY_NAME || av.as.o != pv.as.o) return false;
+            if (!pt->nargs || !at->nargs) return true;
+            for (int i = 0; i < pt->nargs && i < at->nargs; i++)
+                if (!type_accepts(vm, tref(pt->args[i], p.env, p.b), tref(at->args[i], a.env, a.b), false)) return false;
+            return true;
+        }
         if (IS_KIND(pv, OBJ_INTERFACE)) {
             /* a Comparator can be passed where an Equals is expected when Comparator extends Equals */
             if (at->kind == TY_NAME && IS_KIND(av, OBJ_INTERFACE) &&
@@ -360,6 +428,12 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
             return true;
         }
         case TY_FUNC: return at->kind == TY_FUNC && fn_type_accepts(vm, p, a);
+        case TY_TUPLE: {
+            if (at->kind != TY_TUPLE || at->nargs != pt->nargs) return false;
+            for (int i = 0; i < pt->nargs; i++)
+                if (!type_accepts(vm, tref(pt->args[i], p.env, p.b), tref(at->args[i], a.env, a.b), false)) return false;
+            return true;
+        }
         default: return false;
     }
 }
@@ -378,6 +452,8 @@ static Signature* obj_sig(Obj* o) {
 static ObjEnv* obj_env(VM* vm, Obj* o) {
     switch (o->kind) {
         case OBJ_FUNCTION: return ((ObjFunction*)o)->closure;
+        /* a `native function` declared in a .pp module names that module's types (std:map in lib/std.pp) */
+        case OBJ_NATIVE: return ((ObjNative*)o)->env ? ((ObjNative*)o)->env : vm->builtins;
         case OBJ_VARIANT_CTOR: return ((ObjVariantCtor*)o)->en->env;
         default: return vm->builtins;
     }
@@ -401,6 +477,7 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
         return false;
     }
     if (c->kind == OBJ_TYPEDEF) return !impl_mode && (variadic || nargs == 1);
+    if (c->kind == OBJ_NATIVE_TYPE) return !impl_mode && (variadic || nargs <= 1);
     Signature* sig = obj_sig(c);
     if (!sig) return false;
     if (variadic) return impl_mode ? sig->variadic : true;
@@ -510,7 +587,16 @@ static Type* sample_type(VM* vm, Value v) {
         case OBJ_VARIANT_CTOR: return prim_ctype(vm, PRIM_FUNCTION);
         case OBJ_TYPEDEF:
         case OBJ_ENUM:
-        case OBJ_INTERFACE: return prim_ctype(vm, PRIM_TYPE);
+        case OBJ_INTERFACE:
+        case OBJ_NATIVE_TYPE: return prim_ctype(vm, PRIM_TYPE);
+        case OBJ_MAP: return direct_ctype(vm, (Obj*)vm->t_map, vm->t_map->name); /* element types unknown: any map */
+        case OBJ_SET: return direct_ctype(vm, (Obj*)vm->t_set, vm->t_set->name);
+        case OBJ_TUPLE: {
+            Type* c = new_ctype(TY_TUPLE); /* element types unknown: tuple<any, ...> */
+            c->nargs = AS_TUPLE(v)->count;
+            c->args = pp_calloc((size_t)(c->nargs ? c->nargs : 1), sizeof(Type*));
+            return intern_type(vm, c);
+        }
         default: return NULL;
     }
 }
@@ -562,6 +648,13 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
                 c->fnames[i] = t->fnames[i];
                 c->ftypes[i] = concretize(vm, t->ftypes[i], env, b, depth + 1);
             }
+            return intern_type(vm, c);
+        }
+        case TY_TUPLE: {
+            Type* c = new_ctype(TY_TUPLE);
+            c->nargs = t->nargs;
+            c->args = pp_malloc(sizeof(Type*) * (size_t)(t->nargs ? t->nargs : 1));
+            for (int i = 0; i < t->nargs; i++) c->args[i] = concretize(vm, t->args[i], env, b, depth + 1);
             return intern_type(vm, c);
         }
         case TY_FUNC: {
@@ -649,16 +742,19 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
                  app->nargs);
     for (int i = 0; i < it->nimpls; i++) {
         Impl* im = &it->impls[i];
+        /* <K, V>impl Index<K, V> for std:map<K, V>: matching the value binds K and V */
+        Bindings ib;
+        impl_bindings(im, &ib);
         Value tv;
         bool fits;
         if (im->target->kind == TY_NAME && resolve_type_value(vm, im->target, im->env, &tv) && is_record_typedef(tv))
             fits = IS_KIND(v, OBJ_OBJECT) && AS_OBJECT(v)->tag == (ObjTypeDef*)tv.as.o; /* nominal */
         else
-            fits = type_match(vm, im->target, v, im->env, NULL, false) > 0;
+            fits = type_match(vm, im->target, v, im->env, &ib, false) > 0;
         if (!fits) continue;
         bool args_ok = true;
         for (int k = 0; k < app->nargs && args_ok; k++) {
-            TRef x = tref(im->args[k], im->env, NULL);
+            TRef x = tref(im->args[k], im->env, &ib);
             TRef y = tref(app->args[k], env, b);
             args_ok = type_accepts(vm, x, y, false) && type_accepts(vm, y, x, false);
         }
@@ -740,6 +836,14 @@ void type_to_string(Type* t, StrBuf* sb) {
             }
             sb_puts(sb, " -> ");
             type_to_string(t->inner, sb);
+            break;
+        case TY_TUPLE:
+            sb_puts(sb, "tuple<");
+            for (int i = 0; i < t->nargs; i++) {
+                if (i) sb_puts(sb, ", ");
+                type_to_string(t->args[i], sb);
+            }
+            sb_putc(sb, '>');
             break;
     }
 }

@@ -32,7 +32,23 @@ static void mark_table(Table* t) {
 static void blacken(Obj* o) {
     switch (o->kind) {
         case OBJ_STRING:
-        case OBJ_RANGE: break;
+        case OBJ_RANGE:
+        case OBJ_NATIVE_TYPE: break;
+        case OBJ_TUPLE: {
+            ObjTuple* t = (ObjTuple*)o;
+            for (int i = 0; i < t->count; i++) mark_value(t->items[i]);
+            break;
+        }
+        case OBJ_MAP:
+        case OBJ_SET: {
+            ObjMap* m = (ObjMap*)o;
+            for (int i = 0; i < m->count; i++) {
+                if (!m->entries[i].live) continue;
+                mark_value(m->entries[i].key);
+                mark_value(m->entries[i].value);
+            }
+            break;
+        }
         case OBJ_NATIVE: mark_obj((Obj*)((ObjNative*)o)->env); break;
         case OBJ_ARRAY: {
             ObjArray* a = (ObjArray*)o;
@@ -105,6 +121,8 @@ static void free_obj(Obj* o) {
         case OBJ_ARRAY: free(((ObjArray*)o)->items); break;
         case OBJ_OBJECT: table_free(&((ObjObject*)o)->fields); break;
         case OBJ_OVERLOAD: free(((ObjOverload*)o)->items); break;
+        case OBJ_MAP:
+        case OBJ_SET: map_free((ObjMap*)o); break;
         case OBJ_ENUM:
             free(((ObjEnum*)o)->variants);
             table_free(&((ObjEnum*)o)->impl_fns);
@@ -139,6 +157,12 @@ void gc_collect(VM* vm) {
     mark_value(vm->ret);
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);
+    /* std:map / std:set are permanent (never marked themselves), but what impl recorded on them is not */
+    ObjNativeType* nts[2] = {vm->t_map, vm->t_set};
+    for (int i = 0; i < 2; i++) {
+        mark_table(&nts[i]->impl_fns);
+        mark_obj((Obj*)nts[i]->module);
+    }
     for (int i = 0; i < vm->nctypes; i++) mark_obj(vm->ctypes[i]->direct);
 
     while (ngray > 0) blacken(gray[--ngray]);

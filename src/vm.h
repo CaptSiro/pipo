@@ -64,12 +64,22 @@ struct VM {
     ObjEnv* builtins;
     Table modules;
     Table globals; /* name -> ObjOverload of the functions declared `global` */
+    Table opeq_names; /* every function name ending in '=' ever declared (+=, <=, []=): `x op= v` skips the in-place lookup otherwise */
     Table prec;
     int prec_version;
     Value ret;
 
     ObjEnum* option_enum;
     ObjEnum* error_enum;
+
+    ObjNativeType* t_map; /* std:map, std:set: bound in lib/std.pp by `native type` */
+    ObjNativeType* t_set;
+    Obj* tuple_ctor;      /* the built-in tuple(...) function, recognised in patterns */
+    ObjString* s_index;   /* "[]" and "[]=": x[i] and x[i] = v call these */
+    ObjString* s_index_set;
+    Obj* index_builtin;   /* the builtins' overload sets of [] and []=, for the fast path */
+    Obj* index_set_builtin;
+    int index_overloads;  /* [] / []= overload sets created outside the builtins; 0 = x[i] can skip the lookup */
 
     InlineCache** caches;
     int ncaches;
@@ -130,6 +140,10 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
                    ObjString* self, bool impl_mode);
 Type* concrete_type(VM* vm, Type* t, ObjEnv* env, Bindings* b);
 bool interface_extends(ObjInterface* child, ObjInterface* parent);
+
+/* collections.c */
+uint32_t hash_key(VM* vm, Value key, int line); /* runtime error for keys that cannot be hashed */
+Value native_type_construct(VM* vm, ObjNativeType* t, int argc, Value* args, int line);
 
 /* gc.c */
 void gc_maybe(VM* vm);

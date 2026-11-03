@@ -339,6 +339,28 @@ bool values_equal(Value a, Value b) {
                 if (!values_equal(p->payload[i], q->payload[i])) return false;
             return true;
         }
+        case OBJ_TUPLE: {
+            ObjTuple* p = (ObjTuple*)x;
+            ObjTuple* q = (ObjTuple*)y;
+            if (p->count != q->count) return false;
+            for (int i = 0; i < p->count; i++)
+                if (!values_equal(p->items[i], q->items[i])) return false;
+            return true;
+        }
+        case OBJ_MAP:
+        case OBJ_SET: {
+            /* the same keys (and values), in any order */
+            ObjMap* p = (ObjMap*)x;
+            ObjMap* q = (ObjMap*)y;
+            if (p->live != q->live) return false;
+            for (int i = 0; i < p->count; i++) {
+                MapEntry* e = &p->entries[i];
+                if (!e->live) continue;
+                MapEntry* f = map_find(q, e->key, e->hash);
+                if (!f || (x->kind == OBJ_MAP && !values_equal(e->value, f->value))) return false;
+            }
+            return true;
+        }
         default: return false;
     }
 }
@@ -350,7 +372,8 @@ bool is_callable(Value v) {
         case OBJ_NATIVE:
         case OBJ_OVERLOAD:
         case OBJ_VARIANT_CTOR:
-        case OBJ_TYPEDEF: return true;
+        case OBJ_TYPEDEF:
+        case OBJ_NATIVE_TYPE: return true;
         default: return false;
     }
 }
@@ -381,6 +404,10 @@ const char* value_type_name(Value v) {
         case OBJ_ENUM_VALUE: return AS_ENUMV(v)->en->name->chars;
         case OBJ_MODULE: return "module";
         case OBJ_ENV: return "scope";
+        case OBJ_TUPLE: return "tuple";
+        case OBJ_MAP: return "map";
+        case OBJ_SET: return "set";
+        case OBJ_NATIVE_TYPE: return "type";
     }
     return "?";
 }
@@ -539,6 +566,38 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         case OBJ_INTERFACE: sb_printf(sb, "<interface %s>", ((ObjInterface*)o)->name->chars); break;
         case OBJ_MODULE: sb_printf(sb, "<module %s>", ((ObjModule*)o)->name->chars); break;
         case OBJ_ENV: sb_puts(sb, "<scope>"); break;
+        case OBJ_NATIVE_TYPE: sb_printf(sb, "<type std:%s>", ((ObjNativeType*)o)->name->chars); break;
+        case OBJ_TUPLE: {
+            ObjTuple* t = AS_TUPLE(v);
+            sb_puts(sb, "tuple(");
+            for (int i = 0; i < t->count; i++) {
+                if (i) sb_puts(sb, ", ");
+                value_format(sb, t->items[i], false, indent);
+            }
+            sb_putc(sb, ')');
+            break;
+        }
+        case OBJ_MAP:
+        case OBJ_SET: {
+            /* map{"a": 1, "b": 2}, set{1, 2}: one line, in insertion order */
+            ObjMap* m = AS_MAP(v);
+            bool is_map = o->kind == OBJ_MAP;
+            sb_puts(sb, is_map ? "map{" : "set{");
+            bool first = true;
+            for (int i = 0; i < m->count; i++) {
+                MapEntry* e = &m->entries[i];
+                if (!e->live) continue;
+                if (!first) sb_puts(sb, ", ");
+                first = false;
+                value_format(sb, e->key, false, indent);
+                if (is_map) {
+                    sb_puts(sb, ": ");
+                    value_format(sb, e->value, false, indent);
+                }
+            }
+            sb_putc(sb, '}');
+            break;
+        }
         case OBJ_ENUM_VALUE: {
             ObjEnumValue* ev = AS_ENUMV(v);
             Variant* var = &ev->en->variants[ev->variant];

@@ -11,7 +11,8 @@ typedef enum {
     TY_ARRAY,
     TY_UNION,
     TY_RECORD,
-    TY_FUNC    /* callback type: (A, B) -> R, only as the definition of a named type */
+    TY_FUNC,   /* callback type: (A, B) -> R, only as the definition of a named type */
+    TY_TUPLE   /* tuple<A, B, ...>: args are the element types, at least one */
 } TypeKind;
 
 typedef enum {
@@ -34,7 +35,7 @@ struct Type {
     ObjString* name;     /* TY_NAME */
     ObjString** quals;   /* TY_NAME qualified by modules: a:b:name has quals [a, b] */
     int nquals;
-    Type** args;         /* TY_NAME type arguments, TY_FUNC parameter types */
+    Type** args;         /* TY_NAME type arguments, TY_FUNC parameter types, TY_TUPLE element types */
     int nargs;
     bool variadic;       /* TY_FUNC: (...) -> R */
     Type* inner;         /* TY_ARRAY element, TY_FUNC return type (NULL = any) */
@@ -143,7 +144,8 @@ struct Node {
         /* recv.callee(args) == callee(recv, args); callee is a name or a:b:c path */
         struct { Node* recv; Node* callee; NodeList args; InlineCache* ic; } method;
         struct { Node* obj; ObjString* name; } field;
-        struct { Node* obj; Node* index; } index;
+        /* obj[a, b] == [](obj, a, b): the bracket pair is the name of a function */
+        struct { Node* obj; NodeList args; InlineCache* ic; } index;
         struct {
             NodeList operands;
             ObjString** ops;
@@ -166,7 +168,21 @@ struct Node {
         struct { NodeList stmts; bool scoped; } block;
         struct { Node* expr; } expr;
         struct { bool is_const; Type* type; ObjString* name; Node* init; } let;
-        struct { Node* target; ObjString* op; Node* value; InlineCache* ic; } assign;
+        /*
+         * target op= value: op is the operator without '=', opeq the whole name. An overload of opeq
+         * that accepts (current value, value) runs in place; otherwise target = op(current, value).
+         * ic: op, ic2: opeq, ic3: the [] / []= calls of an index target
+         */
+        struct {
+            Node* target;
+            ObjString* op;
+            ObjString* opeq;
+            Node* value;
+            InlineCache* ic;
+            InlineCache* ic2;
+            InlineCache* ic3;
+        } assign;
+        /* def NULL: `native type map<K, V>`, a type implemented in C */
         struct { ObjString* name; ObjString** generics; int ngenerics; Type* def; } type_decl;
         struct {
             ObjString* name;
@@ -200,7 +216,8 @@ struct Node {
             Type** parents; /* impl Parent for Name: the interfaces this one extends */
             int nparents;
         } iface;
-        struct { Type* iface; Type* target; } impl;
+        /* <K, V>impl Index<K, V> for std:map<K, V>: generics are bound by the value being matched */
+        struct { Type* iface; Type* target; ObjString** generics; int ngenerics; } impl;
         struct { ObjString* op; int rel; ObjString* other; } prec;
         struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;
         struct { Node* cond; Node* body; } while_;

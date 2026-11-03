@@ -1,0 +1,32 @@
+map{"john": 22, "anna": 31, "bob": 40} 3 31 none() some(22) 0
+true false true ["john", "anna", "bob"] [22, 31, 40]
+john 22
+anna 31
+bob 40
+john
+anna
+bob
+[tuple("john", 22), tuple("anna", 31), tuple("bob", 40)]
+some(22) none() map{"anna": 31, "bob": 40}
+32 map map{"anna": 32, "bob": 40} map{"anna": 32, "bob": 40}
+map{"a": 1, "b": 2} true false true
+some("one") one false
+some("s1") n none()
+origin ?
+1 2
+["a=1", "b=2"] ["a", "b"]
+2 3
+map{} 0 none()
+map{"again": 1}
+50500 some(-1) some(-2) some(199998) 4999000500
+set{1, 2, 3} 3 true false true set
+set{1, 2, 3, 4} set{2, 3} set{2, 3}
+set{1, 2, 3, 0} set{} set{}
+false true true false set{2, 3, 10} [2, 3, 10]
+01234
+0 a
+1 b
+true false
+x
+<type std:map> <type std:set> type
+a map of 1

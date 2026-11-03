@@ -81,17 +81,41 @@ ObjObject* object_new(VM* vm) {
     return o;
 }
 
-ObjRange* range_new(VM* vm, int64_t start, int64_t end, int64_t step) {
+ObjRange* range_new(VM* vm, Value start, Value end, Value step) {
     ObjRange* r = (ObjRange*)alloc_obj(vm, sizeof(ObjRange), OBJ_RANGE);
+    if (start.kind == VAL_FLOAT || end.kind == VAL_FLOAT || step.kind == VAL_FLOAT) {
+        start = float_val(num_as_double(start));
+        end = float_val(num_as_double(end));
+        step = float_val(num_as_double(step));
+    }
     r->start = start;
     r->end = end;
     r->step = step;
+    r->inclusive = false;
     return r;
 }
 
+Value range_at(ObjRange* r, int64_t k) {
+    if (range_is_float(r)) return float_val(r->start.as.f + (double)k * r->step.as.f);
+    return int_val(r->start.as.i + k * r->step.as.i);
+}
+
 int64_t range_length(ObjRange* r) {
-    if (r->step > 0) return r->end > r->start ? (r->end - r->start + r->step - 1) / r->step : 0;
-    if (r->step < 0) return r->end < r->start ? (r->start - r->end - r->step - 1) / -r->step : 0;
+    if (range_is_float(r)) {
+        double start = r->start.as.f, end = r->end.as.f, step = r->step.as.f;
+        if (step == 0 || !(step > 0 ? end > start : end < start)) return 0;
+        /* n = number of k >= 0 with start + k*step before end; the division can round
+           across a whole number, so fix n up against the elements range_at produces */
+        double n = ceil((end - start) / step);
+#define BEFORE_END(k) (step > 0 ? start + (k) * step < end : start + (k) * step > end)
+        while (n > 0 && !BEFORE_END(n - 1)) n--;
+        while (BEFORE_END(n)) n++;
+#undef BEFORE_END
+        return (int64_t)n;
+    }
+    int64_t start = r->start.as.i, end = r->end.as.i, step = r->step.as.i;
+    if (step > 0) return end > start ? (end - start + step - 1) / step : 0;
+    if (step < 0) return end < start ? (start - end - step - 1) / -step : 0;
     return 0;
 }
 
@@ -127,6 +151,7 @@ ObjNative* native_new(VM* vm, Signature* sig, NativeFn fn) {
     ObjNative* n = (ObjNative*)alloc_obj(vm, sizeof(ObjNative), OBJ_NATIVE);
     n->sig = sig;
     n->fn = fn;
+    n->env = NULL;
     return n;
 }
 
@@ -144,6 +169,7 @@ ObjModule* module_new(VM* vm, const char* name, const char* path, ObjEnv* parent
     table_init(&m->exports);
     m->name = str_cnew(vm, name);
     m->path = str_cnew(vm, path);
+    m->natives = NULL;
     m->env = env_new(vm, parent);
     return m;
 }
@@ -303,7 +329,7 @@ bool values_equal(Value a, Value b) {
         case OBJ_RANGE: {
             ObjRange* p = (ObjRange*)x;
             ObjRange* q = (ObjRange*)y;
-            return p->start == q->start && p->end == q->end && p->step == q->step;
+            return values_equal(p->start, q->start) && values_equal(p->end, q->end) && values_equal(p->step, q->step);
         }
         case OBJ_ENUM_VALUE: {
             ObjEnumValue* p = (ObjEnumValue*)x;
@@ -481,10 +507,18 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         }
         case OBJ_RANGE: {
             ObjRange* r = AS_RANGE(v);
-            if (r->step == 1 || r->step == -1)
-                sb_printf(sb, "%" PRId64 "...%" PRId64, r->start, r->end);
+            if (range_is_float(r)) {
+                sb_puts(sb, "range(");
+                format_float(sb, r->start.as.f);
+                sb_puts(sb, ", ");
+                format_float(sb, r->end.as.f);
+                sb_puts(sb, ", ");
+                format_float(sb, r->step.as.f);
+                sb_putc(sb, ')');
+            } else if (r->step.as.i == 1 || r->step.as.i == -1)
+                sb_printf(sb, "%" PRId64 "...%" PRId64, r->start.as.i, r->end.as.i);
             else
-                sb_printf(sb, "range(%" PRId64 ", %" PRId64 ", %" PRId64 ")", r->start, r->end, r->step);
+                sb_printf(sb, "range(%" PRId64 ", %" PRId64 ", %" PRId64 ")", r->start.as.i, r->end.as.i, r->step.as.i);
             break;
         }
         case OBJ_FUNCTION: sb_printf(sb, "<function %s>", ((ObjFunction*)o)->sig->name->chars); break;

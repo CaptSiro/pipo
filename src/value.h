@@ -145,13 +145,22 @@ typedef struct {
     ObjTypeDef* tag; /* nominal type the object was declared as, or NULL */
 } ObjObject;
 
-/* iterates start, start+step, ... while (step > 0 ? v < end : v > end) */
+/*
+ * iterates start, start+step, ... while (step > 0 ? v < end : v > end).
+ * start, end and step are numbers of one kind: all VAL_INT or all VAL_FLOAT
+ * (range_new converts a mix to floats). Float ranges compute the k-th element
+ * as start + k*step, so the step does not accumulate rounding errors.
+ */
 typedef struct {
     Obj obj;
-    int64_t start;
-    int64_t end;
-    int64_t step;
+    Value start;
+    Value end;
+    Value step;
+    bool inclusive; /* written with ...= : end was moved one step past the last element */
 } ObjRange;
+
+static inline bool range_is_float(const ObjRange* r) { return r->start.kind == VAL_FLOAT; }
+static inline double num_as_double(Value v) { return v.kind == VAL_FLOAT ? v.as.f : (double)v.as.i; }
 
 typedef struct {
     Type* type; /* NULL = untyped (any) */
@@ -181,10 +190,22 @@ typedef struct {
 
 typedef Value (*NativeFn)(VM* vm, int argc, Value* args);
 
+/*
+ * The C half of a mixed library module: its .pp file in lib/ declares
+ * `native function name(...) -> T`, and the body comes from a table of these
+ * registered with vm_register_native_impls. Terminated by {NULL, NULL}.
+ */
+typedef struct {
+    const char* name;
+    NativeFn fn;
+} NativeImpl;
+
 typedef struct {
     Obj obj;
     Signature* sig;
     NativeFn fn;
+    ObjEnv* env; /* scope its signature's types are resolved in; NULL = builtins.
+                    Set for `native function` declared in a .pp module. */
 } ObjNative;
 
 typedef struct {
@@ -285,6 +306,7 @@ struct ObjModule {
     ObjString* path;
     ObjEnv* env;
     Table exports; /* exported name -> name of the symbol in env (string value) */
+    const NativeImpl* natives; /* C bodies for its `native function`s, or NULL */
 };
 
 struct ObjEnv {
@@ -307,7 +329,8 @@ bool str_equals(ObjString* a, const char* s);
 ObjArray* array_new(VM* vm, int cap);
 void array_push(ObjArray* a, Value v);
 ObjObject* object_new(VM* vm);
-ObjRange* range_new(VM* vm, int64_t start, int64_t end, int64_t step);
+ObjRange* range_new(VM* vm, Value start, Value end, Value step); /* numbers; a mix becomes floats */
+Value range_at(ObjRange* r, int64_t k); /* the k-th element */
 ObjEnv* env_new(VM* vm, ObjEnv* parent);
 ObjOverload* overload_new(VM* vm, ObjString* name);
 void overload_add(ObjOverload* set, Obj* fn);

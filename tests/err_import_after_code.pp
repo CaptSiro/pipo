@@ -1,3 +1,3 @@
 import io
-io:print(1)
+io:print_nl(1)
 import os

@@ -31,7 +31,7 @@ the IDE. JetBrains caches TextMate bundles.
 | `constant.numeric` | `42`, `1_000`, `0xFF`, `0b101`, `3.14`, `1e9` |
 | `constant.language` | `true`, `false` |
 | `keyword.control` | `if else for in while break continue return match` |
-| `keyword.other` | `import export global function const let enum type interface impl precedence over under as` |
+| `keyword.other` | `import export global native function const let enum type interface impl precedence over under as` |
 | `storage.type` | `int float string bool void any range object number` |
 | `entity.name.type` | capitalised names: `Person`, `Error`, `Option` |
 | `entity.name.function` | the name in `function name(` / `function +(` |

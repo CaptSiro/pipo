@@ -1,2 +1,2 @@
 import io
-io:print(format("%d", 1.5))
+io:print_nl(format("%d", 1.5))

@@ -32,8 +32,8 @@ static void mark_table(Table* t) {
 static void blacken(Obj* o) {
     switch (o->kind) {
         case OBJ_STRING:
-        case OBJ_RANGE:
-        case OBJ_NATIVE: break;
+        case OBJ_RANGE: break;
+        case OBJ_NATIVE: mark_obj((Obj*)((ObjNative*)o)->env); break;
         case OBJ_ARRAY: {
             ObjArray* a = (ObjArray*)o;
             for (int i = 0; i < a->count; i++) mark_value(a->items[i]);

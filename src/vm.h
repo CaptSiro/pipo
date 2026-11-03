@@ -40,6 +40,12 @@ typedef struct {
     NativeModuleInit init;
 } NativeModule;
 
+/* the C half of a mixed library module (NativeImpl is in value.h) */
+typedef struct {
+    const char* module; /* library module path: "geometry", "os:fs" */
+    const NativeImpl* impls;
+} NativePart;
+
 struct VM {
     Obj* objects;
     size_t num_objects;
@@ -77,6 +83,8 @@ struct VM {
     int nsearch;
     NativeModule* native_modules;
     int nnative_modules;
+    NativePart* native_parts;
+    int nnative_parts;
 
     int argc;
     char** argv;
@@ -105,6 +113,7 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn);
 ObjEnv* vm_current_env(VM* vm);
 void vm_register_ic(VM* vm, InlineCache* ic);
 void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init);
+void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impls);
 Value make_some(VM* vm, Value v);
 Value make_none(VM* vm);
 Value make_success(VM* vm, Value v);
@@ -126,7 +135,7 @@ bool interface_extends(ObjInterface* child, ObjInterface* parent);
 void gc_maybe(VM* vm);
 void gc_collect(VM* vm);
 
-/* builtins.c / prelude.c */
+/* builtins.c / prelude.c / src/modules/ */
 void builtins_register(VM* vm);
 void def_native(VM* vm, ObjEnv* env, const char* name, const char* sig, NativeFn fn);
 void def_const(VM* vm, ObjEnv* env, const char* name, Value v);
@@ -136,8 +145,9 @@ void def_submodule(VM* vm, ObjModule* parent, const char* name, NativeModuleInit
 void mod_io_register(VM* vm);
 void mod_os_register(VM* vm);
 void mod_pp_register(VM* vm);
+void mod_std_register(VM* vm);
 
-/* mod_pp.c: directory of the file the running code is written in (caller frees) */
+/* modules/pp.c: directory of the file the running code is written in (caller frees) */
 char* vm_script_dir(VM* vm);
 extern const char* PP_PRELUDE;
 

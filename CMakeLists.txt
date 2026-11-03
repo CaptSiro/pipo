@@ -8,8 +8,15 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release)
 endif ()
 
-file(GLOB PP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c)
+# native modules (io, os, pp, ...) live in src/modules/, one file per module
+file(GLOB PP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c ${CMAKE_SOURCE_DIR}/src/modules/*.c)
 add_executable(pp ${PP_SOURCES})
+target_include_directories(pp PRIVATE ${CMAKE_SOURCE_DIR}/src)
+# pp.exe always lands in the build directory itself (the $<1:...> stops multi-config
+# generators from adding Debug/ or Release/), so lib/ can be copied next to it
+# without the copy target depending on pp.
+set(PP_OUT_DIR ${CMAKE_BINARY_DIR})
+set_target_properties(pp PROPERTIES RUNTIME_OUTPUT_DIRECTORY $<1:${PP_OUT_DIR}>)
 
 if (MSVC)
     target_compile_definitions(pp PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -26,9 +33,16 @@ else ()
     target_link_libraries(pp m)
 endif ()
 
-# packages that ship with the interpreter live in lib/ next to the executable
-add_custom_command(TARGET pp POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib $<TARGET_FILE_DIR:pp>/lib)
+# packages that ship with the interpreter live in lib/ next to the executable.
+# This is its own target that runs on every build (not a POST_BUILD step of pp),
+# so changing only files in lib/ still updates the copy, even when pp.exe is up to date.
+# The old copy is removed first, so files deleted from lib/ disappear from the build too.
+add_custom_target(pp_lib ALL
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${PP_OUT_DIR}/lib
+        COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/lib ${PP_OUT_DIR}/lib
+        COMMENT "Copying lib/ next to pp"
+        VERBATIM)
+add_dependencies(pp pp_lib) # building just `pp` (e.g. from CLion) refreshes lib/ too
 
 enable_testing()
 file(GLOB PP_TESTS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.pp)

@@ -200,7 +200,7 @@ The interpreter core keeps only the most basic functions internal
 | `json`  | parse / stringify |
 
 A package is either a **`.pp` file** in `lib/`, which CMake copies next to
-`pp.exe`, or a **native module** written in C, like `src/mod_io.c`:
+`pp.exe`, or a **native module** written in C, like `src/modules/io.c`:
 
 ```c
 static ObjModule* fs_init(VM* vm) {
@@ -235,6 +235,76 @@ void mod_os_register(VM* vm) { vm_register_native_module(vm, "os", os_init); }
 | `def_submodule(vm, parent, name, init)` | a native module inside another one |
 | `module_export_all(m)` | export everything defined so far |
 
-Call the register function from `vm_new` (`src/interp.c`), next to
-`mod_io_register`. This is how `src/mod_os.c` is built. A package can also be **mixed**: a `.pp` file in
-`lib/` that imports a native module and wraps it with typed functions.
+Native modules live in `src/modules/`, one file per module (CMake picks up
+every `src/modules/*.c`). Declare the register function in `src/vm.h` and call
+it from `vm_new` (`src/interp.c`), next to `mod_io_register`. This is how
+`src/modules/os.c` is built.
+
+### Mixed modules (.pp + C)
+
+A module can also be **mixed**: the `.pp` file in `lib/` is the module. It
+declares the types, interfaces, constants and exports, and leaves only some
+function bodies to C with `native function`:
+
+```
+// lib/geometry.pp
+export type Vec = { float x, float y }
+
+native function hypot(float, float) -> float        // private: not exported
+export function length(Vec v) -> float {
+    return hypot(v:x, v:y)
+}
+
+export native function dot(Vec, Vec) -> float       // exported like any function
+export native "scale_f" function scale(Vec, float) -> Vec
+export native "scale_i" function scale(Vec, int) -> Vec
+global native function ==(Vec, Vec) -> bool
+```
+
+```c
+// src/modules/geometry.c
+#include "vm.h"
+
+static Value geo_hypot(VM* vm, int argc, Value* a) {
+    return float_val(hypot(a[0].as.f, a[1].as.f));
+}
+/* ... */
+
+static const NativeImpl GEOMETRY[] = {
+    {"hypot", geo_hypot},
+    {"dot", geo_dot},
+    {"scale_f", geo_scale_f},
+    {"scale_i", geo_scale_i},
+    {"==", geo_eq},
+    {NULL, NULL},
+};
+
+void mod_geometry_register(VM* vm) {
+    vm_register_native_impls(vm, "geometry", GEOMETRY);
+}
+```
+
+* `native ["impl"] [<T>]function name(params) -> T` has no body. It is only
+  allowed at the top level, and combines with `export` and `global`
+  (`export native function`, `global native function`).
+* The C body is looked up by the function's name, or by the string after
+  `native`. Use the string to give each overload its own C function. Several
+  declarations may also share one C function, which then checks the arguments
+  itself.
+* `vm_register_native_impls` takes the **library module path**: `"geometry"`
+  for `lib/geometry.pp`, `"os:fs"` for `lib/os/fs.pp`. Only library modules
+  (`import geometry`) get native bodies. A file imported by path, or the main
+  script, cannot declare `native` functions.
+* Types in the signature are resolved in the `.pp` file, so they can name its
+  own types (`Vec` above). Overload resolution picks native declarations like
+  any other function.
+* The C function receives the arguments after they matched the signature.
+  Ints passed to `float` parameters arrive as floats, and the result is checked
+  against (and converted to) the declared return type, as for a function
+  written in the language. A record returned as `-> Vec` is tagged `Vec`, so
+  dot calls such as `v.length()` work on it.
+* Declarations without a C body fail when the module loads:
+  `module 'geometry' has no native implementation named 'dot'`. C entries
+  without a declaration are simply unused.
+* Don't register a pure native module (`vm_register_native_module`) under the
+  same name. It is found first, and the `.pp` file would be ignored.

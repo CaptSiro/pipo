@@ -24,10 +24,10 @@ type number = float || int;
 }
 
 // calling functions - all produce an empty array
-io:print(+([], []))     // classic
-io:print([].+([]))      // dot-syntax: the receiver becomes the first argument
-io:print(-[])           // unary-syntax: the function takes exactly one argument
-io:print([] + [])       // binary-syntax: the function takes exactly two arguments
+io:print_nl(+([], []))     // classic
+io:print_nl([].+([]))      // dot-syntax: the receiver becomes the first argument
+io:print_nl(-[])           // unary-syntax: the function takes exactly one argument
+io:print_nl([] + [])       // binary-syntax: the function takes exactly two arguments
 
 // precedence of newly created functions can be set at runtime
 <T>function *(T[] array, int count) -> T[] {
@@ -35,7 +35,7 @@ io:print([] + [])       // binary-syntax: the function takes exactly two argumen
 }
 
 precedence * over +
-io:print(['b'] + ['a'] * 5)
+io:print_nl(['b'] + ['a'] * 5)
 // ["b", "a", "a", "a", "a", "a"]
 
 // variables
@@ -44,37 +44,37 @@ let float ratio = 0.5
 let string late
 late = "assigned later"
 const DEBUG                      // works like #define DEBUG
-io:print(answer, ratio, late, DEBUG)
+io:print_nl(answer, ratio, late, DEBUG)
 
 if answer > 40 {
-    io:print("big")
+    io:print_nl("big")
 } else if answer > 10 {
-    io:print("medium")
+    io:print_nl("medium")
 } else {
-    io:print("small")
+    io:print_nl("small")
 }
 
 for i in ...10 {
     io:write(i, "")                 // i is from 0 to 9
 }
-io:print()
+io:print_nl()
 
 for let i in 10...=1 {
     i *= 2                       // `let` makes the loop variable mutable
     io:write(i, "")
 }
-io:print()
+io:print_nl()
 
 const array = ["x", "y", "z"]
 for let i in ...#array {
     io:write(i, "")                 // # gives the number of elements
 }
-io:print()
+io:print_nl()
 
 for x in array {
     io:write(x, "")
 }
-io:print()
+io:print_nl()
 
 let n = 0
 while true {
@@ -87,7 +87,7 @@ while true {
     }
     io:write(n, "")
 }
-io:print()
+io:print_nl()
 
 // match works like Rust's match and is an expression
 const var = 5
@@ -99,7 +99,7 @@ const x = match var {
     }
     _ -> 0
 }
-io:print("match:", x)
+io:print_nl("match:", x)
 
 // optional values
 function find_even(int[] xs) -> int? {
@@ -112,12 +112,12 @@ function find_even(int[] xs) -> int? {
 }
 
 if some(found) = find_even([1, 3, 4, 5]) {
-    io:print("found", found)
+    io:print_nl("found", found)
 }
 if some(found) = find_even([1, 3]) {
-    io:print("unreachable")
+    io:print_nl("unreachable")
 } else {
-    io:print("nothing even")
+    io:print_nl("nothing even")
 }
 
 // Error<S, F = string> is declared in the prelude exactly like this:
@@ -135,10 +135,10 @@ function parse_age(string s) -> Error<int> {
 for input in ["22", "-1", "abc"] {
     match parse_age(input) {
         success(age) -> {
-            io:print("ok!", age)
+            io:print_nl("ok!", age)
         }
         fail(reason) -> {
-            io:print("failed:", reason)
+            io:print_nl("failed:", reason)
         }
     }
 }
@@ -155,7 +155,7 @@ enum string Messages {
     ERROR = "Error"
 }
 
-io:print(Properties:VALUE, enum_value(Properties:VALUE), enum_value(Messages:WARNING))
+io:print_nl(Properties:VALUE, enum_value(Properties:VALUE), enum_value(Messages:WARNING))
 
 // JSON syntax for objects and arrays
 type Person = {
@@ -170,7 +170,7 @@ const Person john = {
 
 const Person[] people = [john]
 for p in people {
-    io:print(p) // pretty JSON print
+    io:print_nl(p) // pretty JSON print
 }
 
 // binding functions to a datatype: the first parameter decides
@@ -182,8 +182,8 @@ function birthday(Person p) {
 }
 
 john.birthday()
-io:print(john.greet(), john:age)
+io:print_nl(john.greet(), john:age)
 
 // using the imported module
 const r = rect(3, 4)
-io:print(r.describe(), "area", r.area(), shapes:UNIT == renamed:rect(1, 1))
+io:print_nl(r.describe(), "area", r.area(), shapes:UNIT == renamed:rect(1, 1))

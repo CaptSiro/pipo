@@ -24,8 +24,8 @@ with `pp`.
   Strings may span lines.
 * Keywords: `import export global function return const let if else for in while
   break continue match enum true false`. `type`, `interface`, `impl`,
-  `precedence`, `over`, `under` and `as` are contextual and can still be used
-  as names.
+  `precedence`, `over`, `under`, `as` and `native` are contextual and can still
+  be used as names.
 
 ### Operators are names
 
@@ -99,6 +99,7 @@ Higher numbers bind tighter. All operators are left associative.
 | 60    | `+ -`                  |
 | 50    | `... ...=`             |
 | 40    | `< > <= >=`            |
+| 35    | `in`                   |
 | 30    | `== !=`                |
 | 20    | `&&`                   |
 | 10    | `\|\|`                 |
@@ -253,12 +254,24 @@ for i, item in array { }          // index and item
 for key, value in object { }      // also: for key in object
 for ch in "héllo" { }             // code points
 for i in range(0, 10, 3) { }
+for x in range(0, 1, 0.25) { }    // 0.0 0.25 0.5 0.75
 ```
 
 **Decision:** conditions must be `bool`. There is no truthiness.
 
 `a...b` excludes the end and `a...=b` includes it. Both count down when
-`a > b`. `...n` starts at 0.
+`a > b`. `...n` starts at 0. `...` and `...=` take ints. `range(start, end, step)`
+takes numbers: all ints give an int range, and any float makes all three
+floats. The k-th element of a float range is `start + k*step`, so rounding
+errors don't add up across the steps. `r:start`, `r:end` and `r:step` read a range's fields.
+
+`x in y` calls the function `in(x, y)`, which can also be called directly (`in(3, 0...3)`) or passed as a value (`const check = in`). `lib/std.pp` defines it for arrays
+(`2 in [1, 2]`), strings (`"ell" in "hello"`) and ranges (`3 in 0...5`). For
+ranges it checks only the bounds, in the range's direction: `0...5` is
+`[0, 5)`, `5...=1` is `[1, 5]`, and `2.5 in 0...5` is true. `has(x, r)` asks
+whether `x` is one of the elements a `for` loop visits instead, so
+`2 in range(0, 10, 3)` is true but `has(2, range(0, 10, 3))` is false. A module
+can add more `in` overloads, like any other operator.
 
 ## match
 
@@ -456,6 +469,19 @@ global function ==(Rect a, Rect b) -> bool { ... }   // in shapes.pp
 import "./shapes" -> shapes                         // in another file
 shapes:rect(2, 3) == shapes:rect(2, 2)              // false, no import of == needed
 ```
+A library module in `lib/` can leave function bodies to C. The `.pp` file
+declares the signature with `native` (no body), and the interpreter binds it
+to the C function the module registered:
+
+```
+export type Vec = { float x, float y }
+native function hypot(float, float) -> float     // private helper, body in C
+export function length(Vec v) -> float { return hypot(v:x, v:y) }
+export native "vec_scale" function scale(Vec, float) -> Vec
+```
+
+See [PACKAGES.md](PACKAGES.md#mixed-modules-pp--c) for the C side.
+
 See [PACKAGES.md](PACKAGES.md) for lookup rules and the `io` module.
 
 ## Errors

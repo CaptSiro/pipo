@@ -1,2 +1,2 @@
 import io
-io:print(unwrap(none()))
+io:print_nl(unwrap(none()))

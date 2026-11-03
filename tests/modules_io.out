@@ -1,4 +1,4 @@
-io:print
+io:print_nl
 aliased module behaves like an object: <module io>
 destructured print
 no newline

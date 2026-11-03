@@ -1,3 +1,3 @@
 import io
 function f(int x) -> int { return x + "a" }
-io:print(f(1))
+io:print_nl(f(1))

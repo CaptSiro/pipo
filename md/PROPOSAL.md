@@ -199,14 +199,14 @@ function str(Box box) -> string {
 impl Str for Box;
 
 <T>interface TypeArgument {
-    <F>function my_function(T, F) -> string
+    <F>function my_function(TypeArgument, F) -> T
 }
 
 type MyCallback = Arg1 -> ReturnType
 type MyCallback2 = (Arg1, Arg2) -> ReturnType
 type MyCallbackVariadic = (...) -> ReturnType
 
-// must have type definition that is explicity type
+// must have type definition that is explicitly typed
 const MyCallback cb = arg -> {
     // body
 }
@@ -214,7 +214,6 @@ const MyCallback cb = arg -> {
 // invalid syntax
 const float -> int cb = f -> int(f)
 type ToInt = float -> int
-// valid syntax (int(float) truncates toward zero: 3.7 -> 3, -3.7 -> -3)
 const ToInt cb = f -> int(f)
 // also correct
 const ToInt using_builtin = int

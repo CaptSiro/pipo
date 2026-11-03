@@ -10,19 +10,19 @@ import os:fs -> { exists }
 
 // dot calls find area() in the module that declared Rect (ui:shapes)
 const ui:shapes:Rect r = ui:shapes:rect(2, 3)
-io:print(r.area())
-io:print(ui:shapes:area(r), shapes:area(r), geo:area(r), area(r), r.ui:shapes:area())
-io:print(ui:rect(1, 5).area(), type_of(ui:rect(1, 1)))
+io:print_nl(r.area())
+io:print_nl(ui:shapes:area(r), shapes:area(r), geo:area(r), area(r), r.ui:shapes:area())
+io:print_nl(ui:rect(1, 5).area(), type_of(ui:rect(1, 1)))
 
 // multi-level qualified types
 function describe(ui:shapes:Rect rect) -> string {
     return str(rect:width) + "x" + str(rect:height)
 }
-io:print(describe(r), ui:shapes, ui:shapes == shapes)
+io:print_nl(describe(r), ui:shapes, ui:shapes == shapes)
 
 // a sibling file that the package does not export
-io:print(widgets:button("ok"))
+io:print_nl(widgets:button("ok"))
 
 // native submodule
-io:print(os:fs:exists("."), fs:is_dir("."), exists("definitely/missing/file"))
-io:print(type_of(os:platform), type_of(os:args()), os:fs)
+io:print_nl(os:fs:exists("."), fs:is_dir("."), exists("definitely/missing/file"))
+io:print_nl(type_of(os:platform), type_of(os:args()), os:fs)

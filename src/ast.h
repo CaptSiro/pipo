@@ -160,7 +160,7 @@ struct Node {
          * S_FUNCDECL without a body is a declaration (`function a(int) -> float`);
          * decl: on a definition, the signature of the declaration it fulfils
          */
-        struct { Signature* sig; Node* body; bool global; bool lambda; Signature* decl; } func;
+        struct { Signature* sig; Node* body; bool global; bool lambda; Signature* decl; ObjString* native; } func;
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;

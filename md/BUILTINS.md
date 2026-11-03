@@ -109,7 +109,7 @@ parse_int("abc").unwrap_or(0)   // 0
 
 | function                  |                                          |
 |---------------------------|------------------------------------------|
-| `range(start, end, step)` | range with a custom step                 |
+| `range(start, end, step)` | range with a custom step; numbers, any float makes a float range |
 | `panic(message)`          | aborts with a runtime error              |
 | `assert(cond[, message])` |                                          |
 | `clock() -> float`        | monotonic seconds, for timing            |

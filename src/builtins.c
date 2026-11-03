@@ -201,7 +201,9 @@ static Value n_len(VM* vm, int argc, Value* a) {
 static Value make_range(VM* vm, int64_t start, int64_t end, bool inclusive) {
     int64_t step = start <= end ? 1 : -1;
     if (inclusive) end += step;
-    return obj_val(range_new(vm, start, end, step));
+    ObjRange* r = range_new(vm, int_val(start), int_val(end), int_val(step));
+    r->inclusive = inclusive;
+    return obj_val(r);
 }
 
 static Value n_range_to(VM* vm, int argc, Value* a) { return make_range(vm, 0, a[0].as.i, false); }
@@ -209,9 +211,14 @@ static Value n_range(VM* vm, int argc, Value* a) { return make_range(vm, a[0].as
 static Value n_range_to_incl(VM* vm, int argc, Value* a) { return make_range(vm, 0, a[0].as.i, true); }
 static Value n_range_incl(VM* vm, int argc, Value* a) { return make_range(vm, a[0].as.i, a[1].as.i, true); }
 
+/* range(start, end, step) with numbers: all ints give an int range, any float makes it a float range */
 static Value n_range_step(VM* vm, int argc, Value* a) {
-    if (a[2].as.i == 0) rt_error(vm, 0, "range step cannot be 0");
-    return obj_val(range_new(vm, a[0].as.i, a[1].as.i, a[2].as.i));
+    double step = num_as_double(a[2]);
+    if (step == 0) rt_error(vm, 0, "range step cannot be 0");
+    for (int i = 0; i < 3; i++)
+        if (a[i].kind == VAL_FLOAT && !isfinite(a[i].as.f))
+            rt_error(vm, 0, "range start, end and step must be finite");
+    return obj_val(range_new(vm, a[0], a[1], a[2]));
 }
 
 /* ------------------------------------------------------------ conversions */
@@ -1033,9 +1040,9 @@ void builtins_register(VM* vm) {
     def(vm, "...", "(int start, int end) -> range", n_range);
     def(vm, "...=", "(int end) -> range", n_range_to_incl);
     def(vm, "...=", "(int start, int end) -> range", n_range_incl);
-    def(vm, "range", "(int start, int end, int step) -> range", n_range_step);
+    def(vm, "range", "(number start, number end, number step) -> range", n_range_step);
 
-    /* printing & input live in the `io` module (src/mod_io.c) */
+    /* printing & input live in the `io` module (src/modules/io.c) */
 
     /* conversions & reflection */
     def(vm, "str", "(any value) -> string", n_str);

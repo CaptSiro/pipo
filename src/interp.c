@@ -76,6 +76,20 @@ void vm_register_ic(VM* vm, InlineCache* ic) {
     vm->caches[vm->ncaches++] = ic;
 }
 
+/*
+ * The C bodies of a library module's `native function` declarations:
+ *
+ *     static const NativeImpl GEOMETRY[] = {{"dist", geo_dist}, {NULL, NULL}};
+ *     vm_register_native_impls(vm, "geometry", GEOMETRY);   // lib/geometry.pp
+ *     vm_register_native_impls(vm, "os:fs", FS);            // lib/os/fs.pp
+ */
+void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impls) {
+    vm->native_parts = pp_realloc(vm->native_parts, sizeof(NativePart) * (size_t)(vm->nnative_parts + 1));
+    vm->native_parts[vm->nnative_parts].module = module;
+    vm->native_parts[vm->nnative_parts].impls = impls;
+    vm->nnative_parts++;
+}
+
 void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init) {
     vm->native_modules = pp_realloc(vm->native_modules, sizeof(NativeModule) * (size_t)(vm->nnative_modules + 1));
     vm->native_modules[vm->nnative_modules].name = name;
@@ -247,6 +261,7 @@ static Signature* callable_sig(Obj* o) {
 static ObjEnv* callable_env(VM* vm, Obj* o) {
     switch (o->kind) {
         case OBJ_FUNCTION: return ((ObjFunction*)o)->closure;
+        case OBJ_NATIVE: return ((ObjNative*)o)->env ? ((ObjNative*)o)->env : vm->builtins;
         case OBJ_VARIANT_CTOR: return ((ObjVariantCtor*)o)->en->env;
         default: return vm->builtins;
     }
@@ -343,7 +358,8 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOver
         hit = ic->sets[k] == (Obj*)sets[k] && ic->counts[k] == (sets[k] ? sets[k]->count : 0);
     if (hit) {
         Obj* t = ic->target;
-        if (t->kind == OBJ_NATIVE) out->count = 0;
+        /* builtin natives need no bindings; .pp-declared ones check their return type with them */
+        if (t->kind == OBJ_NATIVE && !((ObjNative*)t)->env) out->count = 0;
         else score_candidate(vm, t, argc, args, out);
         return t;
     }
@@ -441,6 +457,52 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
     return adopt_callback_types(vm, t, v, env, b, name);
 }
 
+/* the declared return type of sig applied to result (types resolved in env) */
+static Value check_return(VM* vm, Signature* sig, Value result, ObjEnv* env, Bindings* b) {
+    if (!sig->ret) return result;
+    if (sig->ret->kind == TY_PRIM && sig->ret->prim == PRIM_VOID) {
+        if (result.kind != VAL_VOID)
+            rt_error(vm, 0, "function '%s' is declared '-> void' but returned a %s", sig->name->chars, value_type_name(result));
+        return result;
+    }
+    if (result.kind == VAL_VOID) {
+        StrBuf sb;
+        sb_init(&sb);
+        type_to_string(sig->ret, &sb);
+        rt_error(vm, 0, "function '%s' must return a value of type %s", sig->name->chars, sb.data);
+    }
+    char what[160];
+    snprintf(what, sizeof what, "return value of '%s'", sig->name->chars);
+    return coerce_to(vm, sig->ret, result, env, b, false, what, 0, NULL);
+}
+
+/*
+ * A `native function` declared in a .pp module: the C body gets the arguments
+ * like any native, except that ints passed to float parameters arrive as
+ * floats, and its result is checked against the declared return type.
+ */
+static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, Bindings* b) {
+    Signature* sig = nf->sig;
+    Value small[8];
+    Value* av = args;
+    bool promote = false;
+    for (int i = 0; i < sig->nparams && i < argc && !promote; i++) {
+        Type* pt = sig->params[i].type;
+        promote = pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && args[i].kind == VAL_INT;
+    }
+    if (promote) {
+        av = argc <= 8 ? small : pp_malloc(sizeof(Value) * (size_t)argc);
+        for (int i = 0; i < argc; i++) {
+            av[i] = args[i];
+            Type* pt = i < sig->nparams ? sig->params[i].type : NULL;
+            if (pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && av[i].kind == VAL_INT) av[i] = float_val((double)av[i].as.i);
+        }
+    }
+    Value r = nf->fn(vm, argc, av);
+    if (av != args && av != small) free(av);
+    return check_return(vm, sig, r, nf->env, b);
+}
+
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
     Signature* sig = fn->sig;
     if (!fn->body) {
@@ -468,22 +530,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
     vm->ret = void_val();
     if (st == EX_BREAK || st == EX_CONTINUE)
         rt_error(vm, 0, "'%s' used outside of a loop", st == EX_BREAK ? "break" : "continue");
-    if (sig->ret) {
-        if (sig->ret->kind == TY_PRIM && sig->ret->prim == PRIM_VOID) {
-            if (result.kind != VAL_VOID)
-                rt_error(vm, 0, "function '%s' is declared '-> void' but returned a %s", sig->name->chars, value_type_name(result));
-        } else {
-            if (result.kind == VAL_VOID) {
-                StrBuf sb;
-                sb_init(&sb);
-                type_to_string(sig->ret, &sb);
-                rt_error(vm, 0, "function '%s' must return a value of type %s", sig->name->chars, sb.data);
-            }
-            char what[160];
-            snprintf(what, sizeof what, "return value of '%s'", sig->name->chars);
-            result = coerce_to(vm, sig->ret, result, fn->closure, b, false, what, 0, NULL);
-        }
-    }
+    result = check_return(vm, sig, result, fn->closure, b);
     pop_env(vm);
     vm->fp--;
     vm->cur_file = saved_file;
@@ -498,7 +545,7 @@ static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int
             push_frame(vm, nf->sig->name->chars, line);
             int saved_line = vm->cur_line;
             if (line > 0) vm->cur_line = line;
-            Value r = nf->fn(vm, argc, args);
+            Value r = nf->env ? call_declared_native(vm, nf, argc, args, b) : nf->fn(vm, argc, args);
             vm->cur_line = saved_line;
             vm->fp--;
             return r;
@@ -589,6 +636,14 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
             return obj_val(v->singleton);
         }
         rt_error(vm, line, "enum '%s' has no variant '%s'", en->name->chars, name->chars);
+    }
+    if (IS_KIND(obj, OBJ_RANGE)) {
+        /* read-only view of a range as the std type Range { number start, number end, number step } */
+        ObjRange* r = AS_RANGE(obj);
+        if (str_equals(name, "start")) return r->start;
+        if (str_equals(name, "end")) return r->end;
+        if (str_equals(name, "step")) return r->step;
+        rt_error(vm, line, "range has no field '%s' (it has start, end and step)", name->chars);
     }
     rt_error(vm, line, "cannot access field '%s' on a value of type %s", name->chars, value_type_name(obj));
 }
@@ -1001,8 +1056,36 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
  * fills that same object in, so everything that captured it (an impl, a
  * variable, a call site cache) gets the body.
  */
+/* native function f(...): bind the declaration to the C body its module registered */
+static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
+    Signature* sig = n->as.func.sig;
+    ObjString* impl = n->as.func.native;
+    ObjModule* m = vm->cur_module;
+    if (!m || !m->natives) {
+        rt_error(vm, n->line,
+                 "native function '%s' needs a C implementation, but %s has none registered\n"
+                 "  (native functions are declared in library modules whose C half calls vm_register_native_impls)",
+                 sig->name->chars, m ? "this module" : "this file");
+    }
+    NativeFn fn = NULL;
+    for (const NativeImpl* it = m->natives; it->name && !fn; it++)
+        if (strcmp(it->name, impl->chars) == 0) fn = it->fn;
+    if (!fn) rt_error(vm, n->line, "module '%s' has no native implementation named '%s'", m->name->chars, impl->chars);
+    ObjNative* nf = native_new(vm, sig, fn);
+    nf->env = env;
+    int base = vm->sp;
+    vm_push(vm, obj_val(nf));
+    env_add_function(vm, env, sig->name, (Obj*)nf);
+    if (n->as.func.global) global_add(vm, sig->name, (Obj*)nf);
+    vm->sp = base;
+}
+
 static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
+    if (n->as.func.native) {
+        exec_native_decl(vm, n, env);
+        return;
+    }
     if (n->as.func.decl) {
         Entry* e = table_find(&env->vars, sig->name);
         if (e && IS_KIND(e->value, OBJ_OVERLOAD)) {
@@ -1631,10 +1714,18 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
     }
     if (IS_KIND(it, OBJ_RANGE)) {
         ObjRange* r = AS_RANGE(it);
-        int64_t idx = 0;
-        for (int64_t i = r->start; r->step > 0 ? i < r->end : i > r->end; i += r->step, idx++) {
-            st = run_iteration(vm, n, env, int_val(idx), int_val(i), flags);
-            HANDLE_STATUS()
+        if (range_is_float(r)) {
+            int64_t len = range_length(r);
+            for (int64_t idx = 0; idx < len; idx++) {
+                st = run_iteration(vm, n, env, int_val(idx), range_at(r, idx), flags);
+                HANDLE_STATUS()
+            }
+        } else {
+            int64_t start = r->start.as.i, end = r->end.as.i, step = r->step.as.i, idx = 0;
+            for (int64_t i = start; step > 0 ? i < end : i > end; i += step, idx++) {
+                st = run_iteration(vm, n, env, int_val(idx), int_val(i), flags);
+                HANDLE_STATUS()
+            }
         }
     } else if (IS_KIND(it, OBJ_ARRAY)) {
         ObjArray* a = AS_ARRAY(it);
@@ -1805,6 +1896,17 @@ static void exec_export(VM* vm, Node* n) {
  * import name     - native module `name`, or name.pp in a library directory
  * import "./path" - a file relative to the importing file (.pp is optional)
  */
+/* the C bodies registered for library module `path` ("os/fs" is os:fs), or NULL */
+static const NativeImpl* native_impls_for(VM* vm, const char* path) {
+    for (int i = 0; i < vm->nnative_parts; i++) {
+        const char* a = vm->native_parts[i].module;
+        const char* b = path;
+        while (*a && *b && (*a == *b || (*a == ':' && (*b == '/' || *b == '\\')))) a++, b++;
+        if (!*a && !*b) return vm->native_parts[i].impls;
+    }
+    return NULL;
+}
+
 /* required = false: returns NULL instead of failing when no such module exists */
 static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int line, bool required) {
     if (!is_file) {
@@ -1894,6 +1996,7 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
     char* name = pp_strndup(base, (size_t)blen);
     ObjModule* m = module_new(vm, name, abs, vm->builtins);
     free(name);
+    if (!is_file) m->natives = native_impls_for(vm, path);
     table_set(&vm->modules, key, obj_val(m)); /* cached before running: cyclic imports see a partial module */
     run_program(vm, program, m, m->env, abs, NULL);
     return m;
@@ -2007,7 +2110,7 @@ VM* vm_new(int argc, char** argv) {
         const char* op;
         double prec;
     } precs[] = {
-        {"||", 10}, {"&&", 20}, {"==", 30}, {"!=", 30}, {"<", 40}, {">", 40}, {"<=", 40}, {">=", 40},
+        {"||", 10}, {"&&", 20}, {"==", 30}, {"!=", 30}, {"in", 35}, {"<", 40}, {">", 40}, {"<=", 40}, {">=", 40},
         {"...", 50}, {"...=", 50}, {"+", 60}, {"-", 60}, {"*", 70}, {"/", 70}, {"%", 70}, {"**", 80},
         {NULL, 0},
     };
@@ -2018,6 +2121,7 @@ VM* vm_new(int argc, char** argv) {
     mod_io_register(vm);
     mod_os_register(vm);
     mod_pp_register(vm);
+    mod_std_register(vm);
 
     jmp_buf jb;
     vm->err_jmp = &jb;

@@ -20,7 +20,7 @@ function is_odd(int n) -> bool {
     if n == 0 { return false }
     return is_even(n - 1)
 }
-io:print(is_even(10), is_odd(10))
+io:print_nl(is_even(10), is_odd(10))
 
 // an impl checked before the definition is written: the declaration counts
 interface Named {
@@ -31,7 +31,7 @@ function name(Dog) -> string
 impl Named for Dog
 function name(Dog d) -> string { return "dog " + d:called }
 function greet(Named n) -> string { return "hi " + n.name() }
-io:print(greet(Dog{ called: "Rex" }))
+io:print_nl(greet(Dog{ called: "Rex" }))
 
 // a declared function can be passed around before it is defined;
 // the value gets the body once the definition has run
@@ -39,7 +39,7 @@ type Scale = int -> int
 function twice(int) -> int
 const Scale f = twice
 function twice(int x) -> int { return x * 2 }
-io:print(f(21))
+io:print_nl(f(21))
 
 // inside a function body too, names of the parameters may differ
 function outer(int n) -> int {
@@ -51,4 +51,4 @@ function outer(int n) -> int {
     }
     return run(n)
 }
-io:print(outer(4))
+io:print_nl(outer(4))

@@ -8,14 +8,14 @@ function to_int_custom(float f) -> int {
     return int(f)
 }
 const ToInt using_function = to_int_custom
-io:print(cb(3.7), using_builtin(2.5), using_function(-1.5))
+io:print_nl(cb(3.7), using_builtin(2.5), using_function(-1.5))
 
 // a lambda takes the parameter and return types of its callback type,
 // so cb behaves like (float f) -> int: an int argument is widened to float
-io:print(cb(2))
+io:print_nl(cb(2))
 
 // calling: cb(x), or cb.call(x)
-io:print(cb.call(9.99), call(using_function, 1.5))
+io:print_nl(cb.call(9.99), call(using_function, 1.5))
 
 type Pair = (int, int) -> int
 const Pair add = (a, b) -> a + b
@@ -27,14 +27,14 @@ const Pair early = (a, b) -> {
     if a > b { return a }
     b
 }
-io:print(add(2, 3), mul(4, 5), early(7, 1), early(1, 7))
+io:print_nl(add(2, 3), mul(4, 5), early(7, 1), early(1, 7))
 
 type Thunk = () -> string
 const Thunk hello = () -> "hello"
-io:print(hello())
+io:print_nl(hello())
 
 type Logger = (...) -> void
-const Logger log = io:print
+const Logger log = io:print_nl
 log("logged", 1, 2)
 
 // generic callback types
@@ -44,11 +44,11 @@ log("logged", 1, 2)
         consumer(a)
     }
 }
-[1, 2, 3].for_each(io:print)
-[1, 2, 3].for_each(x -> io:print(x * 10))
-[1, 2, 3].for_each((x) -> io:print(x + 100))
+[1, 2, 3].for_each(io:print_nl)
+[1, 2, 3].for_each(x -> io:print_nl(x * 10))
+[1, 2, 3].for_each((x) -> io:print_nl(x + 100))
 [1, 2, 3].for_each((x) -> {
-    io:print("block", x)
+    io:print_nl("block", x)
 })
 
 type Mapper<A, B> = A -> B
@@ -59,12 +59,12 @@ type Mapper<A, B> = A -> B
     }
     return out
 }
-io:print(map_all([1, 2], x -> str(x) + "!"))
+io:print_nl(map_all([1, 2], x -> str(x) + "!"))
 
 // overloads are chosen by the shape of the callback
 function kind(ToInt f) -> string { return "ToInt" }
 function kind(Thunk f) -> string { return "Thunk" }
-io:print(kind(() -> "x"), kind(to_int_custom), kind(x -> 1))
+io:print_nl(kind(() -> "x"), kind(to_int_custom), kind(x -> 1))
 
 // closures capture variables
 let total = 0
@@ -72,17 +72,17 @@ type Step = int -> void
 const Step bump = n -> { total += n }
 bump(5)
 bump(2)
-io:print(total)
+io:print_nl(total)
 
 // callbacks in records, built-ins taking functions
 type Button = { string label, Thunk on_click }
 const Button b = { label: "ok", on_click: () -> "clicked " + "ok" }
-io:print(b:on_click(), [3, 1, 2].sort((a, b) -> a < b), [1, 2, 3].map(x -> x * x))
-io:print(type_of(cb), cb == cb)
+io:print_nl(b:on_click(), [3, 1, 2].sort((a, b) -> a < b), [1, 2, 3].map(x -> x * x))
+io:print_nl(type_of(cb), cb == cb)
 
 // `->` in a match arm still separates the pattern from the body
 const n = 3
-io:print(match n {
+io:print_nl(match n {
     x if x > 2 -> "big"
     x -> "small"
 })

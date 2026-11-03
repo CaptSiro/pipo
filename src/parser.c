@@ -12,6 +12,7 @@ typedef struct {
     int depth; /* nesting inside (), [] and {} literals: newlines do not end expressions there */
     int block_depth; /* 0 = top level of the file */
     bool no_lambda;  /* parsing a match pattern / guard, where `x -> ...` starts the arm body */
+    bool in_native;  /* parsing the declaration after `native` (it must not have a body) */
 } Parser;
 
 /* ---------------------------------------------------------------- helpers */
@@ -95,6 +96,12 @@ static ObjString* intern_tok(Parser* p, Token* t) {
 static bool is_terminator(Token* t) {
     return t->kind == T_SEMI || t->kind == T_RBRACE || t->kind == T_EOF || t->nl_before;
 }
+
+/*
+ * A token that can name a function: an identifier, an operator, or the
+ * keyword `in`, which is also an infix operator (`x in xs` calls in(x, xs)).
+ */
+static bool is_fn_name(TokKind k) { return k == T_IDENT || k == T_OP || k == T_IN; }
 
 /* consumes a prefix of an operator token, e.g. one '>' out of '>>' */
 static bool eat_op_prefix(Parser* p, const char* s) {
@@ -476,7 +483,7 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     sig->line = kw->line;
     Token* nt = peek(p);
     bool named = false;
-    if (nt->kind == T_IDENT || nt->kind == T_OP) {
+    if (is_fn_name(nt->kind)) {
         advance(p);
         sig->name = intern_tok(p, nt);
         named = true;
@@ -486,6 +493,8 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     Token* unnamed = NULL;
     parse_params(p, sig, statement && named ? &unnamed : NULL);
     if (accept(p, T_ARROW)) sig->ret = parse_type(p);
+    if (p->in_native && check(p, T_LBRACE))
+        perr(p, peek(p), "native function '%s' cannot have a body: its implementation is written in C", sig->name->chars);
     if (statement && named && !check(p, T_LBRACE)) {
         /*
          * function a(int) -> float: a declaration, written like an interface
@@ -788,7 +797,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
             /* attribute access: object:field, module:symbol, Enum:VARIANT */
             advance(p);
             Token* nm = peek(p);
-            if (nm->kind != T_IDENT && nm->kind != T_OP) perr(p, nm, "expected an attribute name after ':' but found %s", tok_desc(nm));
+            if (!is_fn_name(nm->kind)) perr(p, nm, "expected an attribute name after ':' but found %s", tok_desc(nm));
             advance(p);
             Node* f = new_node(N_FIELD, nm->line);
             f->as.field.obj = e;
@@ -800,14 +809,14 @@ static Node* parse_postfix(Parser* p, Node* e) {
             /* dot syntax: a.f(b) == f(a, b), a.mod:f(b) == mod:f(a, b) */
             advance(p);
             Token* nm = peek(p);
-            if (nm->kind != T_IDENT && nm->kind != T_OP) perr(p, nm, "expected a function name after '.' but found %s", tok_desc(nm));
+            if (!is_fn_name(nm->kind)) perr(p, nm, "expected a function name after '.' but found %s", tok_desc(nm));
             advance(p);
             Node* callee = new_node(N_IDENT, nm->line);
             callee->as.str = intern_tok(p, nm);
             while (check(p, T_COLON) && !peek(p)->nl_before) {
                 advance(p);
                 Token* part = peek(p);
-                if (part->kind != T_IDENT && part->kind != T_OP)
+                if (!is_fn_name(part->kind))
                     perr(p, part, "expected an attribute name after ':' but found %s", tok_desc(part));
                 advance(p);
                 Node* f = new_node(N_FIELD, part->line);
@@ -850,17 +859,39 @@ static Node* parse_unary(Parser* p) {
         nl_push(&c->as.call.args, parse_unary(p));
         return c;
     }
+    if (t->kind == T_IN) {
+        /* `in` is a keyword but also a function: in(3, 0...3), or a value: any(xs, in) */
+        Token* nx = peek_at(p, 1);
+        bool call = nx->kind == T_LPAREN && !nx->space_before;
+        bool value = nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
+                     nx->kind == T_EOF || nx->kind == T_SEMI || nx->nl_before;
+        if (call || value) {
+            advance(p);
+            Node* id = new_node(N_IDENT, t->line);
+            id->as.str = intern_tok(p, t);
+            if (value) return parse_postfix(p, id);
+            Node* c = new_call(p, id, t->line);
+            parse_args(p, &c->as.call.args);
+            return parse_postfix(p, c);
+        }
+        perr(p, t, "'in' needs a left operand (x in xs) or call parentheses with no space (in(x, xs))");
+    }
     return parse_postfix(p, parse_primary(p));
+}
+
+/* an infix operator continues the expression: any operator token, or `in` */
+static bool at_infix(Parser* p) {
+    Token* t = peek(p);
+    return (t->kind == T_OP || t->kind == T_IN) && (!t->nl_before || p->depth > 0);
 }
 
 static Node* parse_expression(Parser* p) {
     Node* first = parse_unary(p);
-    Token* t = peek(p);
-    if (!(t->kind == T_OP && (!t->nl_before || p->depth > 0))) return first;
+    if (!at_infix(p)) return first;
     Node* n = new_node(N_CHAIN, first->line);
     nl_push(&n->as.chain.operands, first);
     int cap = 0;
-    while (peek(p)->kind == T_OP && (!peek(p)->nl_before || p->depth > 0)) {
+    while (at_infix(p)) {
         Token* op = advance(p);
         GROW(n->as.chain.ops, n->as.chain.nops, cap);
         n->as.chain.ops[n->as.chain.nops++] = intern_tok(p, op);
@@ -903,7 +934,7 @@ static Node* unwrap_export(Node* s) {
 static void check_declarations(Parser* p, NodeList* stmts) {
     for (int i = 0; i < stmts->count; i++) {
         Node* d = unwrap_export(stmts->items[i]);
-        if (d->kind != S_FUNCDECL || d->as.func.body) continue;
+        if (d->kind != S_FUNCDECL || d->as.func.body || d->as.func.native) continue; /* native: the body is in C */
         StrBuf want;
         sb_init(&want);
         sig_types_to_string(d->as.func.sig, &want);
@@ -1041,7 +1072,7 @@ static Node* parse_import(Parser* p) {
             int cap = 0;
             while (!check(p, T_RBRACE)) {
                 Token* nm = peek(p);
-                if (nm->kind != T_IDENT && nm->kind != T_OP) perr(p, nm, "expected a name to import but found %s", tok_desc(nm));
+                if (!is_fn_name(nm->kind)) perr(p, nm, "expected a name to import but found %s", tok_desc(nm));
                 advance(p);
                 GROW(n->as.import.names, n->as.import.nnames, cap);
                 n->as.import.names[n->as.import.nnames++] = intern_tok(p, nm);
@@ -1056,6 +1087,7 @@ static Node* parse_import(Parser* p) {
 }
 
 static bool is_generic_prefix(Parser* p);
+static bool at_native(Parser* p);
 
 /* after `export`: a declaration such as `type A = int` or `function f(...)` */
 static bool at_exported_decl(Parser* p) {
@@ -1069,6 +1101,7 @@ static bool at_exported_decl(Parser* p) {
         case T_OP: return is_generic_prefix(p);
         case T_IDENT: {
             Token* a = peek_at(p, 1);
+            if (at_native(p)) return true;
             return (tok_is(t, T_IDENT, "type") || tok_is(t, T_IDENT, "interface")) && a->kind == T_IDENT && !a->nl_before;
         }
         default: return false;
@@ -1119,13 +1152,13 @@ static Node* parse_export(Parser* p) {
     do {
         if (braces && check(p, T_RBRACE)) break;
         Token* nm = peek(p);
-        if (nm->kind != T_IDENT && nm->kind != T_OP) perr(p, nm, "expected a name to export but found %s", tok_desc(nm));
+        if (!is_fn_name(nm->kind)) perr(p, nm, "expected a name to export but found %s", tok_desc(nm));
         advance(p);
         ObjString* name = intern_tok(p, nm);
         ObjString* alias = name;
         if (accept(p, T_ARROW)) {
             Token* a = peek(p);
-            if (a->kind != T_IDENT && a->kind != T_OP) perr(p, a, "expected an export alias but found %s", tok_desc(a));
+            if (!is_fn_name(a->kind)) perr(p, a, "expected an export alias but found %s", tok_desc(a));
             advance(p);
             alias = intern_tok(p, a);
         }
@@ -1267,7 +1300,7 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
         Token* kw = expect(p, T_FUNCTION, "'function' (an interface lists the functions a type must have)");
         sig->line = kw->line;
         Token* fname = peek(p);
-        if (fname->kind != T_IDENT && fname->kind != T_OP) perr(p, fname, "expected a function name but found %s", tok_desc(fname));
+        if (!is_fn_name(fname->kind)) perr(p, fname, "expected a function name but found %s", tok_desc(fname));
         advance(p);
         sig->name = intern_tok(p, fname);
         expect(p, T_LPAREN, "'('");
@@ -1320,8 +1353,48 @@ static bool at_impl(Parser* p) {
     }
 }
 
+/* `native` is contextual: native function f(...), native "impl" function f(...), native <T>function f(...) */
+static bool at_native(Parser* p) {
+    Token* t = peek(p);
+    if (!tok_is(t, T_IDENT, "native")) return false;
+    Token* a = peek_at(p, 1);
+    if (a->nl_before) return false;
+    return a->kind == T_FUNCTION || a->kind == T_STRING || (a->kind == T_OP && a->start[0] == '<');
+}
+
+/*
+ * native function sqrt(float) -> float
+ * native "vec_add" function +(Vec, Vec) -> Vec
+ *
+ * A function whose body is written in C. The signature (types are resolved in
+ * this file, so they may name its types) is declared here; the implementation
+ * comes from the table the module registered with vm_register_native_impls,
+ * looked up by the function's name or by the string after `native`.
+ */
+static Node* parse_native(Parser* p) {
+    Token* kw = advance(p);
+    if (p->block_depth > 0) perr(p, kw, "'native' is only allowed at the top level of a file");
+    ObjString* impl = NULL;
+    if (check(p, T_STRING)) {
+        Token* s = advance(p);
+        if (s->slen == 0) perr(p, s, "empty native implementation name");
+        impl = str_intern(p->vm, s->sval, s->slen);
+    }
+    ObjString** gens = NULL;
+    int ngen = 0;
+    if (is_generic_prefix(p)) parse_generic_params(p, &gens, NULL, &ngen, false);
+    if (!check(p, T_FUNCTION) || !is_fn_name(peek_at(p, 1)->kind))
+        perr(p, peek(p), "expected a named function declaration after 'native' but found %s", tok_desc(peek(p)));
+    p->in_native = true;
+    Node* fn = parse_function(p, gens, ngen, true);
+    p->in_native = false;
+    fn->as.func.native = impl ? impl : fn->as.func.sig->name;
+    return fn;
+}
+
 static Node* parse_statement(Parser* p) {
     Token* t = peek(p);
+    if (at_native(p)) return parse_native(p);
     Node* n = NULL;
     switch (t->kind) {
         case T_IMPORT: n = parse_import(p); break;
@@ -1331,12 +1404,14 @@ static Node* parse_statement(Parser* p) {
             advance(p);
             if (p->block_depth > 0) perr(p, t, "'global' is only allowed at the top level of a file");
             Node* fn;
-            if (is_generic_prefix(p)) {
+            if (at_native(p)) {
+                fn = parse_native(p); /* global native function f(...) */
+            } else if (is_generic_prefix(p)) {
                 ObjString** gens = NULL;
                 int ngen = 0;
                 parse_generic_params(p, &gens, NULL, &ngen, false);
                 fn = parse_function(p, gens, ngen, true);
-            } else if (check(p, T_FUNCTION) && (peek_at(p, 1)->kind == T_IDENT || peek_at(p, 1)->kind == T_OP)) {
+            } else if (check(p, T_FUNCTION) && is_fn_name(peek_at(p, 1)->kind)) {
                 fn = parse_function(p, NULL, 0, true);
             } else {
                 perr(p, peek(p), "expected a named function declaration after 'global' but found %s", tok_desc(peek(p)));
@@ -1348,7 +1423,7 @@ static Node* parse_statement(Parser* p) {
         case T_LET: n = parse_let(p); break;
         case T_FUNCTION: {
             TokKind k = peek_at(p, 1)->kind;
-            if (k == T_IDENT || k == T_OP) return parse_function(p, NULL, 0, true);
+            if (is_fn_name(k)) return parse_function(p, NULL, 0, true);
             break;
         }
         case T_OP:
@@ -1414,13 +1489,13 @@ static Node* parse_statement(Parser* p) {
                 n->as.impl.target = parse_type(p);
                 break;
             }
-            if (tok_is(t, T_IDENT, "precedence") && (a->kind == T_OP || a->kind == T_IDENT) && !a->nl_before &&
+            if (tok_is(t, T_IDENT, "precedence") && is_fn_name(a->kind) && !a->nl_before &&
                 (tok_is(b, T_IDENT, "over") || tok_is(b, T_IDENT, "under") || tok_is(b, T_IDENT, "as"))) {
                 advance(p);
                 advance(p);
                 advance(p);
                 Token* c = advance(p);
-                if (c->kind != T_OP && c->kind != T_IDENT) perr(p, c, "expected an operator after '%.*s'", b->len, b->start);
+                if (!is_fn_name(c->kind)) perr(p, c, "expected an operator after '%.*s'", b->len, b->start);
                 n = new_node(S_PRECEDENCE, t->line);
                 n->as.prec.op = intern_tok(p, a);
                 n->as.prec.other = intern_tok(p, c);

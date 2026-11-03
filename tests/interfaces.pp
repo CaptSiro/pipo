@@ -22,7 +22,7 @@ function show(Str s) -> string {
 }
 
 const Box b = { volume: 2.5 }
-io:print(show(b))
+io:print_nl(show(b))
 
 // enums and types from other modules can implement interfaces too
 function str(Shape s) -> string {
@@ -37,12 +37,12 @@ function str(shapes:Rect r) -> string {
     return "rect " + str(r.area())
 }
 impl Str for shapes:Rect
-io:print(show(Shape:SQUARE), show(shapes:rect(2, 2)))
+io:print_nl(show(Shape:SQUARE), show(shapes:rect(2, 2)))
 
 // an interface parameter takes part in overloading
 function describe(Str s) -> string { return "printable " + s.str() }
 function describe(x) -> string { return "something else" }
-io:print(describe(b), describe(42))
+io:print_nl(describe(b), describe(42))
 
 // generic interfaces; requirements may name parameters and use operators
 <T>interface Container {
@@ -62,7 +62,7 @@ function total(Container<int> c) -> int {
     }
     return sum
 }
-io:print(total(IntList{ items: [1, 2, 3] }))
+io:print_nl(total(IntList{ items: [1, 2, 3] }))
 
 interface Equals {
     function ==(Equals, Equals) -> bool
@@ -70,7 +70,7 @@ interface Equals {
 function ==(Box a, Box b) -> bool { return a:volume == b:volume }
 impl Equals for Box
 function same(Equals a, Equals b) -> bool { return a == b }
-io:print(same(b, Box{ volume: 2.5 }), same(b, Box{ volume: 1 }))
+io:print_nl(same(b, Box{ volume: 2.5 }), same(b, Box{ volume: 1 }))
 
 // an interface is a value too
-io:print(Str, type_of(Str))
+io:print_nl(Str, type_of(Str))

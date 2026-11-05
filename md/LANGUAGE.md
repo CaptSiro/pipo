@@ -293,7 +293,9 @@ for x in range(0, 1, 0.25) { }    // 0.0 0.25 0.5 0.75
 `a > b`. `...n` starts at 0. `...` and `...=` take ints. `range(start, end, step)`
 takes numbers: all ints give an int range, and any float makes all three
 floats. The k-th element of a float range is `start + k*step`, so rounding
-errors don't add up across the steps. `r:start`, `r:end` and `r:step` read a range's fields.
+errors don't add up across the steps. `r:start`, `r:end`, `r:step` and `r:inclusive` read a range's fields. A `...=`
+range stores its end one step past the last element, so `(0...=5):end` is 6 and
+`(0...=5):inclusive` is true.
 
 `x in y` calls the function `in(x, y)`, which can also be called directly (`in(3, 0...3)`) or passed as a value (`const check = in`). `lib/std.pp` defines it for arrays
 (`2 in [1, 2]`), strings (`"ell" in "hello"`) and ranges (`3 in 0...5`). For

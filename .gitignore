@@ -1,2 +1,12 @@
+# CMake builds (build/ from pp.ps1, cmake-build-*/ from CLion)
 build/
+cmake-build-*/
+
+# IDE settings
 .idea/
+*.iml
+
+# editor/pp-intellij: Gradle caches and the IntelliJ Platform sandbox
+# (its build/ output is covered above; gradle/wrapper/gradle-wrapper.jar is kept)
+.gradle/
+.intellijPlatform/

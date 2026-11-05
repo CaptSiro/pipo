@@ -43,16 +43,6 @@ static Value io_print_nl(VM* vm, int argc, Value* a) {
     return void_val();
 }
 
-static Value io_write(VM* vm, int argc, Value* a) {
-    StrBuf sb;
-    sb_init(&sb);
-    format_args(vm, &sb, argc, a);
-    fwrite(sb.data, 1, sb.len, stdout);
-    sb_free(&sb);
-
-    return void_val();
-}
-
 static Value io_eprint(VM* vm, int argc, Value* a) {
     StrBuf sb;
     sb_init(&sb);
@@ -80,7 +70,7 @@ static Value io_eprint_nl(VM* vm, int argc, Value* a) {
 
 static Value io_input(VM* vm, int argc, Value* a) {
     if (argc > 0) {
-        io_write(vm, argc, a);
+        io_print(vm, argc, a);
     }
 
     fflush(stdout);
@@ -150,7 +140,6 @@ static ObjModule* io_init(VM* vm) {
     def_const_str(vm, m->env, "nl", "\n");
     def_native(vm, m->env, "print", "(...)", io_print);
     def_native(vm, m->env, "print_nl", "(...)", io_print_nl);
-    def_native(vm, m->env, "write", "(...)", io_write);
     def_native(vm, m->env, "eprint", "(...)", io_eprint);
     def_native(vm, m->env, "eprint_nl", "(...)", io_eprint_nl);
     def_native(vm, m->env, "input", "(...) -> string", io_input);

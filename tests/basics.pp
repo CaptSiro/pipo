@@ -6,12 +6,12 @@ x += 2
 io:print_nl(x, -x, #"hello", #[1,2,3])
 const name
 io:print_nl(name, defined("name"), defined("nope"))
-for i in ...5 { io:write(i, "") }
+for i in ...5 { io:print(i, "") }
 io:print_nl()
-for let i in 10...=1 { io:write(i, "") }
+for let i in 10...=1 { io:print(i, "") }
 io:print_nl()
 let arr = [3, 1, 2]
-for i, v in arr { io:write(i, ":", v, " ") }
+for i, v in arr { io:print(i, ":", v, " ") }
 io:print_nl()
 io:print_nl(sort(arr), arr.reverse(), arr.map(function(v) { return v * 10 }))
 io:print_nl(reduce(arr, +, 0))

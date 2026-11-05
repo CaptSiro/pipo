@@ -70,7 +70,7 @@ static void def(VM* vm, const char* name, const char* sig, NativeFn fn) {
     def_native(vm, vm->builtins, name, sig, fn);
 }
 
-static double num(Value v) {
+static double math_num(Value v) {
     return v.kind == VAL_INT ? (double)v.as.i : v.as.f;
 }
 
@@ -99,7 +99,7 @@ static Value n_add(VM* vm, int argc, Value* a) {
         return int_val((int64_t)((uint64_t)a[0].as.i + (uint64_t)a[1].as.i));
     }
 
-    return float_val(num(a[0]) + num(a[1]));
+    return float_val(math_num(a[0]) + math_num(a[1]));
 }
 
 static Value n_sub(VM* vm, int argc, Value* a) {
@@ -107,7 +107,7 @@ static Value n_sub(VM* vm, int argc, Value* a) {
         return int_val((int64_t)((uint64_t)a[0].as.i - (uint64_t)a[1].as.i));
     }
 
-    return float_val(num(a[0]) - num(a[1]));
+    return float_val(math_num(a[0]) - math_num(a[1]));
 }
 
 static Value n_mul(VM* vm, int argc, Value* a) {
@@ -115,7 +115,7 @@ static Value n_mul(VM* vm, int argc, Value* a) {
         return int_val((int64_t)((uint64_t)a[0].as.i * (uint64_t)a[1].as.i));
     }
 
-    return float_val(num(a[0]) * num(a[1]));
+    return float_val(math_num(a[0]) * math_num(a[1]));
 }
 
 static Value n_div(VM* vm, int argc, Value* a) {
@@ -131,7 +131,7 @@ static Value n_div(VM* vm, int argc, Value* a) {
         return int_val(a[0].as.i / a[1].as.i);
     }
 
-    return float_val(num(a[0]) / num(a[1]));
+    return float_val(math_num(a[0]) / math_num(a[1]));
 }
 
 static Value n_mod(VM* vm, int argc, Value* a) {
@@ -153,7 +153,7 @@ static Value n_mod(VM* vm, int argc, Value* a) {
         return int_val(r);
     }
 
-    double x = num(a[0]), y = num(a[1]);
+    double x = math_num(a[0]), y = math_num(a[1]);
     double r = fmod(x, y);
     if (r != 0 && ((r < 0) != (y < 0))) {
         r += y;
@@ -178,7 +178,7 @@ static Value n_pow(VM* vm, int argc, Value* a) {
         return int_val((int64_t)result);
     }
 
-    return float_val(pow(num(a[0]), num(a[1])));
+    return float_val(pow(math_num(a[0]), math_num(a[1])));
 }
 
 static Value n_neg(VM* vm, int argc, Value* a) {
@@ -215,7 +215,7 @@ static int cmp_values(VM* vm, Value x, Value y) {
     }
 
     if ((x.kind == VAL_INT || x.kind == VAL_FLOAT) && (y.kind == VAL_INT || y.kind == VAL_FLOAT)) {
-        double p = num(x), q = num(y);
+        double p = math_num(x), q = math_num(y);
         return p < q ? -1 : p > q;
     }
 
@@ -1439,48 +1439,35 @@ static Value n_chr(VM* vm, int argc, Value* a) {
 
 /* ------------------------------------------------------------------- math */
 
-static Value n_abs(VM* vm, int argc, Value* a) {
-    if (a[0].kind == VAL_INT) {
-        return int_val(a[0].as.i < 0 ? -a[0].as.i : a[0].as.i);
-    }
-
-    return float_val(fabs(a[0].as.f));
-}
-
 static Value n_min(VM* vm, int argc, Value* a) {
-    return cmp_values(vm, a[1], a[0]) < 0 ? a[1] : a[0];
+    return cmp_values(vm, a[1], a[0]) < 0
+        ? a[1]
+        : a[0];
 }
 
 static Value n_max(VM* vm, int argc, Value* a) {
-    return cmp_values(vm, a[1], a[0]) > 0 ? a[1] : a[0];
+    return cmp_values(vm, a[1], a[0]) > 0
+        ? a[1]
+        : a[0];
 }
 
-static Value float_to_int(VM* vm, double d, const char* what) {
-    if (isnan(d) || isinf(d) || d > 9.2e18 || d < -9.2e18) {
-        rt_error(vm, 0, "%s: result does not fit in an int", what);
+// clamp(x, a, b)
+static Value n_clamp(VM* vm, int argc, Value* a) {
+    const Value x = a[0];
+    const Value start = a[1];
+    const Value end = a[2];
+
+    // x > end
+    if (cmp_values(vm, x, end) > 0) {
+        return end;
     }
 
-    return int_val((int64_t)d);
-}
+    // x < start
+    if (cmp_values(vm, x, start) < 0) {
+        return start;
+    }
 
-static Value n_floor(VM* vm, int argc, Value* a) {
-    return a[0].kind == VAL_INT ? a[0] : float_to_int(vm, floor(a[0].as.f), "floor");
-}
-
-static Value n_ceil(VM* vm, int argc, Value* a) {
-    return a[0].kind == VAL_INT ? a[0] : float_to_int(vm, ceil(a[0].as.f), "ceil");
-}
-
-static Value n_round(VM* vm, int argc, Value* a) {
-    return a[0].kind == VAL_INT ? a[0] : float_to_int(vm, round(a[0].as.f), "round");
-}
-
-static Value n_sqrt(VM* vm, int argc, Value* a) {
-    return float_val(sqrt(num(a[0])));
-}
-
-static Value n_powf(VM* vm, int argc, Value* a) {
-    return float_val(pow(num(a[0]), num(a[1])));
+    return x;
 }
 
 /* ------------------------------------------------------------------- misc */
@@ -1621,14 +1608,9 @@ void builtins_register(VM* vm) {
     def(vm, "chr", "(int code) -> string", n_chr);
 
     /* math */
-    def(vm, "abs", "(number x)", n_abs);
     def(vm, "min", "(any a, any b)", n_min);
     def(vm, "max", "(any a, any b)", n_max);
-    def(vm, "floor", "(number x) -> int", n_floor);
-    def(vm, "ceil", "(number x) -> int", n_ceil);
-    def(vm, "round", "(number x) -> int", n_round);
-    def(vm, "sqrt", "(number x) -> float", n_sqrt);
-    def(vm, "pow", "(number base, number exponent) -> float", n_powf);
+    def(vm, "clamp", "(number x, any a, any b)", n_clamp);
 
     /* misc */
     def(vm, "panic", "(any message)", n_panic);

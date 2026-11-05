@@ -1,0 +1,78 @@
+<templateSet group="PiPo">
+    <template name="fn" value="function $NAME$($PARAMS$) {&#10;    $END$&#10;}" description="function" toReformat="true" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="fnr" value="function $NAME$($PARAMS$) -&gt; $TYPE$ {&#10;    $END$&#10;}" description="function with a return type" toReformat="true" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="TYPE" expression="" defaultValue="&quot;void&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="gfn" value="&lt;$T$&gt;function $NAME$($PARAMS$) -&gt; $TYPE$ {&#10;    $END$&#10;}" description="generic function" toReformat="true" toShortenFQNames="false">
+        <variable name="T" expression="" defaultValue="&quot;T&quot;" alwaysStopAt="true"/>
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="TYPE" expression="" defaultValue="&quot;T&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="for" value="for $VAR$ in $ITER$ {&#10;    $END$&#10;}" description="for loop" toReformat="true" toShortenFQNames="false">
+        <variable name="VAR" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
+        <variable name="ITER" expression="" defaultValue="&quot;xs&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="fori" value="for $I$ in 0...$N$ {&#10;    $END$&#10;}" description="for loop over a range" toReformat="true" toShortenFQNames="false">
+        <variable name="I" expression="" defaultValue="&quot;i&quot;" alwaysStopAt="true"/>
+        <variable name="N" expression="" defaultValue="&quot;n&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="while" value="while $COND$ {&#10;    $END$&#10;}" description="while loop" toReformat="true" toShortenFQNames="false">
+        <variable name="COND" expression="" defaultValue="&quot;true&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="if" value="if $COND$ {&#10;    $END$&#10;}" description="if" toReformat="true" toShortenFQNames="false">
+        <variable name="COND" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="ife" value="if $COND$ {&#10;    $THEN$&#10;} else {&#10;    $END$&#10;}" description="if / else" toReformat="true" toShortenFQNames="false">
+        <variable name="COND" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="THEN" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="iflet" value="if let $PATTERN$ = $VALUE$ {&#10;    $END$&#10;}" description="if let some(x) = value" toReformat="true" toShortenFQNames="false">
+        <variable name="PATTERN" expression="" defaultValue="&quot;some(x)&quot;" alwaysStopAt="true"/>
+        <variable name="VALUE" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="match" value="match $VALUE$ {&#10;    $PATTERN$ -&gt; $END$,&#10;    _ -&gt; $DEFAULT$&#10;}" description="match" toReformat="true" toShortenFQNames="false">
+        <variable name="VALUE" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="PATTERN" expression="" defaultValue="&quot;some(x)&quot;" alwaysStopAt="true"/>
+        <variable name="DEFAULT" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="enum" value="enum $NAME$ {&#10;    $END$&#10;}" description="enum" toReformat="true" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="rec" value="type $NAME$ = { $FIELDS$ }" description="record type" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <variable name="FIELDS" expression="" defaultValue="&quot;string name&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="cb" value="type $NAME$ = ($PARAMS$) -&gt; $RET$" description="callback type" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Fn&quot;" alwaysStopAt="true"/>
+        <variable name="PARAMS" expression="" defaultValue="&quot;int&quot;" alwaysStopAt="true"/>
+        <variable name="RET" expression="" defaultValue="&quot;int&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="iface" value="interface $NAME$ {&#10;    function $FN$($NAME$) -&gt; $RET$$END$&#10;}" description="interface" toReformat="true" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <variable name="FN" expression="" defaultValue="&quot;str&quot;" alwaysStopAt="true"/>
+        <variable name="RET" expression="" defaultValue="&quot;string&quot;" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+    <template name="pr" value="io:print($END$)" description="io:print(...)" toReformat="false" toShortenFQNames="false">
+        <context><option name="PIPO" value="true"/></context>
+    </template>
+</templateSet>

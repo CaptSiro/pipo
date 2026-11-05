@@ -89,8 +89,29 @@ conversion is a runtime error.
 
 ## Math
 
-`abs`, `min`, `max`, `floor`, `ceil`, `round` (these three return `int`),
-`sqrt`, `pow`. Anything beyond this belongs in a future `math` package.
+`min`, `max` and `clamp` are internal. Everything else is in the `math`
+package (`lib/math.pp`, `src/modules/math.c`), used as `import math` and
+`math:sqrt(2)`:
+
+* constants `pi`, `e`, `sqrt2`
+* rounding: `floor`, `ceil`, `round`, `trunc` (all return `int`), `abs`, `sign`,
+  `fround` / `f16round` (nearest 32-bit / 16-bit float)
+* `sqrt`, `cbrt`, `pow`, `exp`, `expm1`, `log` (natural), `log1p`, `log2`, `log10`
+* `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2(y, x)` (radians) and the
+  hyperbolic `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`
+* `hypot(x, y)`, `hypot(x, y, z)`, `hypot(number[])`; `sum_precise(number[])`,
+  a sum rounded only once
+* `clz32`, `imul`: 32-bit int helpers, as in JavaScript
+* `random()`: a float in `[0, 1)`; `random_int(end)`, `random_int(start, end)`:
+  an int in `[0, end)` / `[start, end)`. Both use one global generator, seeded
+  differently on every run.
+* `seed(int) -> Random`: a generator of its own, giving the same numbers for
+  the same seed; `r.value()` (a float in `[0, 1)`), `r.interval(end)`,
+  `r.interval(start, end)`, `r.interval_float(end)`, `r.interval_float(start, end)`,
+  `r.item(array)`, `r.seed(int)` (start over), `copy(r)` (a second
+  generator that continues like `r`)
+
+Outside a function's domain the result is NaN or an infinity, as in C.
 
 ## Option / Error
 

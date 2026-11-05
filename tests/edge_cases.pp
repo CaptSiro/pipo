@@ -1,4 +1,5 @@
 import io
+import math -> { abs, floor, ceil, round, sqrt, pow }
 let x=-1
 io:print_nl(x, 3-1, 3 - -1, !true, !(1 == 2))
 match x { -1 -> io:print_nl("neg one"), _ -> io:print_nl("other") }
@@ -7,7 +8,7 @@ io:print_nl(nested())
 for i in ...10 {
     match i {
         3 -> { break }
-        _ -> { io:write(i, "") }
+        _ -> { io:print(i, "") }
     }
 }
 io:print_nl()
@@ -27,7 +28,7 @@ const r = [1, 2, 3, 4, 5, 6]
     .map(function(v) { return v * v })
 io:print_nl(r)
 io:print_nl(#(...10), #(1...=10), range(0, 10, 3))
-for c in range(10, 0, -3) { io:write(c, "") }
+for c in range(10, 0, -3) { io:print(c, "") }
 io:print_nl()
 function only_ints(int a) -> int { return a }
 io:print_nl(only_ints(3))

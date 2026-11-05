@@ -141,18 +141,19 @@ Printing and reading lives here, not in the global scope:
 
 ```
 import io
-io:print("hello", 42)        // like console.log / System.out.println
+io:print_nl("hello", 42)     // like console.log / System.out.println
 ```
 
 | function                 |                                                                        |
 |--------------------------|------------------------------------------------------------------------|
-| `print(...)`             | arguments separated by spaces, then a newline. Objects are pretty JSON |
-| `write(...)`             | the same without the newline                                           |
+| `print(...)`             | arguments separated by spaces, no newline. Objects are pretty JSON     |
+| `print_nl(...)`          | the same, then a newline                                               |
 | `eprint(...)`            | like print, to stderr                                                  |
+| `eprint_nl(...)`         | like print_nl, to stderr                                               |
 | `input(...) -> string`   | prints the prompt, reads one line                                      |
 | `read_file(path)`        | `success(text)` or `fail(message)`                                     |
 | `write_file(path, text)` | `success(bytes_written)` or `fail(message)`                            |
-| `nl`                     | the constant `"\n"`: `io:write("done" + io:nl)`                        |
+| `nl`                     | the constant `"\n"`: `io:print("done" + io:nl)`                        |
 
 ## The `os` module
 
@@ -232,7 +233,7 @@ const input = f.open_read().unwrap()          // a stream: read a piece at a tim
 const buf = types:int8array(4096)
 let n = input.read(buf)                       // bytes read, -1 at the end
 while n != -1 {
-    io:write(buf.text(0, n))
+    io:print(buf.text(0, n))
     n = input.read(buf)
 }
 input.close()
@@ -312,7 +313,7 @@ The interpreter core keeps only the most basic functions internal
 |---------|------------------|
 | `os`    | env vars, exit, processes (`platform` and `args()` exist) |
 | `fs`    | `File`, `Directory` and streams exist; more metadata, permissions, temp files |
-| `math`  | trig, logarithms, constants, random |
+| `math`  | constants, rounding, trig, logarithms, global and seeded random numbers exist |
 | `time`  | wall clock, dates, sleep |
 | `json`  | parse / stringify |
 

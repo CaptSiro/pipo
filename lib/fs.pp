@@ -111,16 +111,27 @@ export native function list(Directory d) -> Error<string[]>
 export native function files(Directory d) -> Error<File[]>
 export native function dirs(Directory d) -> Error<Directory[]>
 
-// ---- InputStream (from File.open_read)
+// ---- InputStream (from File.open_read, or fs:stdin)
+native "in_stdin" function get_stdin() -> InputStream
+export const stdin = get_stdin()
+
 // the next byte as 0...=255, -1 at the end
 export native "in_read_byte" function read(InputStream stream) -> int
 // fills buffer (or length bytes of it, from offset): the number of bytes read, -1 at the end
 export native "in_read" function read(InputStream stream, types:Int8Array buffer) -> int
 export native "in_read" function read(InputStream stream, types:Int8Array buffer, int offset, int length) -> int
+// the rest of the stream (at most 2 GB), or up to length bytes of it (0...=2 GB), as text; "" at the end
+export native "in_read_text" function read_text(InputStream stream) -> string
+export native "in_read_text" function read_text(InputStream stream, int length) -> string
 // skips up to n bytes, the number skipped
 export native function skip(InputStream stream, int n) -> int
 
-// ---- OutputStream (from File.open_write / File.open_append)
+// ---- OutputStream (from File.open_write / File.open_append, or fs:stdout / fs:stderr)
+native "out_stdout" function get_stdout() -> OutputStream
+native "out_stderr" function get_stderr() -> OutputStream
+export const stdout = get_stdout()
+export const stderr = get_stderr()
+
 // one byte, -128...=255
 export native "out_write_byte" function write(OutputStream stream, int byte) -> void
 export native "out_write" function write(OutputStream stream, types:Int8Array data) -> void
@@ -128,7 +139,8 @@ export native "out_write" function write(OutputStream stream, types:Int8Array da
 export native "out_write" function write(OutputStream stream, string text) -> void
 export native function flush(OutputStream stream) -> void
 
-// ---- both streams; using a closed stream is an error, closing twice is not
+// ---- both streams; using a closed stream is an error, closing twice is not.
+// Closing fs:stdin / fs:stdout / fs:stderr only detaches the stream: io:print and io:input keep working.
 export native "s_close" function close(InputStream stream) -> void
 export native "s_close" function close(OutputStream stream) -> void
 export native "s_is_open" function is_open(InputStream stream) -> bool

@@ -41,6 +41,17 @@ log.write("!")
 log.close()
 io:print_nl(f.read_text().unwrap().replace("\n", "|"))
 
+// ---- read_text on a stream: up to length bytes, the rest without one, "" at the end
+const text = root.file("text.txt")
+text.write("hello world")
+const words = text.open_read().unwrap()
+io:print_nl(words.read_text(5), words.read_text(0) == "", words.read_text(100), words.read_text() == "")
+words.close()
+const whole = text.open_read().unwrap()
+io:print_nl(whole.read_text(), whole.read_text(1) == "", whole.read(), whole.is_open())
+whole.close()
+io:print_nl(whole.is_open(), text.delete())
+
 // ---- Directory
 io:print_nl(f.copy_to(root.file("copy.txt")), root.file("copy.txt").read_text() == f.read_text())
 io:print_nl(root.list())

@@ -1,13 +1,13 @@
 import io
 import io -> console
-import io -> { print_nl, write }
+import io -> { print_nl, print }
 import "./modules/mathx"
 import "./modules/mathx" -> m
 
 io:print_nl("io:print_nl")
 console:print_nl("aliased module behaves like an object:", console)
 print_nl("destructured print")
-write("no newline")
+print("no newline")
 print_nl()
 
 // receiver.module:function(args) == module:function(receiver, args)
@@ -47,6 +47,6 @@ match io:read_file(path) {
 io:print_nl(io:read_file("definitely/missing/file.txt"))
 
 // module constants
-io:write("const nl" + io:nl)
+io:print("const nl" + io:nl)
 io:print_nl(type_of(io:nl), io:nl == "
 ")

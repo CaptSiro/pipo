@@ -73,42 +73,64 @@ typedef struct stat pp_stat_t;
  * as separators on every platform; separators this file adds use PP_SEP.
  */
 
-static bool is_sep(char c) { return c == '/' || c == '\\'; }
+static bool is_sep(char c) {
+    return c == '/' || c == '\\';
+}
 
 static bool path_is_absolute(const char* p) {
-    if (is_sep(p[0])) return true;
+    if (is_sep(p[0])) {
+        return true;
+    }
+
     return ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':';
 }
 
 /* base + one separator + name (malloc'd); an absolute name or an empty base gives just name */
 static char* path_join(const char* base, const char* name) {
     size_t bl = strlen(base), nl = strlen(name);
-    if (!bl || path_is_absolute(name)) return pp_strndup(name, nl);
-    while (nl && is_sep(*name)) name++, nl--;
-    bool sep = is_sep(base[bl - 1]);
+    if (!bl || path_is_absolute(name)) {
+        return pp_strndup(name, nl);
+    }
+    while (nl && is_sep(*name)) {
+        name++, nl--;
+    }
+
+    const bool sep = is_sep(base[bl - 1]);
     char* r = pp_malloc(bl + nl + 2);
     memcpy(r, base, bl);
-    if (!sep) r[bl++] = PP_SEP;
+    if (!sep) {
+        r[bl++] = PP_SEP;
+    }
+
     memcpy(r + bl, name, nl + 1);
+
     return r;
 }
 
 /* length of p without trailing separators, keeping a lone root ("/", "C:\") */
 static size_t trimmed_len(const char* p) {
     size_t n = strlen(p);
-    size_t root = is_sep(p[0]) ? 1 : (n >= 3 && p[1] == ':' && is_sep(p[2])) ? 3 : 0;
-    while (n > root && is_sep(p[n - 1])) n--;
+    const size_t root = is_sep(p[0]) ? 1 : (n >= 3 && p[1] == ':' && is_sep(p[2])) ? 3 : 0;
+    while (n > root && is_sep(p[n - 1])) {
+        n--;
+    }
+
     return n;
 }
 
 /* the start of the last part of p (n = trimmed length) */
 static size_t last_part(const char* p, size_t n) {
     size_t i = n;
-    while (i > 0 && !is_sep(p[i - 1]) && !(i == 2 && p[1] == ':')) i--;
+    while (i > 0 && !is_sep(p[i - 1]) && !(i == 2 && p[1] == ':')) {
+        i--;
+    }
+
     return i;
 }
 
-static int stat_path(const char* path, pp_stat_t* st) { return pp_stat(path, st); }
+static int stat_path(const char* path, pp_stat_t* st) {
+    return pp_stat(path, st);
+}
 
 static bool path_exists(const char* p) {
     pp_stat_t st;
@@ -129,14 +151,24 @@ static bool path_is_file(const char* p) {
 static char* path_absolute(const char* p) {
 #ifdef _WIN32
     char* r = _fullpath(NULL, p, 0);
-    if (r) return r;
+    if (r) {
+        return r;
+    }
 #else
     char* r = realpath(p, NULL);
-    if (r) return r;
-    if (path_is_absolute(p)) return pp_strdup(p);
+    if (r) {
+        return r;
+    }
+
+    if (path_is_absolute(p)) {
+        return pp_strdup(p);
+    }
 #endif
     char cwd[4096];
-    if (!pp_getcwd(cwd, sizeof cwd)) return pp_strdup(p);
+    if (!pp_getcwd(cwd, sizeof cwd)) {
+        return pp_strdup(p);
+    }
+
     return path_join(cwd, p);
 }
 
@@ -166,7 +198,9 @@ typedef struct {
  * created them when the interpreter started, so they exist before lib/fs.pp
  * is loaded; `native type File` in fs.pp only binds the name.
  */
-static ObjNativeType* fs_type(VM* vm, const char* name) { return vm_native_type(vm, "fs", name); }
+static ObjNativeType* fs_type(VM* vm, const char* name) {
+    return vm_native_type(vm, "fs", name);
+}
 
 /*
  * Allocation: instance_new allocates `size` bytes, zeroes everything after
@@ -178,11 +212,17 @@ static ObjNativeType* fs_type(VM* vm, const char* name) { return vm_native_type(
 static Value path_new(VM* vm, const char* type, char* path /* taken */) {
     ObjPath* o = (ObjPath*)instance_new(vm, fs_type(vm, type));
     o->path = path;
+
     return obj_val(o);
 }
 
-static Value new_file(VM* vm, char* path) { return path_new(vm, "File", path); }
-static Value new_dir(VM* vm, char* path) { return path_new(vm, "Directory", path); }
+static Value new_file(VM* vm, char* path) {
+    return path_new(vm, "File", path);
+}
+
+static Value new_dir(VM* vm, char* path) {
+    return path_new(vm, "Directory", path);
+}
 
 /*
  * The constructors: file(path), file(parent, name) and the same for directory.
@@ -194,20 +234,31 @@ static Value new_dir(VM* vm, char* path) { return path_new(vm, "Directory", path
  * d.file(name) is file(d, name): a dot call passes the receiver first.
  */
 static Value path_make(VM* vm, const char* type, int argc, Value* a) {
-    if (argc == 1) return path_new(vm, type, pp_strdup(AS_STR(a[0])->chars));
+    if (argc == 1) {
+        return path_new(vm, type, pp_strdup(AS_STR(a[0])->chars));
+    }
+
     const char* base = IS_KIND(a[0], OBJ_STRING) ? AS_STR(a[0])->chars : PATH_OF(a[0]);
+
     return path_new(vm, type, path_join(base, AS_STR(a[1])->chars));
 }
 
-static Value fs_file(VM* vm, int argc, Value* a) { return path_make(vm, "File", argc, a); }
-static Value fs_directory(VM* vm, int argc, Value* a) { return path_make(vm, "Directory", argc, a); }
+static Value fs_file(VM* vm, int argc, Value* a) {
+    return path_make(vm, "File", argc, a);
+}
+
+static Value fs_directory(VM* vm, int argc, Value* a) {
+    return path_make(vm, "Directory", argc, a);
+}
 
 /*
  * Deallocation: the `free` hook. The collector calls it when it finds the
  * instance unreachable, just before it frees the object itself, so it
  * releases only what the instance owns, never `self`.
  */
-static void path_free(ObjInstance* self) { free(((ObjPath*)self)->path); }
+static void path_free(ObjInstance* self) {
+    free(((ObjPath*)self)->path);
+}
 
 /* the `format` hook: io:print, str() and nested printing show File("data/order.txt") */
 static void path_format(StrBuf* sb, ObjInstance* self) {
@@ -218,7 +269,9 @@ static void path_format(StrBuf* sb, ObjInstance* self) {
  * the `equals` hook: a == b for two values of the same class (a File is never
  * equal to a Directory). Without it, == would compare identity.
  */
-static bool path_equals(ObjInstance* a, ObjInstance* b) { return strcmp(((ObjPath*)a)->path, ((ObjPath*)b)->path) == 0; }
+static bool path_equals(ObjInstance* a, ObjInstance* b) {
+    return strcmp(((ObjPath*)a)->path, ((ObjPath*)b)->path) == 0;
+}
 
 /* ------------------------------------------------------------- streams
  *
@@ -231,17 +284,37 @@ static bool path_equals(ObjInstance* a, ObjInstance* b) { return strcmp(((ObjPat
 
 typedef struct {
     ObjInstance base;
-    FILE* fp;   /* owned; NULL once closed */
-    char* path; /* owned */
+    FILE* fp;    /* owned unless is_std; NULL once closed */
+    char* path;  /* owned */
+    bool is_std; /* stdin, stdout or stderr: never fclosed, close() only detaches it */
 } ObjStream;
 
 #define STREAM(v) ((ObjStream*)(v).as.o)
 
-static Value stream_new(VM* vm, const char* type, FILE* fp, const char* path) {
+static Value stream_make(VM* vm, const char* type, FILE* fp, const char* path, bool is_std) {
     ObjStream* s = (ObjStream*)instance_new(vm, fs_type(vm, type));
     s->fp = fp;
     s->path = pp_strdup(path);
+    s->is_std = is_std;
+
     return obj_val(s);
+}
+
+static Value stream_new(VM* vm, const char* type, FILE* fp, const char* path) {
+    return stream_make(vm, type, fp, path, false);
+}
+
+/* fs:stdin, fs:stdout, fs:stderr: the same FILE* objects the io module uses */
+static Value in_stdin(VM* vm, int argc, Value* a) {
+    return stream_make(vm, "InputStream", stdin, "pp://stdin", true);
+}
+
+static Value out_stdout(VM* vm, int argc, Value* a) {
+    return stream_make(vm, "OutputStream", stdout, "pp://stdout", true);
+}
+
+static Value out_stderr(VM* vm, int argc, Value* a) {
+    return stream_make(vm, "OutputStream", stderr, "pp://stderr", true);
 }
 
 /*
@@ -257,21 +330,27 @@ static Value stream_new(VM* vm, const char* type, FILE* fp, const char* path) {
  * OutputStream that was never closed still has its data written.
  */
 static void stream_free(ObjInstance* self) {
-    ObjStream* s = (ObjStream*)self;
-    if (s->fp) fclose(s->fp);
+    const ObjStream* s = (ObjStream*)self;
+    if (s->fp && !s->is_std) {
+        fclose(s->fp);
+    }
+
     free(s->path);
 }
 
 /* InputStream("data.bin"), and InputStream("data.bin", closed) after close() */
 static void stream_format(StrBuf* sb, ObjInstance* self) {
-    ObjStream* s = (ObjStream*)self;
+    const ObjStream* s = (ObjStream*)self;
     sb_printf(sb, "%s(\"%s\"%s)", self->type->name->chars, s->path, s->fp ? "" : ", closed");
 }
 
 /* the FILE* of a stream argument; a runtime error when it was closed */
 static FILE* open_stream(VM* vm, Value v) {
-    ObjStream* s = STREAM(v);
-    if (!s->fp) rt_error(vm, 0, "%s of '%s' is closed", s->base.type->name->chars, s->path);
+    const ObjStream* s = STREAM(v);
+    if (!s->fp) {
+        rt_error(vm, 0, "%s of '%s' is closed", s->base.type->name->chars, s->path);
+    }
+
     return s->fp;
 }
 
@@ -294,8 +373,9 @@ static Value fail_errno(VM* vm, const char* what, const char* path) {
     StrBuf sb;
     sb_init(&sb);
     sb_printf(&sb, "cannot %s '%s': %s", what, path, strerror(errno));
-    Value msg = obj_val(str_new(vm, sb.data, (int)sb.len));
+    const Value msg = obj_val(str_new(vm, sb.data, (int)sb.len));
     sb_free(&sb);
+
     return make_fail(vm, msg);
 }
 
@@ -303,8 +383,9 @@ static Value fail_msg(VM* vm, const char* what, const char* path, const char* wh
     StrBuf sb;
     sb_init(&sb);
     sb_printf(&sb, "cannot %s '%s': %s", what, path, why);
-    Value msg = obj_val(str_new(vm, sb.data, (int)sb.len));
+    const Value msg = obj_val(str_new(vm, sb.data, (int)sb.len));
     sb_free(&sb);
+
     return make_fail(vm, msg);
 }
 
@@ -318,22 +399,38 @@ static Value fail_msg(VM* vm, const char* what, const char* path, const char* wh
  * (value.h).
  */
 
-static Value fs_exists(VM* vm, int argc, Value* a) { return bool_val(path_exists(AS_STR(a[0])->chars)); }
-static Value fs_is_dir(VM* vm, int argc, Value* a) { return bool_val(path_is_dir(AS_STR(a[0])->chars)); }
-static Value fs_is_file(VM* vm, int argc, Value* a) { return bool_val(path_is_file(AS_STR(a[0])->chars)); }
+static Value fs_exists(VM* vm, int argc, Value* a) {
+    return bool_val(path_exists(AS_STR(a[0])->chars));
+}
+
+static Value fs_is_dir(VM* vm, int argc, Value* a) {
+    return bool_val(path_is_dir(AS_STR(a[0])->chars));
+}
+
+static Value fs_is_file(VM* vm, int argc, Value* a) {
+    return bool_val(path_is_file(AS_STR(a[0])->chars));
+}
 
 /*
  * The values of the module's constants, fs:separator and fs:path_separator.
  * fs.pp declares these as private natives (no `export`) and evaluates
  * `export const separator = name_separator()` once while it loads.
  */
-static Value fs_name_separator(VM* vm, int argc, Value* a) { return obj_val(str_cnew(vm, PP_SEP_STR)); }
-static Value fs_list_separator(VM* vm, int argc, Value* a) { return obj_val(str_cnew(vm, PP_LIST_SEP_STR)); }
+static Value fs_name_separator(VM* vm, int argc, Value* a) {
+    return obj_val(str_cnew(vm, PP_SEP_STR));
+}
+
+static Value fs_list_separator(VM* vm, int argc, Value* a) {
+    return obj_val(str_cnew(vm, PP_LIST_SEP_STR));
+}
 
 /* cwd() -> Directory: the working directory */
 static Value fs_cwd(VM* vm, int argc, Value* a) {
     char buf[4096];
-    if (!pp_getcwd(buf, sizeof buf)) rt_error(vm, 0, "cannot read the working directory: %s", strerror(errno));
+    if (!pp_getcwd(buf, sizeof buf)) {
+        rt_error(vm, 0, "cannot read the working directory: %s", strerror(errno));
+    }
+
     return new_dir(vm, pp_strdup(buf));
 }
 
@@ -344,29 +441,40 @@ static Value fs_cwd(VM* vm, int argc, Value* a) {
  * an ObjPath, so PATH_OF works for either.
  */
 
-static Value p_path(VM* vm, int argc, Value* a) { return obj_val(str_cnew(vm, PATH_OF(a[0]))); }
+static Value p_path(VM* vm, int argc, Value* a) {
+    return obj_val(str_cnew(vm, PATH_OF(a[0])));
+}
 
 /* the last part of the path: "order.txt" for data/order.txt */
 static Value p_name(VM* vm, int argc, Value* a) {
     const char* p = PATH_OF(a[0]);
-    size_t n = trimmed_len(p);
-    size_t s = last_part(p, n);
+    const size_t n = trimmed_len(p);
+    const size_t s = last_part(p, n);
+
     return obj_val(str_new(vm, p + s, (int)(n - s)));
 }
 
 /* parent() -> Directory?: the path without its last part, none() when there is none (like Java's getParent) */
 static Value p_parent(VM* vm, int argc, Value* a) {
     const char* p = PATH_OF(a[0]);
-    size_t n = trimmed_len(p);
-    size_t s = last_part(p, n);
-    if (s == 0 || s == n) return make_none(vm);
+    const size_t n = trimmed_len(p);
+    const size_t s = last_part(p, n);
+    if (s == 0 || s == n) {
+        return make_none(vm);
+    }
+
     size_t e = s;
-    size_t root = is_sep(p[0]) ? 1 : (p[1] == ':' ? (is_sep(p[2]) ? 3 : 2) : 0);
-    while (e > root && is_sep(p[e - 1])) e--;
+    const size_t root = is_sep(p[0]) ? 1 : (p[1] == ':' ? (is_sep(p[2]) ? 3 : 2) : 0);
+    while (e > root && is_sep(p[e - 1])) {
+        e--;
+    }
+
     return make_some(vm, new_dir(vm, pp_strndup(p, e)));
 }
 
-static Value p_exists(VM* vm, int argc, Value* a) { return bool_val(path_exists(PATH_OF(a[0]))); }
+static Value p_exists(VM* vm, int argc, Value* a) {
+    return bool_val(path_exists(PATH_OF(a[0])));
+}
 
 static Value p_absolute(VM* vm, int argc, Value* a) {
     return path_new(vm, AS_INSTANCE(a[0])->type->name->chars, path_absolute(PATH_OF(a[0])));
@@ -381,28 +489,40 @@ static Value p_rename(VM* vm, int argc, Value* a) {
 /* last modification time in milliseconds since 1970 (like Java's lastModified), 0 when missing */
 static Value p_modified(VM* vm, int argc, Value* a) {
     pp_stat_t st;
-    if (stat_path(PATH_OF(a[0]), &st) != 0) return int_val(0);
+    if (stat_path(PATH_OF(a[0]), &st) != 0) {
+        return int_val(0);
+    }
+
     return int_val((int64_t)st.st_mtime * 1000);
 }
 
 /* ------------------------------------------------------------------ File */
 
-static Value f_is_file(VM* vm, int argc, Value* a) { return bool_val(path_is_file(PATH_OF(a[0]))); }
+static Value f_is_file(VM* vm, int argc, Value* a) {
+    return bool_val(path_is_file(PATH_OF(a[0])));
+}
 
 /* "txt" for order.txt, "" when there is none (a leading dot does not count: .gitignore has none) */
 static Value f_extension(VM* vm, int argc, Value* a) {
     const char* p = PATH_OF(a[0]);
-    size_t n = trimmed_len(p);
-    size_t s = last_part(p, n);
-    for (size_t i = n; i > s + 1; i--)
-        if (p[i - 1] == '.') return obj_val(str_new(vm, p + i, (int)(n - i)));
+    const size_t n = trimmed_len(p);
+    const size_t s = last_part(p, n);
+    for (size_t i = n; i > s + 1; i--) {
+        if (p[i - 1] == '.') {
+            return obj_val(str_new(vm, p + i, (int)(n - i)));
+        }
+    }
+
     return obj_val(str_cnew(vm, ""));
 }
 
 /* size in bytes, 0 when the file does not exist (like Java's length) */
 static Value f_size(VM* vm, int argc, Value* a) {
     pp_stat_t st;
-    if (stat_path(PATH_OF(a[0]), &st) != 0) return int_val(0);
+    if (stat_path(PATH_OF(a[0]), &st) != 0) {
+        return int_val(0);
+    }
+
     return int_val((int64_t)st.st_size);
 }
 
@@ -421,8 +541,12 @@ static char* slurp(const char* path, int64_t* out_len, const char** what) {
         errno = EISDIR;
         return NULL;
     }
+
     FILE* fp = fopen(path, "rb");
-    if (!fp) return NULL;
+    if (!fp) {
+        return NULL;
+    }
+
     *what = "read";
     size_t cap = 1 << 16, len = 0;
     char* buf = pp_malloc(cap);
@@ -431,18 +555,23 @@ static char* slurp(const char* path, int64_t* out_len, const char** what) {
             cap *= 2;
             buf = pp_realloc(buf, cap);
         }
-        size_t got = fread(buf + len, 1, cap - len, fp);
+
+        const size_t got = fread(buf + len, 1, cap - len, fp);
         len += got;
-        if (got == 0) break;
+        if (got == 0) {
+            break;
+        }
     }
-    bool bad = ferror(fp) != 0;
-    int err = errno;
+
+    const bool bad = ferror(fp) != 0;
+    const int err = errno;
     fclose(fp);
     if (bad) {
         free(buf);
         errno = err;
         return NULL;
     }
+
     *out_len = (int64_t)len;
     return buf;
 }
@@ -457,10 +586,14 @@ static Value f_read(VM* vm, int argc, Value* a) {
     int64_t len;
     const char* what;
     char* buf = slurp(PATH_OF(a[0]), &len, &what);
-    if (!buf) return fail_errno(vm, what, PATH_OF(a[0]));
+    if (!buf) {
+        return fail_errno(vm, what, PATH_OF(a[0]));
+    }
+
     ObjTypedArray* r = typed_array_new(vm, TA_I8, len);
     memcpy(r->data, buf, (size_t)len);
     free(buf);
+
     return make_success(vm, obj_val(r));
 }
 
@@ -469,13 +602,18 @@ static Value f_read_text(VM* vm, int argc, Value* a) {
     int64_t len;
     const char* what;
     char* buf = slurp(PATH_OF(a[0]), &len, &what);
-    if (!buf) return fail_errno(vm, what, PATH_OF(a[0]));
+    if (!buf) {
+        return fail_errno(vm, what, PATH_OF(a[0]));
+    }
+
     if (len > INT32_MAX) {
         free(buf);
         return fail_msg(vm, "read", PATH_OF(a[0]), "too large for a string (use read)");
     }
-    Value s = obj_val(str_new(vm, buf, (int)len));
+
+    const Value s = obj_val(str_new(vm, buf, (int)len));
     free(buf);
+
     return make_success(vm, s);
 }
 
@@ -489,7 +627,8 @@ static const void* bytes_of(VM* vm, Value v, size_t* len) {
         *len = (size_t)AS_STR(v)->len;
         return AS_STR(v)->chars;
     }
-    ObjTypedArray* t = (ObjTypedArray*)v.as.o;
+
+    const ObjTypedArray* t = (ObjTypedArray*)v.as.o;
     *len = (size_t)t->length;
     return t->data;
 }
@@ -503,36 +642,54 @@ static Value write_whole(VM* vm, Value* a, const char* mode) {
     size_t len;
     const void* data = bytes_of(vm, a[1], &len);
     FILE* fp = fopen(path, mode);
-    if (!fp) return fail_errno(vm, "open", path);
-    size_t put = fwrite(data, 1, len, fp);
-    int err = errno;
+    if (!fp) {
+        return fail_errno(vm, "open", path);
+    }
+
+    const size_t put = fwrite(data, 1, len, fp);
+    const int err = errno;
     if (fclose(fp) != 0 || put != len) {
         errno = err ? err : EIO;
         return fail_errno(vm, "write", path);
     }
+
     return make_success(vm, int_val((int64_t)put));
 }
 
 /* write(f, data) -> Error<int>: replaces the contents with a string or Int8Array; the bytes written */
-static Value f_write(VM* vm, int argc, Value* a) { return write_whole(vm, a, "wb"); }
+static Value f_write(VM* vm, int argc, Value* a) {
+    return write_whole(vm, a, "wb");
+}
 
 /* append(f, data) -> Error<int>: adds to the end, creating the file when missing */
-static Value f_append(VM* vm, int argc, Value* a) { return write_whole(vm, a, "ab"); }
+static Value f_append(VM* vm, int argc, Value* a) {
+    return write_whole(vm, a, "ab");
+}
 
 /* create(f) -> Error<bool>: makes an empty file; false when it already existed (like Java's createNewFile) */
 static Value f_create(VM* vm, int argc, Value* a) {
     const char* path = PATH_OF(a[0]);
-    if (path_exists(path)) return make_success(vm, bool_val(false));
+    if (path_exists(path)) {
+        return make_success(vm, bool_val(false));
+    }
+
     FILE* fp = fopen(path, "wb");
-    if (!fp) return fail_errno(vm, "create", path);
+    if (!fp) {
+        return fail_errno(vm, "create", path);
+    }
+
     fclose(fp);
+
     return make_success(vm, bool_val(true));
 }
 
 /* delete(f) -> bool: removes the file; false when that failed */
 static Value f_delete(VM* vm, int argc, Value* a) {
     const char* path = PATH_OF(a[0]);
-    if (path_is_dir(path)) return bool_val(false);
+    if (path_is_dir(path)) {
+        return bool_val(false);
+    }
+
     return bool_val(remove(path) == 0);
 }
 
@@ -541,14 +698,18 @@ static Value f_copy_to(VM* vm, int argc, Value* a) {
     const char* from = PATH_OF(a[0]);
     const char* to = IS_KIND(a[1], OBJ_STRING) ? AS_STR(a[1])->chars : PATH_OF(a[1]);
     FILE* in = fopen(from, "rb");
-    if (!in) return fail_errno(vm, "open", from);
+    if (!in) {
+        return fail_errno(vm, "open", from);
+    }
+
     FILE* out = fopen(to, "wb");
     if (!out) {
-        int err = errno;
+        const int err = errno;
         fclose(in);
         errno = err;
         return fail_errno(vm, "open", to);
     }
+
     char buf[1 << 16];
     int64_t total = 0;
     size_t got;
@@ -558,16 +719,22 @@ static Value f_copy_to(VM* vm, int argc, Value* a) {
             ok = false;
             break;
         }
+
         total += (int64_t)got;
     }
-    int err = errno;
+
+    const int err = errno;
     ok = ok && !ferror(in);
     fclose(in);
-    if (fclose(out) != 0) ok = false;
+    if (fclose(out) != 0) {
+        ok = false;
+    }
+
     if (!ok) {
         errno = err ? err : EIO;
         return fail_errno(vm, "copy to", to);
     }
+
     return make_success(vm, int_val(total));
 }
 
@@ -583,45 +750,79 @@ static Value open_with(VM* vm, Value file, const char* mode, const char* type) {
         errno = EISDIR;
         return fail_errno(vm, "open", path);
     }
+
     FILE* fp = fopen(path, mode);
-    if (!fp) return fail_errno(vm, "open", path);
+    if (!fp) {
+        return fail_errno(vm, "open", path);
+    }
+
     return make_success(vm, stream_new(vm, type, fp, path));
 }
 
-static Value f_open_read(VM* vm, int argc, Value* a) { return open_with(vm, a[0], "rb", "InputStream"); }
-static Value f_open_write(VM* vm, int argc, Value* a) { return open_with(vm, a[0], "wb", "OutputStream"); }
-static Value f_open_append(VM* vm, int argc, Value* a) { return open_with(vm, a[0], "ab", "OutputStream"); }
+static Value f_open_read(VM* vm, int argc, Value* a) {
+    return open_with(vm, a[0], "rb", "InputStream");
+}
+
+static Value f_open_write(VM* vm, int argc, Value* a) {
+    return open_with(vm, a[0], "wb", "OutputStream");
+}
+
+static Value f_open_append(VM* vm, int argc, Value* a) {
+    return open_with(vm, a[0], "ab", "OutputStream");
+}
 
 /* ------------------------------------------------------------- Directory */
 
-static Value d_is_dir(VM* vm, int argc, Value* a) { return bool_val(path_is_dir(PATH_OF(a[0]))); }
+static Value d_is_dir(VM* vm, int argc, Value* a) {
+    return bool_val(path_is_dir(PATH_OF(a[0])));
+}
 
 /* create(d) -> bool: makes the directory (its parent must exist), false when that failed or it existed (Java's mkdir) */
-static Value d_create(VM* vm, int argc, Value* a) { return bool_val(pp_mkdir(PATH_OF(a[0])) == 0); }
+static Value d_create(VM* vm, int argc, Value* a) {
+    return bool_val(pp_mkdir(PATH_OF(a[0])) == 0);
+}
 
 /* create_all(d) -> bool: makes the directory and any missing parents; true when it exists afterwards (Java's mkdirs) */
 static Value d_create_all(VM* vm, int argc, Value* a) {
     const char* p = PATH_OF(a[0]);
-    if (path_is_dir(p)) return bool_val(true);
-    size_t n = trimmed_len(p);
+    if (path_is_dir(p)) {
+        return bool_val(true);
+    }
+
+    const size_t n = trimmed_len(p);
     char* buf = pp_strndup(p, n);
     for (size_t i = 1; i <= n; i++) {
-        if (i < n && !is_sep(buf[i])) continue;
-        if (i < n && i > 0 && buf[i - 1] == ':') continue; /* C:\ */
-        char c = buf[i];
+        if (i < n && !is_sep(buf[i])) {
+            continue;
+        }
+
+        if (i < n && i > 0 && buf[i - 1] == ':') {
+            continue; /* C:\ */
+        }
+
+        const char c = buf[i];
         buf[i] = '\0';
-        if (!path_is_dir(buf)) pp_mkdir(buf);
+        if (!path_is_dir(buf)) {
+            pp_mkdir(buf);
+        }
+
         buf[i] = c;
     }
+
     free(buf);
+
     return bool_val(path_is_dir(p));
 }
 
 /* delete(d) -> bool: removes an empty directory; false when that failed */
-static Value d_delete(VM* vm, int argc, Value* a) { return bool_val(pp_rmdir(PATH_OF(a[0])) == 0); }
+static Value d_delete(VM* vm, int argc, Value* a) {
+    return bool_val(pp_rmdir(PATH_OF(a[0])) == 0);
+}
 
 
-static int cmp_names(const void* x, const void* y) { return strcmp(*(char* const*)x, *(char* const*)y); }
+static int cmp_names(const void* x, const void* y) {
+    return strcmp(*(char* const*)x, *(char* const*)y);
+}
 
 /*
  * The names in directory `path` (without . and ..), sorted; NULL with errno
@@ -637,32 +838,50 @@ static char** list_names(const char* path, int* count) {
 #ifdef _WIN32
     char* pattern = path_join(path, "*");
     struct __finddata64_t fd;
-    intptr_t h = _findfirst64(pattern, &fd);
+    const intptr_t h = _findfirst64(pattern, &fd);
     free(pattern);
     if (h == -1) {
-        if (errno != ENOENT) return NULL;
+        if (errno != ENOENT) {
+            return NULL;
+        }
     } else {
         do {
-            if (strcmp(fd.name, ".") == 0 || strcmp(fd.name, "..") == 0) continue;
+            if (strcmp(fd.name, ".") == 0 || strcmp(fd.name, "..") == 0) {
+                continue;
+            }
+
             GROW(names, n, cap);
             names[n++] = pp_strdup(fd.name);
         } while (_findnext64(h, &fd) == 0);
         _findclose(h);
     }
 #else
-    DIR* d = opendir(path);
-    if (!d) return NULL;
+    const DIR* d = opendir(path);
+    if (!d) {
+        return NULL;
+    }
+
     struct dirent* e;
     while ((e = readdir(d))) {
-        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+        if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+            continue;
+        }
+
         GROW(names, n, cap);
         names[n++] = pp_strdup(e->d_name);
     }
+
     closedir(d);
 #endif
-    if (n > 1) qsort(names, (size_t)n, sizeof(char*), cmp_names);
+    if (n > 1) {
+        qsort(names, (size_t)n, sizeof(char*), cmp_names);
+    }
+
     *count = n;
-    if (!names) names = pp_malloc(sizeof(char*)); /* an empty directory still succeeds */
+    if (!names) {
+        names = pp_malloc(sizeof(char*)); /* an empty directory still succeeds */
+    }
+
     return names;
 }
 
@@ -671,30 +890,48 @@ static Value list_dir(VM* vm, Value dir, int mode) {
     const char* path = PATH_OF(dir);
     int n = 0;
     char** names = list_names(path, &n);
-    if (!names) return fail_errno(vm, "list", path);
+    if (!names) {
+        return fail_errno(vm, "list", path);
+    }
+
     ObjArray* r = array_new(vm, n);
     for (int i = 0; i < n; i++) {
         if (mode == 0) {
             r->items[r->count++] = obj_val(str_cnew(vm, names[i]));
         } else {
             char* full = path_join(path, names[i]);
-            bool d = path_is_dir(full);
-            if (mode == 1 && !d) r->items[r->count++] = new_file(vm, full);
-            else if (mode == 2 && d) r->items[r->count++] = new_dir(vm, full);
-            else free(full);
+            const bool d = path_is_dir(full);
+            if (mode == 1 && !d) {
+                r->items[r->count++] = new_file(vm, full);
+            } else if (mode == 2 && d) {
+                r->items[r->count++] = new_dir(vm, full);
+            } else {
+                free(full);
+            }
         }
+
         free(names[i]);
     }
+
     free(names);
+
     return make_success(vm, obj_val(r));
 }
 
 /* list(d) -> Error<string[]>: the names of everything in d, sorted */
-static Value d_list(VM* vm, int argc, Value* a) { return list_dir(vm, a[0], 0); }
+static Value d_list(VM* vm, int argc, Value* a) {
+    return list_dir(vm, a[0], 0);
+}
+
 /* files(d) -> Error<File[]>: what is not a directory */
-static Value d_files(VM* vm, int argc, Value* a) { return list_dir(vm, a[0], 1); }
+static Value d_files(VM* vm, int argc, Value* a) {
+    return list_dir(vm, a[0], 1);
+}
+
 /* dirs(d) -> Error<Directory[]> */
-static Value d_dirs(VM* vm, int argc, Value* a) { return list_dir(vm, a[0], 2); }
+static Value d_dirs(VM* vm, int argc, Value* a) {
+    return list_dir(vm, a[0], 2);
+}
 
 /* ----------------------------------------------------------- InputStream
  *
@@ -706,15 +943,19 @@ static Value d_dirs(VM* vm, int argc, Value* a) { return list_dir(vm, a[0], 2); 
 
 /* checks offset / length against a buffer of len elements */
 static void check_span(VM* vm, const char* fn, int64_t off, int64_t n, int64_t len) {
-    if (off < 0 || n < 0 || off > len - n)
+    if (off < 0 || n < 0 || off > len - n) {
         rt_error(vm, 0, "%s(buffer, %" PRId64 ", %" PRId64 ") is out of range for a buffer of length %" PRId64, fn, off, n, len);
+    }
 }
 
 /* read(in) -> int: the next byte as 0...=255, -1 at the end (like Java's InputStream.read) */
 static Value in_read_byte(VM* vm, int argc, Value* a) {
     FILE* fp = open_stream(vm, a[0]);
-    int c = fgetc(fp);
-    if (c == EOF && ferror(fp)) rt_error(vm, 0, "cannot read '%s': %s", STREAM(a[0])->path, strerror(errno));
+    const int c = fgetc(fp);
+    if (c == EOF && ferror(fp)) {
+        rt_error(vm, 0, "cannot read '%s': %s", STREAM(a[0])->path, strerror(errno));
+    }
+
     return int_val(c == EOF ? -1 : c);
 }
 
@@ -724,30 +965,86 @@ static Value in_read_byte(VM* vm, int argc, Value* a) {
  */
 static Value in_read(VM* vm, int argc, Value* a) {
     FILE* fp = open_stream(vm, a[0]);
-    ObjTypedArray* buf = (ObjTypedArray*)a[1].as.o;
+    const ObjTypedArray* buf = (ObjTypedArray*)a[1].as.o;
     int64_t off = 0, n = buf->length;
     if (argc > 2) {
         off = a[2].as.i;
         n = a[3].as.i;
         check_span(vm, "read", off, n, buf->length);
     }
-    if (n == 0) return int_val(0);
-    size_t got = fread((char*)buf->data + off, 1, (size_t)n, fp);
-    if (got == 0 && ferror(fp)) rt_error(vm, 0, "cannot read '%s': %s", STREAM(a[0])->path, strerror(errno));
+
+    if (n == 0) {
+        return int_val(0);
+    }
+
+    const size_t got = fread((char*)buf->data + off, 1, (size_t)n, fp);
+    if (got == 0 && ferror(fp)) {
+        rt_error(vm, 0, "cannot read '%s': %s", STREAM(a[0])->path, strerror(errno));
+    }
+
     return int_val(got == 0 ? -1 : (int64_t)got);
+}
+
+/* the most bytes read_text(in) reads at once: a string holds at most INT32_MAX bytes (2 GB) */
+#define READ_TEXT_MAX ((int64_t)INT32_MAX)
+
+/*
+ * read_text(in), read_text(in, length) -> string: the rest of the stream, or
+ * up to length bytes of it, as text; "" at the end. Without a length it reads
+ * up to READ_TEXT_MAX bytes. length counts bytes, so it can end in the middle
+ * of a UTF-8 character.
+ */
+static Value in_read_text(VM* vm, int argc, Value* a) {
+    FILE* fp = open_stream(vm, a[0]);
+    const char* path = STREAM(a[0])->path;
+    const int64_t length = argc > 1 ? a[1].as.i : READ_TEXT_MAX;
+    if (length < 0 || length > READ_TEXT_MAX) {
+        rt_error(vm, 0, "read_text(stream, %" PRId64 "): the length must be 0...=%" PRId64, length, READ_TEXT_MAX);
+    }
+
+    StrBuf sb;
+    sb_init(&sb);
+
+    char chunk[4096];
+    int64_t remaining = length;
+    while (remaining > 0) {
+        const size_t want = remaining < (int64_t)sizeof chunk ? (size_t)remaining : sizeof chunk;
+        const size_t got = fread(chunk, 1, want, fp);
+        sb_append(&sb, chunk, got);
+        remaining -= (int64_t)got;
+
+        if (got < want) {
+            if (ferror(fp)) {
+                const int err = errno;
+                sb_free(&sb);
+                rt_error(vm, 0, "cannot read '%s': %s", path, strerror(err));
+            }
+
+            break;
+        }
+    }
+
+    const Value s = obj_val(str_new(vm, sb.data, (int)sb.len));
+    sb_free(&sb);
+
+    return s;
 }
 
 /* skip(in, n) -> int: skips up to n bytes, the number skipped */
 static Value in_skip(VM* vm, int argc, Value* a) {
     FILE* fp = open_stream(vm, a[0]);
-    int64_t n = a[1].as.i, done = 0;
+    const int64_t n = a[1].as.i;
+    int64_t done = 0;
     char tmp[4096];
     while (done < n) {
-        size_t want = (size_t)(n - done < (int64_t)sizeof tmp ? n - done : (int64_t)sizeof tmp);
-        size_t got = fread(tmp, 1, want, fp);
+        const size_t want = (size_t)(n - done < (int64_t)sizeof tmp ? n - done : (int64_t)sizeof tmp);
+        const size_t got = fread(tmp, 1, want, fp);
         done += (int64_t)got;
-        if (got < want) break;
+        if (got < want) {
+            break;
+        }
     }
+
     return int_val(done);
 }
 
@@ -759,15 +1056,26 @@ static Value in_skip(VM* vm, int argc, Value* a) {
 
 static void out_put(VM* vm, Value s, const void* data, size_t n) {
     FILE* fp = open_stream(vm, s);
-    if (fwrite(data, 1, n, fp) != n) rt_error(vm, 0, "cannot write '%s': %s", STREAM(s)->path, strerror(errno));
+    if (fp == stderr) {
+        /* like io:eprint: what was printed before comes first */
+        fflush(stdout);
+    }
+
+    if (fwrite(data, 1, n, fp) != n) {
+        rt_error(vm, 0, "cannot write '%s': %s", STREAM(s)->path, strerror(errno));
+    }
 }
 
 /* write(out, byte): one byte, -128...=255 (an Int8Array element or 0...=255) */
 static Value out_write_byte(VM* vm, int argc, Value* a) {
-    int64_t b = a[1].as.i;
-    if (b < -128 || b > 255) rt_error(vm, 0, "write(out, %" PRId64 "): a byte is -128...=255", b);
-    unsigned char c = (unsigned char)b;
+    const int64_t b = a[1].as.i;
+    if (b < -128 || b > 255) {
+        rt_error(vm, 0, "write(out, %" PRId64 "): a byte is -128...=255", b);
+    }
+
+    const unsigned char c = (unsigned char)b;
     out_put(vm, a[0], &c, 1);
+
     return void_val();
 }
 
@@ -780,12 +1088,17 @@ static Value out_write(VM* vm, int argc, Value* a) {
         data += a[2].as.i;
         len = (size_t)a[3].as.i;
     }
+
     out_put(vm, a[0], data, len);
+
     return void_val();
 }
 
 static Value out_flush(VM* vm, int argc, Value* a) {
-    if (fflush(open_stream(vm, a[0])) != 0) rt_error(vm, 0, "cannot write '%s': %s", STREAM(a[0])->path, strerror(errno));
+    if (fflush(open_stream(vm, a[0])) != 0) {
+        rt_error(vm, 0, "cannot write '%s': %s", STREAM(a[0])->path, strerror(errno));
+    }
+
     return void_val();
 }
 
@@ -795,19 +1108,35 @@ static Value out_flush(VM* vm, int argc, Value* a) {
  * close(s): closes the FILE* now and marks the stream closed, so the GC's
  * stream_free has nothing left to do. Closing twice does nothing, and
  * fclose's error (data that could not be flushed) is reported here.
+ * fs:stdin, fs:stdout and fs:stderr are only flushed and marked closed.
  */
 static Value s_close(VM* vm, int argc, Value* a) {
     ObjStream* s = STREAM(a[0]);
-    if (s->fp) {
-        int r = fclose(s->fp);
+    if (s->fp && s->is_std) {
+        /* the process keeps its standard streams: io:print and io:input still use them */
+        if (s->fp != stdin) {
+            fflush(s->fp);
+        }
+
         s->fp = NULL;
-        if (r != 0) rt_error(vm, 0, "cannot close '%s': %s", s->path, strerror(errno));
+    } else if (s->fp) {
+        const int r = fclose(s->fp);
+        s->fp = NULL;
+        if (r != 0) {
+            rt_error(vm, 0, "cannot close '%s': %s", s->path, strerror(errno));
+        }
     }
+
     return void_val();
 }
 
-static Value s_is_open(VM* vm, int argc, Value* a) { return bool_val(STREAM(a[0])->fp != NULL); }
-static Value s_path(VM* vm, int argc, Value* a) { return obj_val(str_cnew(vm, STREAM(a[0])->path)); }
+static Value s_is_open(VM* vm, int argc, Value* a) {
+    return bool_val(STREAM(a[0])->fp != NULL);
+}
+
+static Value s_path(VM* vm, int argc, Value* a) {
+    return obj_val(str_cnew(vm, STREAM(a[0])->path));
+}
 
 /* ---------------------------------------------------------- registration
  *
@@ -877,9 +1206,13 @@ static const NativeImpl FS[] = {
     {"files", d_files},
     {"dirs", d_dirs},
 
+    {"in_stdin", in_stdin},
     {"in_read_byte", in_read_byte},
     {"in_read", in_read},
+    {"in_read_text", in_read_text},
     {"skip", in_skip},
+    {"out_stdout", out_stdout},
+    {"out_stderr", out_stderr},
     {"out_write_byte", out_write_byte},
     {"out_write", out_write},
     {"flush", out_flush},

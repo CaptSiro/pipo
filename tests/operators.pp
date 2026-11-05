@@ -32,7 +32,7 @@ io:print_nl([1, 2] == [1, 2], [1, 2] == [2, 1], [1] != [1, 2], { a: 1 } == { a: 
 
 // ---- && and || short-circuit
 function loud(bool v) -> bool {
-    io:write("[", v, "]")
+    io:print("[", v, "]")
     return v
 }
 io:print_nl(true && true, true && false, false && true, false || false, false || true, true || false)
@@ -40,23 +40,23 @@ io:print_nl(loud(false) && loud(true), loud(true) || loud(false), loud(true) && 
 
 // ---- ... and ...= : (int, int) -> range
 io:print_nl(0...3, 0...=3, 3...0, 3...=0)
-for i in 2...5 { io:write(i, "") }
+for i in 2...5 { io:print(i, "") }
 io:print_nl()
-for i in 2...=5 { io:write(i, "") }
+for i in 2...=5 { io:print(i, "") }
 io:print_nl()
 
 // ---- compound assignment: x op= y is x = x op y for every operator above
 let int i = 10
 i += 5
-io:write(i, "")
+io:print(i, "")
 i -= 3
-io:write(i, "")
+io:print(i, "")
 i *= 2
-io:write(i, "")
+io:print(i, "")
 i /= 4
-io:write(i, "")
+io:print(i, "")
 i %= 4
-io:write(i, "")
+io:print(i, "")
 i **= 5
 io:print_nl(i)
 let s = "ab"

@@ -10,6 +10,9 @@ false success(Int8Array[97, 98, 99, 10, 66, 67])
 2 BC
 97 2 10 2 Int8Array[66, 66, 67, 10] -1
 abc|BC!
+hello true  world true
+hello world true -1 true
+false true
 success(7) true
 success(["a", "copy.txt", "empty", "notes.txt"])
 ["copy.txt", "empty", "notes.txt"] ["a"]

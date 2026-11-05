@@ -62,3 +62,9 @@ let int total = 0
 const std:Consumer<int> add = n -> { total = total + n }
 for n in 1...=4 { add(n) }
 io:print_nl(even(4), even(7), label(3), total)
+
+// ---- a in b for ranges: are a's bounds within b's (ends included or not, either direction)
+io:print_nl((2...3) in (0...10), (0...10) in (2...3), (1...3) in (0...3), (0...=2) in (0...3), (0...=3) in (0...3))
+io:print_nl((0...3) in (0...=3), (3...0) in (0...=3), (3...0) in (0...3), (3...=1) in (0...4), (5...5) in (0...1), (0...=0) in (1...2))
+io:print_nl(range(0, 1, 0.25) in (0...1), (0...1) in range(0, 1, 0.25), (-5...5) in (-10...10), (0...5) in (5...0))
+io:print_nl((0...=5):inclusive, (0...5):inclusive, (0...=5):end)

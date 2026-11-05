@@ -453,7 +453,7 @@ const input = f.open_read().unwrap()
 const buf = types:int8array(4096)       // a fixed buffer, filled again and again
 let n = input.read(buf)
 while n != -1 {
-    io:write(buf.text(0, n))
+    io:print(buf.text(0, n))
     n = input.read(buf)
 }
 input.close()

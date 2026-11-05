@@ -55,24 +55,24 @@ if answer > 40 {
 }
 
 for i in ...10 {
-    io:write(i, "")                 // i is from 0 to 9
+    io:print(i, "")                 // i is from 0 to 9
 }
 io:print()
 
 for let i in 10...=1 {
     i *= 2                       // `let` makes the loop variable mutable
-    io:write(i, "")
+    io:print(i, "")
 }
 io:print()
 
 const array = ["x", "y", "z"]
 for let i in ...#array {
-    io:write(i, "")                 // # gives the number of elements
+    io:print(i, "")                 // # gives the number of elements
 }
 io:print()
 
 for x in array {
-    io:write(x, "")
+    io:print(x, "")
 }
 io:print()
 
@@ -85,7 +85,7 @@ while true {
     if n > 7 {
         break
     }
-    io:write(n, "")
+    io:print(n, "")
 }
 io:print()
 

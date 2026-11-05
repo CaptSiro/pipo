@@ -1,0 +1,73 @@
+<idea-plugin>
+    <id>com.pipo.lang</id>
+    <name>PiPo Language</name>
+    <vendor>PiPo</vendor>
+    <description><![CDATA[
+    Support for the PiPo language (<code>.pp</code> files):
+    <ul>
+      <li>highlighting of keywords, literals, declarations, calls, types, parameters, fields and modules</li>
+      <li>syntax errors and the interpreter's file-structure checks while you type</li>
+      <li>go to declaration, find usages, rename and highlighting of usages, across files and imports</li>
+      <li>completion of names in scope, module exports, enum variants, fields, types and modules</li>
+      <li>quick documentation from <code>//</code> comments, parameter info for every overload</li>
+      <li>structure view, breadcrumbs, folding, go to symbol, TODO comments, live templates</li>
+      <li>indentation-only formatting that never changes meaning</li>
+      <li>a run configuration for the <code>pp</code> interpreter with clickable error locations</li>
+    </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.lang</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <!-- language -->
+        <fileType name="PiPo" implementationClass="com.pipo.lang.PipoFileType" fieldName="INSTANCE"
+                  language="Pipo" extensions="pp"/>
+        <lang.parserDefinition language="Pipo" implementationClass="com.pipo.lang.parser.PipoParserDefinition"/>
+
+        <!-- highlighting -->
+        <lang.syntaxHighlighterFactory language="Pipo"
+                                       implementationClass="com.pipo.lang.highlight.PipoSyntaxHighlighter$Factory"/>
+        <colorSettingsPage implementation="com.pipo.lang.highlight.PipoColorSettingsPage"/>
+        <annotator language="Pipo" implementationClass="com.pipo.lang.highlight.PipoAnnotator"/>
+        <localInspection language="Pipo" shortName="PipoUnresolvedReference"
+                         displayName="Unresolved reference" groupName="PiPo"
+                         enabledByDefault="true" level="WARNING"
+                         implementationClass="com.pipo.lang.highlight.PipoUnresolvedReferenceInspection"/>
+
+        <!-- editor -->
+        <lang.braceMatcher language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$BraceMatcher"/>
+        <lang.quoteHandler language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$QuoteHandler"/>
+        <lang.commenter language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$PipoCommenter"/>
+        <lang.foldingBuilder language="Pipo" implementationClass="com.pipo.lang.editor.PipoFoldingBuilder"/>
+        <lang.psiStructureViewFactory language="Pipo" implementationClass="com.pipo.lang.structure.PipoStructureView"/>
+        <breadcrumbsInfoProvider implementation="com.pipo.lang.editor.PipoNavigation$Breadcrumbs"/>
+        <lang.formatter language="Pipo" implementationClass="com.pipo.lang.format.PipoFormattingModelBuilder"/>
+        <langCodeStyleSettingsProvider implementation="com.pipo.lang.format.PipoCodeStyleSettingsProvider"/>
+
+        <!-- navigation, references, documentation -->
+        <lang.findUsagesProvider language="Pipo" implementationClass="com.pipo.lang.editor.PipoFindUsagesProvider"/>
+        <lang.refactoringSupport language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$Refactoring"/>
+        <lang.namesValidator language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$Names"/>
+        <lang.documentationProvider language="Pipo" implementationClass="com.pipo.lang.editor.PipoDocumentationProvider"/>
+        <codeInsight.parameterInfo language="Pipo" implementationClass="com.pipo.lang.editor.PipoParameterInfoHandler"/>
+        <gotoSymbolContributor implementation="com.pipo.lang.editor.PipoNavigation$GotoSymbol"/>
+        <completion.contributor language="Pipo" implementationClass="com.pipo.lang.completion.PipoCompletionContributor"/>
+
+        <!-- TODO comments, live templates -->
+        <indexPatternBuilder implementation="com.pipo.lang.editor.PipoNavigation$TodoPatterns"/>
+        <todoIndexer filetype="PiPo" implementationClass="com.pipo.lang.editor.PipoNavigation$TodoIndexer"/>
+        <liveTemplateContext contextId="PIPO" implementation="com.pipo.lang.editor.PipoNavigation$TemplateContext"/>
+        <defaultLiveTemplates file="/liveTemplates/PiPo.xml"/>
+
+        <!-- running -->
+        <configurationType implementation="com.pipo.lang.run.PipoRunSupport$Type"/>
+        <runConfigurationProducer implementation="com.pipo.lang.run.PipoRunSupport$Producer"/>
+        <runLineMarkerContributor language="Pipo" implementationClass="com.pipo.lang.run.PipoRunSupport$LineMarker"/>
+        <consoleFilterProvider implementation="com.pipo.lang.run.PipoRunSupport$ConsoleFilters"/>
+
+        <!-- settings -->
+        <projectConfigurable parentId="language" instance="com.pipo.lang.settings.PipoSettingsConfigurable"
+                             id="com.pipo.lang.settings" displayName="PiPo"/>
+    </extensions>
+</idea-plugin>

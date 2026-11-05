@@ -166,6 +166,7 @@ void mod_pp_register(VM* vm);
 void mod_std_register(VM* vm);
 void mod_fs_register(VM* vm);
 void mod_types_register(VM* vm);
+void mod_math_register(VM* vm);
 
 /*
  * modules/types.c: the typed arrays of lib/types.pp (Int8Array ... Float64Array).

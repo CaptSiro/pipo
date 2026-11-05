@@ -919,7 +919,10 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
     }
 
     if (IS_KIND(obj, OBJ_RANGE)) {
-        /* read-only view of a range as the std type Range { number start, number end, number step } */
+        /*
+         * read-only view of a range as { number start, number end, number step, bool inclusive }.
+         * For ...= ranges end is one step past the last element (0...=5 has end 6).
+         */
         const ObjRange* r = AS_RANGE(obj);
         if (str_equals(name, "start")) {
             return r->start;
@@ -933,7 +936,11 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
             return r->step;
         }
 
-        rt_error(vm, line, "range has no field '%s' (it has start, end and step)", name->chars);
+        if (str_equals(name, "inclusive")) {
+            return bool_val(r->inclusive);
+        }
+
+        rt_error(vm, line, "range has no field '%s' (it has start, end, step and inclusive)", name->chars);
     }
 
     rt_error(vm, line, "cannot access field '%s' on a value of type %s", name->chars, value_type_name(obj));
@@ -3324,6 +3331,7 @@ VM* vm_new(int argc, char** argv) {
     mod_std_register(vm);
     mod_fs_register(vm);
     mod_types_register(vm);
+    mod_math_register(vm);
 
     jmp_buf jb;
     vm->err_jmp = &jb;

@@ -38,10 +38,14 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/modules/os.c` | the native `os` module |
 | `src/modules/fs.c` | C half of `lib/fs.pp`: `File`, `Directory`, `InputStream`, `OutputStream`; the worked example in [NATIVE_MODULES.md](NATIVE_MODULES.md) |
 | `src/modules/types.c` | C half of `lib/types.pp`: the typed arrays (`Int8Array` ... `Float64Array`) |
+| `src/modules/math.c` | C half of `lib/math.pp`: rounding, roots, logarithms, trigonometry, random numbers |
 | `src/modules/pp.c` | the native `pp` module: location of the running script |
 | `src/modules/std.c` | C half of `lib/std.pp`: `in(number, range)`, `has(range, number)`, the `std:Map` / `std:Set` functions and constructors |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
+| `lib/` | library modules written in the language (`std`, `fs`, `math`, `types`), copied next to `pp` by the build |
+| `editor/pp-intellij/` | the JetBrains plugin (Gradle project): a Java port of the lexer and parser, plus navigation, completion and a run configuration; see [SYNTAX_HIGHLIGHTING.md](SYNTAX_HIGHLIGHTING.md) |
+| `editor/pp-textmate/` | a TextMate grammar for editors without the plugin |
 
 ## Key design points
 

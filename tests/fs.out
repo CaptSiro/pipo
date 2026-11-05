@@ -1,0 +1,24 @@
+fs_test_tmp true true true
+notes.txt txt false 0 0 true File
+true success(5) true true 5 true
+success("hello") success(Int8Array[104, 101, 108, 108, 111]) success(6) success("hello world")
+success(2) success("hi") success(false) success(true)
+true false none() b.txt
+true
+false success(Int8Array[97, 98, 99, 10, 66, 67])
+4 abc|
+2 BC
+97 2 10 2 Int8Array[66, 66, 67, 10] -1
+abc|BC!
+success(7) true
+success(["a", "copy.txt", "empty", "notes.txt"])
+["copy.txt", "empty", "notes.txt"] ["a"]
+true success(["a", "empty", "moved.txt", "notes.txt"])
+false true true
+true false
+empty true
+moved.txt true
+notes.txt true
+true false false
+false true true gz
+true true true

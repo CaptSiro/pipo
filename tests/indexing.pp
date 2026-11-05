@@ -21,17 +21,21 @@ io:print_nl(mx[0, 0], mx[0, 1], mx[1, 0], mx:cells)
 <T>function [](T[] items, range r) -> T[] { return items.slice(r:start, r:end) }
 io:print_nl(xs[0...2], xs[1...3], xs[2])
 
-// ---- a type implementing std:Index, from another module: only find and put written there
+// ---- a type implementing std:Index, from another module: only get and put written there
 const b = board(3, 2)
 b[tuple(0, 0)] = "#"
 b[tuple(2, 1)] = "@"
-io:print_nl(b[tuple(2, 1)], b.find(tuple(5, 5)), rows(b))
+io:print_nl(
+    b[tuple(2, 1)],
+    b.get(tuple(5, 5)),
+    rows(b)
+)
 
 // an interface parameter takes any Index: a map, a Board
 <K, V>function show(std:Index<K, V> c, K key) -> string { return str(c[key]) }
 io:print_nl(show(std:map({ a: 1 }), "a"), show(b, tuple(0, 0)))
 
-// ---- std:map: [] and []= through its impl of Index
+// ---- std:Map: [] and []= through its impl of Index
 const counts = std:map()
 for w in ["a", "b", "a", "c", "a"] {
     if !counts.has(w) { counts[w] = 0 }
@@ -41,7 +45,7 @@ io:print_nl(counts, counts["a"])
 
 // a generic impl: the type's own generics bind the interface's
 <T>type Stack = { T[] items }
-<T>function find(Stack<T> s, int i) -> T? {
+<T>function get(Stack<T> s, int i) -> T? {
     if i < 0 || i >= #s:items { return none() }
     return some(s:items[#s:items - 1 - i])
 }
@@ -49,7 +53,7 @@ io:print_nl(counts, counts["a"])
 <T>impl std:Index<int, T> for Stack<T>
 const Stack<string> st = { items: ["bottom", "middle", "top"] }
 st[0] = "TOP"
-io:print_nl(st[0], st[2], st.find(7), st:items)
+io:print_nl(st[0], st[2], st.get(7), st:items)
 
 // ---- target op= value: an in-place op= when one accepts the values, else target = target op value
 <T>function +=(T[] items, T[] more) -> void { for m in more { items.push(m) } }

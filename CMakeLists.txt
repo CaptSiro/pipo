@@ -11,7 +11,8 @@ endif ()
 # native modules (io, os, pp, ...) live in src/modules/, one file per module
 file(GLOB PP_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.c ${CMAKE_SOURCE_DIR}/src/modules/*.c)
 add_executable(pp ${PP_SOURCES}
-        src/modules/std.c)
+        src/modules/std.c
+        src/modules/fs.c)
 target_include_directories(pp PRIVATE ${CMAKE_SOURCE_DIR}/src)
 # pp.exe always lands in the build directory itself (the $<1:...> stops multi-config
 # generators from adding Debug/ or Release/), so lib/ can be copied next to it

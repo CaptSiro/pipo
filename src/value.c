@@ -164,12 +164,20 @@ ObjEnumValue* enumv_new(VM* vm, ObjEnum* en, int variant, int count) {
     return v;
 }
 
+ObjInstance* instance_new(VM* vm, ObjNativeType* type) {
+    ObjInstance* o = (ObjInstance*)alloc_obj(vm, type->cls->size, OBJ_INSTANCE);
+    memset((char*)o + sizeof(Obj), 0, type->cls->size - sizeof(Obj));
+    o->type = type;
+    return o;
+}
+
 ObjModule* module_new(VM* vm, const char* name, const char* path, ObjEnv* parent) {
     ObjModule* m = (ObjModule*)alloc_obj(vm, sizeof(ObjModule), OBJ_MODULE);
     table_init(&m->exports);
     m->name = str_cnew(vm, name);
     m->path = str_cnew(vm, path);
     m->natives = NULL;
+    m->lib_path = NULL;
     m->env = env_new(vm, parent);
     return m;
 }
@@ -347,6 +355,11 @@ bool values_equal(Value a, Value b) {
                 if (!values_equal(p->items[i], q->items[i])) return false;
             return true;
         }
+        case OBJ_INSTANCE: {
+            ObjInstance* p = (ObjInstance*)x;
+            ObjInstance* q = (ObjInstance*)y;
+            return p->type == q->type && p->type->cls->equals && p->type->cls->equals(p, q);
+        }
         case OBJ_MAP:
         case OBJ_SET: {
             /* the same keys (and values), in any order */
@@ -372,9 +385,8 @@ bool is_callable(Value v) {
         case OBJ_NATIVE:
         case OBJ_OVERLOAD:
         case OBJ_VARIANT_CTOR:
-        case OBJ_TYPEDEF:
-        case OBJ_NATIVE_TYPE: return true;
-        default: return false;
+        case OBJ_TYPEDEF: return true;
+        default: return false; /* a native type (std:Map, ...) is not callable: its module has a constructor function */
     }
 }
 
@@ -405,9 +417,10 @@ const char* value_type_name(Value v) {
         case OBJ_MODULE: return "module";
         case OBJ_ENV: return "scope";
         case OBJ_TUPLE: return "tuple";
-        case OBJ_MAP: return "map";
-        case OBJ_SET: return "set";
+        case OBJ_MAP: return "Map";
+        case OBJ_SET: return "Set";
         case OBJ_NATIVE_TYPE: return "type";
+        case OBJ_INSTANCE: return AS_INSTANCE(v)->type->name->chars;
     }
     return "?";
 }
@@ -566,7 +579,18 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         case OBJ_INTERFACE: sb_printf(sb, "<interface %s>", ((ObjInterface*)o)->name->chars); break;
         case OBJ_MODULE: sb_printf(sb, "<module %s>", ((ObjModule*)o)->name->chars); break;
         case OBJ_ENV: sb_puts(sb, "<scope>"); break;
-        case OBJ_NATIVE_TYPE: sb_printf(sb, "<type std:%s>", ((ObjNativeType*)o)->name->chars); break;
+        case OBJ_NATIVE_TYPE: {
+            ObjNativeType* t = (ObjNativeType*)o;
+            if (t->which == NT_CLASS) sb_printf(sb, "<type %s:%s>", t->module ? t->module->name->chars : t->lib_module, t->name->chars);
+            else sb_printf(sb, "<type std:%s>", t->name->chars);
+            break;
+        }
+        case OBJ_INSTANCE: {
+            ObjInstance* inst = (ObjInstance*)o;
+            if (inst->type->cls->format) inst->type->cls->format(sb, inst);
+            else sb_printf(sb, "<%s>", inst->type->name->chars);
+            break;
+        }
         case OBJ_TUPLE: {
             ObjTuple* t = AS_TUPLE(v);
             sb_puts(sb, "tuple(");
@@ -579,10 +603,10 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         }
         case OBJ_MAP:
         case OBJ_SET: {
-            /* map{"a": 1, "b": 2}, set{1, 2}: one line, in insertion order */
+            /* Map{"a": 1, "b": 2}, Set{1, 2}: one line, in insertion order */
             ObjMap* m = AS_MAP(v);
             bool is_map = o->kind == OBJ_MAP;
-            sb_puts(sb, is_map ? "map{" : "set{");
+            sb_puts(sb, is_map ? "Map{" : "Set{");
             bool first = true;
             for (int i = 0; i < m->count; i++) {
                 MapEntry* e = &m->entries[i];

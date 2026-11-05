@@ -1,6 +1,6 @@
 /*
  * The C half of lib/std.pp (a mixed module): bodies of its `native` functions,
- * including the functions of std:map and std:set.
+ * including the functions of std:Map and std:Set.
  */
 #include <math.h>
 
@@ -13,7 +13,7 @@
  * within a tiny fraction of the step from it, so 0.3 in range(0, 1, 0.1) holds
  * even though 3 * 0.1 is 0.30000000000000004.
  */
-static Value std_has_range(VM* vm, int argc, Value* a) {
+static Value std_range_has(VM* vm, int argc, Value* a) {
     ObjRange* r = AS_RANGE(a[0]);
     Value x = a[1];
     int64_t len = range_length(r);
@@ -61,13 +61,17 @@ static Value std_in_range(VM* vm, int argc, Value* a)
     return bool_val(step > 0 ? xf >= start && xf < end : xf <= start && xf > end);
 }
 
-/* ------------------------------------------------- std:map and std:set
+/* ------------------------------------------------- std:Map and std:Set
  *
  * The tables themselves are in src/collections.c. Overload resolution has
- * already checked the receiver (map<K, V> / set<T>) before these run.
+ * already checked the receiver (Map<K, V> / Set<T>) before these run.
  */
 
-static Value map_find_fn(VM* vm, int argc, Value* a) {
+/* the constructors: std:map(), std:map(from), std:set(), std:set(from) (see native_type_construct) */
+static Value map_new_fn(VM* vm, int argc, Value* a) { return native_type_construct(vm, vm->t_map, argc, a, 0); }
+static Value set_new_fn(VM* vm, int argc, Value* a) { return native_type_construct(vm, vm->t_set, argc, a, 0); }
+
+static Value map_get_fn(VM* vm, int argc, Value* a) {
     MapEntry* e = map_find(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0));
     return e ? make_some(vm, e->value) : make_none(vm);
 }
@@ -159,8 +163,10 @@ static Value set_difference(VM* vm, int argc, Value* a) { return set_combine(vm,
 
 static const NativeImpl STD[] = {
     {"std_in_range", std_in_range},
-    {"std_has_range", std_has_range},
-    {"std_map_find", map_find_fn},
+    {"std_range_has", std_range_has},
+    {"std_map_new", map_new_fn},
+    {"std_set_new", set_new_fn},
+    {"std_map_get", map_get_fn},
     {"std_map_put", map_put_fn},
     {"std_map_has", map_has},
     {"std_map_remove", map_remove_fn},
@@ -176,4 +182,7 @@ static const NativeImpl STD[] = {
     {NULL, NULL},
 };
 
-void mod_std_register(VM* vm) { vm_register_native_impls(vm, "std", STD); }
+void mod_std_register(VM* vm)
+{
+    vm_register_native_impls(vm, "std", STD);
+}

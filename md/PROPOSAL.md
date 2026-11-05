@@ -312,7 +312,11 @@ This might be it. Lets start as a general language like python, but I would like
 
 ## Code conventions
 
-- types and interfaces: PascalCase
-- built-in types: flatcase
+- types and interfaces: PascalCase, also library types (`std:Map`, `std:Set`, `fs:File`, `types:Int8Array`)
+- built-in types: flatcase (`int`, `string`, `tuple`)
 - functions: snake_case
 - variables: snake_case
+- constructors: a type is never called (`std:Map()` / `std:Map{}` are errors); a value is made by a
+  constructor function named after the type in flatcase or snake_case, as the developer prefers
+  (`std:map()`, `fs:file(path)`, `types:int8array(length)`). The packages in `lib/` use snake_case,
+  except the typed arrays, whose constructors are flatcase (`int8array`, `float64array`)

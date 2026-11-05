@@ -1,3 +1,3 @@
 import io
 import std
-native type map<K, V>
+native type Map<K, V>

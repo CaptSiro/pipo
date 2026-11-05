@@ -72,8 +72,10 @@ struct VM {
     ObjEnum* option_enum;
     ObjEnum* error_enum;
 
-    ObjNativeType* t_map; /* std:map, std:set: bound in lib/std.pp by `native type` */
+    ObjNativeType* t_map; /* std:Map, std:Set: bound in lib/std.pp by `native type` */
     ObjNativeType* t_set;
+    ObjNativeType** native_types; /* NativeClass types registered by modules (vm_register_native_types), permanent */
+    int nnative_types;
     Obj* tuple_ctor;      /* the built-in tuple(...) function, recognised in patterns */
     ObjString* s_index;   /* "[]" and "[]=": x[i] and x[i] = v call these */
     ObjString* s_index_set;
@@ -124,6 +126,8 @@ ObjEnv* vm_current_env(VM* vm);
 void vm_register_ic(VM* vm, InlineCache* ic);
 void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init);
 void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impls);
+void vm_register_native_types(VM* vm, const char* module, const NativeClass* classes); /* terminated by {NULL} */
+ObjNativeType* vm_native_type(VM* vm, const char* module, const char* name); /* a registered class's type, or NULL */
 Value make_some(VM* vm, Value v);
 Value make_none(VM* vm);
 Value make_success(VM* vm, Value v);
@@ -160,6 +164,22 @@ void mod_io_register(VM* vm);
 void mod_os_register(VM* vm);
 void mod_pp_register(VM* vm);
 void mod_std_register(VM* vm);
+void mod_fs_register(VM* vm);
+void mod_types_register(VM* vm);
+
+/*
+ * modules/types.c: the typed arrays of lib/types.pp (Int8Array ... Float64Array).
+ * Fixed length, elements stored as raw C numbers, zero-initialised.
+ */
+typedef enum { TA_I8, TA_I16, TA_I32, TA_I64, TA_F32, TA_F64 } TypedArrayKind;
+typedef struct {
+    ObjInstance base;
+    TypedArrayKind kind;
+    int64_t length;
+    void* data; /* length elements of the kind's C type (int8_t, ..., double) */
+} ObjTypedArray;
+bool is_typed_array(Value v);
+ObjTypedArray* typed_array_new(VM* vm, TypedArrayKind kind, int64_t length);
 
 /* modules/pp.c: directory of the file the running code is written in (caller frees) */
 char* vm_script_dir(VM* vm);

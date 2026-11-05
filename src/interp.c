@@ -90,6 +90,38 @@ void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impl
     vm->nnative_parts++;
 }
 
+/*
+ * Types a library module implements in C, bound in its .pp file by `native type Name`:
+ *
+ *     static const NativeClass TYPES[] = {{"Int8Array", sizeof(ObjTypedArray), "types:int8array", ...}, {NULL}};
+ *     vm_register_native_types(vm, "types", TYPES);              // lib/types.pp
+ *
+ * The types are permanent (never collected) and exist before the module loads,
+ * so C code can make values of them with vm_native_type + instance_new.
+ */
+void vm_register_native_types(VM* vm, const char* module, const NativeClass* classes) {
+    for (const NativeClass* c = classes; c->name; c++) {
+        ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
+        t->obj.kind = OBJ_NATIVE_TYPE;
+        t->obj.permanent = true;
+        t->name = str_cintern(vm, c->name);
+        t->which = NT_CLASS;
+        t->cls = c;
+        t->lib_module = module;
+        table_init(&t->impl_fns);
+        vm->native_types = pp_realloc(vm->native_types, sizeof(ObjNativeType*) * (size_t)(vm->nnative_types + 1));
+        vm->native_types[vm->nnative_types++] = t;
+    }
+}
+
+ObjNativeType* vm_native_type(VM* vm, const char* module, const char* name) {
+    for (int i = 0; i < vm->nnative_types; i++) {
+        ObjNativeType* t = vm->native_types[i];
+        if (strcmp(t->lib_module, module) == 0 && strcmp(t->cls->name, name) == 0) return t;
+    }
+    return NULL;
+}
+
 void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init) {
     vm->native_modules = pp_realloc(vm->native_modules, sizeof(NativeModule) * (size_t)(vm->nnative_modules + 1));
     vm->native_modules[vm->nnative_modules].name = name;
@@ -201,6 +233,8 @@ static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
         m = AS_ENUMV(recv)->en->module;
     } else if (IS_KIND(recv, OBJ_MAP) || IS_KIND(recv, OBJ_SET)) {
         m = (IS_KIND(recv, OBJ_MAP) ? vm->t_map : vm->t_set)->module;
+    } else if (IS_KIND(recv, OBJ_INSTANCE)) {
+        m = AS_INSTANCE(recv)->type->module;
     }
     Value v;
     if (!m || !module_member(m, name, &v) || !IS_KIND(v, OBJ_OVERLOAD)) return NULL;
@@ -218,6 +252,7 @@ static Table* receiver_impl_table(Value recv) {
     if (IS_KIND(recv, OBJ_ENUM_VALUE)) return &AS_ENUMV(recv)->en->impl_fns;
     if (IS_KIND(recv, OBJ_MAP)) return &the_vm->t_map->impl_fns;
     if (IS_KIND(recv, OBJ_SET)) return &the_vm->t_set->impl_fns;
+    if (IS_KIND(recv, OBJ_INSTANCE)) return &AS_INSTANCE(recv)->type->impl_fns;
     return NULL;
 }
 
@@ -625,7 +660,13 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             }
             return args[0];
         }
-        case OBJ_NATIVE_TYPE: return native_type_construct(vm, (ObjNativeType*)o, argc, args, line);
+        case OBJ_NATIVE_TYPE: {
+            /* std:Map(), types:Int8Array(4), types:Int8Array{}: types are not constructors */
+            ObjNativeType* t = (ObjNativeType*)o;
+            const char* ctor = t->which == NT_MAP ? "std:map" : t->which == NT_SET ? "std:set" : t->cls->constructor;
+            if (ctor) rt_error(vm, line, "type '%s' cannot be called; make a value with %s(...)", t->name->chars, ctor);
+            rt_error(vm, line, "type '%s' cannot be called", t->name->chars);
+        }
         default: rt_error(vm, line, "a value of type %s is not callable", value_type_name(callee));
     }
 }
@@ -697,6 +738,8 @@ static Value get_index(VM* vm, Value obj, Value idx, int line) {
         ObjTuple* t = AS_TUPLE(obj);
         return t->items[norm_index(vm, idx, t->count, line)];
     }
+    if (IS_KIND(obj, OBJ_INSTANCE) && AS_INSTANCE(obj)->type->cls->get)
+        return AS_INSTANCE(obj)->type->cls->get(vm, AS_INSTANCE(obj), idx, line);
     rt_error(vm, line, "no overload of '[]' accepts (%s, %s)", value_type_name(obj), value_type_name(idx));
 }
 
@@ -736,6 +779,10 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
         return;
     }
     if (IS_KIND(obj, OBJ_TUPLE)) rt_error(vm, line, "a tuple cannot be changed; build a new one with tuple(...)");
+    if (IS_KIND(obj, OBJ_INSTANCE) && AS_INSTANCE(obj)->type->cls->set) {
+        AS_INSTANCE(obj)->type->cls->set(vm, AS_INSTANCE(obj), idx, v, line);
+        return;
+    }
     rt_error(vm, line, "no overload of '[]=' accepts (%s, %s, %s)", value_type_name(obj), value_type_name(idx),
              value_type_name(v));
 }
@@ -748,14 +795,21 @@ static Value n_index_set(VM* vm, int argc, Value* a) {
     return void_val();
 }
 
-/* [](any, any) / []=(any, any, any): tuples (which have no other type to name here), and the error for everything else */
+/*
+ * [](any, any) / []=(any, any, any): tuples and native class instances (which have no other type to name here),
+ * and the error for everything else
+ */
 static Value n_index_get_any(VM* vm, int argc, Value* a) {
-    if (IS_KIND(a[0], OBJ_TUPLE)) return get_index(vm, a[0], a[1], 0);
+    if (IS_KIND(a[0], OBJ_TUPLE) || IS_KIND(a[0], OBJ_INSTANCE)) return get_index(vm, a[0], a[1], 0);
     rt_error(vm, 0, "no overload of '[]' accepts (%s, %s)", value_type_name(a[0]), value_type_name(a[1]));
 }
 
 static Value n_index_set_any(VM* vm, int argc, Value* a) {
     if (IS_KIND(a[0], OBJ_TUPLE)) rt_error(vm, 0, "a tuple cannot be changed; build a new one with tuple(...)");
+    if (IS_KIND(a[0], OBJ_INSTANCE)) {
+        set_index(vm, a[0], a[1], a[2], 0);
+        return void_val();
+    }
     rt_error(vm, 0, "no overload of '[]=' accepts (%s, %s, %s)", value_type_name(a[0]), value_type_name(a[1]),
              value_type_name(a[2]));
 }
@@ -766,9 +820,15 @@ static Value n_index_set_any(VM* vm, int argc, Value* a) {
  * a built-in collection (no impl or module functions of its own).
  */
 static bool builtin_bracket(VM* vm, ObjEnv* env, ObjString* name, Value recv) {
-    if (IS_KIND(recv, OBJ_OBJECT) ? AS_OBJECT(recv)->tag != NULL
-                                  : !(IS_KIND(recv, OBJ_ARRAY) || IS_KIND(recv, OBJ_STRING) || IS_KIND(recv, OBJ_TUPLE)))
+    if (IS_KIND(recv, OBJ_INSTANCE)) {
+        /* a native class with its own get / set (typed arrays), unless its module or an impl gave it a [] / []= */
+        const NativeClass* cls = AS_INSTANCE(recv)->type->cls;
+        if (name == vm->s_index ? !cls->get : !cls->set) return false;
+        if (receiver_module_set(vm, recv, name) || receiver_impl_set(recv, name)) return false;
+    } else if (IS_KIND(recv, OBJ_OBJECT) ? AS_OBJECT(recv)->tag != NULL
+                                         : !(IS_KIND(recv, OBJ_ARRAY) || IS_KIND(recv, OBJ_STRING) || IS_KIND(recv, OBJ_TUPLE))) {
         return false;
+    }
     if (vm->index_overloads == 0) return true; /* nobody declared a [] or []= anywhere */
     Entry* e = env_find(env, name, NULL);
     Obj* builtin = name == vm->s_index ? vm->index_builtin : vm->index_set_builtin;
@@ -1186,16 +1246,21 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     vm->sp = base;
 }
 
-/* native type map<K, V>: bind a type the interpreter implements (in a library module only) */
+/* native type Map<K, V>: bind a type the interpreter implements (in a library module only) */
 static void exec_native_type(VM* vm, Node* n, ObjEnv* env) {
     ObjString* name = n->as.type_decl.name;
     ObjModule* m = vm->cur_module;
-    if (!m || !m->natives)
+    if (!m || !m->lib_path)
         rt_error(vm, n->line, "native type '%s' can only be declared in a library module with a C half", name->chars);
     ObjNativeType* t = NULL;
-    if (str_equals(name, "map")) t = vm->t_map;
-    else if (str_equals(name, "set")) t = vm->t_set;
-    if (!t) rt_error(vm, n->line, "there is no native type named '%s' (the interpreter provides map and set)", name->chars);
+    if (str_equals(name, "Map")) t = vm->t_map;
+    else if (str_equals(name, "Set")) t = vm->t_set;
+    else t = vm_native_type(vm, m->lib_path, name->chars);
+    if (!t)
+        rt_error(vm, n->line,
+                 "there is no native type named '%s' (the interpreter provides Map and Set; other types come from the "
+                 "module's C half, registered with vm_register_native_types)",
+                 name->chars);
     if (n->as.type_decl.ngenerics != t->ngenerics)
         rt_error(vm, n->line, "native type '%s' takes %d generic parameter(s), but %d were declared", name->chars, t->ngenerics,
                  n->as.type_decl.ngenerics);
@@ -1583,6 +1648,14 @@ static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
         ns->params[i].type = concrete_type(vm, req->params[i].type, it->env, b);
     }
     ns->ret = concrete_type(vm, req->ret, it->env, b);
+    /*
+     * an unbound generic (V of <K, V>impl) concretizes to NULL = any; keep it as an explicit `any`
+     * so the default must still return a value (a NULL return type skips the check entirely)
+     */
+    if (req->ret && !ns->ret) {
+        static Type any_type = {.kind = TY_PRIM, .prim = PRIM_ANY};
+        ns->ret = &any_type;
+    }
     ObjFunction* fn = function_new(vm, ns, it->bodies[r], it->env);
     fn->owns_sig = true;
     return fn;
@@ -1959,6 +2032,14 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
             idx++;
             HANDLE_STATUS()
         }
+    } else if (IS_KIND(it, OBJ_INSTANCE) && AS_INSTANCE(it)->type->cls->length && AS_INSTANCE(it)->type->cls->get) {
+        /* for x in arr / for i, x in arr: the class's length and get; the length is re-read each step */
+        ObjInstance* inst = AS_INSTANCE(it);
+        const NativeClass* cls = inst->type->cls;
+        for (int64_t i = 0; i < cls->length(inst); i++) {
+            st = run_iteration(vm, n, env, int_val(i), cls->get(vm, inst, int_val(i), n->line), flags);
+            HANDLE_STATUS()
+        }
     } else if (IS_KIND(it, OBJ_OBJECT)) {
         ObjObject* o = AS_OBJECT(it);
         for (int i = 0; i < o->fields.count; i++) {
@@ -2115,14 +2196,25 @@ static void exec_export(VM* vm, Node* n) {
  * import name     - native module `name`, or name.pp in a library directory
  * import "./path" - a file relative to the importing file (.pp is optional)
  */
+/* registered module name `a` ("os:fs") names library module path `b` ("os/fs") */
+static bool lib_path_is(const char* a, const char* b) {
+    while (*a && *b && (*a == *b || (*a == ':' && (*b == '/' || *b == '\\')))) a++, b++;
+    return !*a && !*b;
+}
+
 /* the C bodies registered for library module `path` ("os/fs" is os:fs), or NULL */
 static const NativeImpl* native_impls_for(VM* vm, const char* path) {
-    for (int i = 0; i < vm->nnative_parts; i++) {
-        const char* a = vm->native_parts[i].module;
-        const char* b = path;
-        while (*a && *b && (*a == *b || (*a == ':' && (*b == '/' || *b == '\\')))) a++, b++;
-        if (!*a && !*b) return vm->native_parts[i].impls;
-    }
+    for (int i = 0; i < vm->nnative_parts; i++)
+        if (lib_path_is(vm->native_parts[i].module, path)) return vm->native_parts[i].impls;
+    return NULL;
+}
+
+/* the name library module `path` registered its C half under (functions or types), or NULL */
+static const char* native_lib_path(VM* vm, const char* path) {
+    for (int i = 0; i < vm->nnative_parts; i++)
+        if (lib_path_is(vm->native_parts[i].module, path)) return vm->native_parts[i].module;
+    for (int i = 0; i < vm->nnative_types; i++)
+        if (lib_path_is(vm->native_types[i]->lib_module, path)) return vm->native_types[i]->lib_module;
     return NULL;
 }
 
@@ -2215,7 +2307,10 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
     char* name = pp_strndup(base, (size_t)blen);
     ObjModule* m = module_new(vm, name, abs, vm->builtins);
     free(name);
-    if (!is_file) m->natives = native_impls_for(vm, path);
+    if (!is_file) {
+        m->natives = native_impls_for(vm, path);
+        m->lib_path = native_lib_path(vm, path);
+    }
     table_set(&vm->modules, key, obj_val(m)); /* cached before running: cyclic imports see a partial module */
     run_program(vm, program, m, m->env, abs, NULL);
     return m;
@@ -2339,12 +2434,12 @@ VM* vm_new(int argc, char** argv) {
     };
     for (int i = 0; precs[i].op; i++) table_set(&vm->prec, str_cintern(vm, precs[i].op), float_val(precs[i].prec));
 
-    /* std:map and std:set are permanent: outside the object list, never collected */
+    /* std:Map and std:Set are permanent: outside the object list, never collected */
     static const struct {
         const char* name;
         NativeTypeKind which;
         int ngenerics;
-    } ntypes[] = {{"map", NT_MAP, 2}, {"set", NT_SET, 1}};
+    } ntypes[] = {{"Map", NT_MAP, 2}, {"Set", NT_SET, 1}};
     for (int i = 0; i < 2; i++) {
         ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
         t->obj.kind = OBJ_NATIVE_TYPE;
@@ -2373,6 +2468,8 @@ VM* vm_new(int argc, char** argv) {
     mod_os_register(vm);
     mod_pp_register(vm);
     mod_std_register(vm);
+    mod_fs_register(vm);
+    mod_types_register(vm);
 
     jmp_buf jb;
     vm->err_jmp = &jb;

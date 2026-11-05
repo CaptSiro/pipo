@@ -90,9 +90,10 @@ typedef enum {
     OBJ_MODULE,
     OBJ_ENV,          /* scope */
     OBJ_TUPLE,        /* fixed size, immutable: tuple(1, "a") */
-    OBJ_MAP,          /* std:map<K, V>, an ObjMap */
-    OBJ_SET,          /* std:set<T>, an ObjMap without values */
-    OBJ_NATIVE_TYPE   /* a type implemented in C (std:map, std:set), bound by `native type` */
+    OBJ_MAP,          /* std:Map<K, V>, an ObjMap */
+    OBJ_SET,          /* std:Set<T>, an ObjMap without values */
+    OBJ_NATIVE_TYPE,  /* a type implemented in C (std:Map, std:Set, types:Int8Array, ...), bound by `native type` */
+    OBJ_INSTANCE      /* a value of a NativeClass type: ObjInstance followed by the class's own fields */
 } ObjKind;
 
 struct Obj {
@@ -111,6 +112,7 @@ struct Obj {
 #define AS_ENUMV(v) ((ObjEnumValue*)(v).as.o)
 #define AS_TUPLE(v) ((ObjTuple*)(v).as.o)
 #define AS_MAP(v) ((ObjMap*)(v).as.o)
+#define AS_INSTANCE(v) ((ObjInstance*)(v).as.o)
 
 struct ObjString {
     Obj obj;
@@ -182,17 +184,53 @@ typedef struct {
     int index_cap; /* power of two, or 0 */
 } ObjMap;
 
-typedef enum { NT_MAP, NT_SET } NativeTypeKind;
+typedef enum { NT_MAP, NT_SET, NT_CLASS } NativeTypeKind;
 
-/* std:map / std:set as a type: matches OBJ_MAP / OBJ_SET values, calling it constructs one */
-typedef struct {
+typedef struct ObjNativeType ObjNativeType;
+typedef struct ObjInstance ObjInstance;
+
+/*
+ * A type a module's C half implements (types:Int8Array, fs:File, ...). The
+ * module registers its classes with vm_register_native_types, and its .pp file
+ * binds each one with `native type Name`. A value of the type is an
+ * ObjInstance: the header below, followed by the fields of the class's own
+ * struct (`size` bytes in all). Instances must not hold references to other
+ * GC objects (the collector does not look inside them); keep plain C data.
+ *
+ * A native type cannot be called: values are made by ordinary (native)
+ * functions of the module, named in snake_case or flatcase (types:int8array),
+ * which build them with instance_new. Every hook is optional.
+ */
+typedef struct NativeClass {
+    const char* name;        /* the name `native type` binds, PascalCase: "Int8Array" */
+    size_t size;             /* sizeof the instance struct, ObjInstance header included */
+    const char* constructor; /* the function that makes values, for error messages: "types:int8array" */
+    void (*free)(ObjInstance* self);                        /* release what the instance owns (not the object) */
+    void (*format)(StrBuf* sb, ObjInstance* self);          /* print / str(); default <Name> */
+    bool (*equals)(ObjInstance* a, ObjInstance* b);         /* ==, called for two instances of the same class; default identity */
+    ObjInstance* (*copy)(VM* vm, ObjInstance* self);        /* copy(x); default returns x itself */
+    int64_t (*length)(ObjInstance* self);                   /* #x, and the number of steps of `for` */
+    Value (*get)(VM* vm, ObjInstance* self, Value index, int line);            /* x[i], and `for` (with ints 0...#x) */
+    void (*set)(VM* vm, ObjInstance* self, Value index, Value v, int line);    /* x[i] = v */
+    const void* data; /* anything the class's hooks want to share */
+} NativeClass;
+
+/* std:Map / std:Set (or a NativeClass) as a type: matches OBJ_MAP / OBJ_SET (OBJ_INSTANCE) values. It is not callable. */
+struct ObjNativeType {
     Obj obj;
     ObjString* name;
     NativeTypeKind which;
     int ngenerics;
     ObjModule* module; /* the module whose `native type` bound it (lib/std.pp) */
     Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
-} ObjNativeType;
+    const NativeClass* cls;  /* NT_CLASS only */
+    const char* lib_module;  /* NT_CLASS only: the library module that may bind it ("types") */
+};
+
+struct ObjInstance {
+    Obj obj;
+    ObjNativeType* type;
+};
 
 /*
  * iterates start, start+step, ... while (step > 0 ? v < end : v > end).
@@ -315,7 +353,7 @@ struct ObjTypeDef {
     Table impl_fns;    /* name -> ObjOverload: functions `impl` found for this type, searched by dot calls */
 };
 
-/* `impl Iface<args> for target`, `<K, V>impl Index<K, V> for std:map<K, V>` */
+/* `impl Iface<args> for target`, `<K, V>impl Index<K, V> for std:Map<K, V>` */
 typedef struct {
     Type* target;
     ObjEnv* env; /* where target and args resolve */
@@ -358,6 +396,7 @@ struct ObjModule {
     ObjEnv* env;
     Table exports; /* exported name -> name of the symbol in env (string value) */
     const NativeImpl* natives; /* C bodies for its `native function`s, or NULL */
+    const char* lib_path;      /* the name its C half was registered under ("types"), or NULL */
 };
 
 struct ObjEnv {
@@ -394,6 +433,7 @@ bool module_member(ObjModule* m, ObjString* name, Value* out);
 int64_t range_length(ObjRange* r);
 
 ObjTuple* tuple_new(VM* vm, int count);
+ObjInstance* instance_new(VM* vm, ObjNativeType* type); /* zeroed, type->cls->size bytes */
 bool value_hash(Value v, uint32_t* out); /* false: not hashable (array, object, function, ...) */
 ObjMap* map_new(VM* vm, ObjKind kind);   /* OBJ_MAP or OBJ_SET */
 MapEntry* map_find(ObjMap* m, Value key, uint32_t hash);

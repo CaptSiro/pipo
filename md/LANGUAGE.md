@@ -159,7 +159,8 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `object range function type` | any record / range / callable / type    |
 | `T[]`                   | array of T                                   |
 | `tuple<A, B, ...>`      | tuple: exactly these elements, in this order (at least one) |
-| `std:map<K, V>`, `std:set<T>` | hash map / set from `lib/std.pp`; bare `std:map` is any map |
+| `std:Map<K, V>`, `std:Set<T>` | hash map / set from `lib/std.pp`; bare `std:Map` is any map; made by `std:map(...)` / `std:set(...)` |
+| `types:Int8Array` ... `types:Float64Array` | fixed-length typed arrays from `lib/types.pp`, made by `types:int8array(length)` ... (see [PACKAGES.md](PACKAGES.md#the-types-module)) |
 | `T?`                    | `Option<T>`                                  |
 | `A \|\| B`              | union                                        |
 | `{ string name, int age }` | record                                    |
@@ -397,7 +398,7 @@ parameters to the interface's:
 ```
 <T>type Stack = { T[] items }
 <T>impl std:Index<int, T> for Stack<T>          // indexing a Stack<string> gives strings
-<K, V>impl Index<K, V> for map<K, V>            // in lib/std.pp
+<K, V>impl Index<K, V> for Map<K, V>            // in lib/std.pp
 ```
 
 The impl's generics are bound by the value being checked, so a parameter typed
@@ -488,19 +489,19 @@ xs[1...3]                                  // a slice
 
 ```
 export <K, V>interface Index {
-    function find(Index collection, K key) -> V?
+    function get(Index collection, K key) -> V?
     function put(Index collection, K key, V value) -> void
-    function [](Index collection, K key) -> V { ... }              // find(key), or an error naming the key
+    function [](Index collection, K key) -> V { ... }              // get(key), or an error naming the key
     function []=(Index collection, K key, V value) -> void { ... } // put(key, value)
 }
-<K, V>impl Index<K, V> for map<K, V>
+<K, V>impl Index<K, V> for Map<K, V>
 ```
 
-A type only writes `find` and `put`; `[]` and `[]=` come from the defaults:
+A type only writes `get` and `put`; `[]` and `[]=` come from the defaults:
 
 ```
 type Board = { int width, string[] cells }
-function find(Board b, tuple<int, int> at) -> string? { ... }
+function get(Board b, tuple<int, int> at) -> string? { ... }
 function put(Board b, tuple<int, int> at, string value) -> void { ... }
 impl std:Index<tuple<int, int>, string> for Board
 
@@ -508,7 +509,7 @@ board[tuple(2, 1)] = "@"
 <K, V>function show(std:Index<K, V> c, K key) -> string { return str(c[key]) }
 ```
 
-A missing key is the error `map has no key "b" (find(key) gives an Option instead)`.
+A missing key is the error `Map has no key "b"`.
 
 **Decision:** `#s`, `s[i]` and `slice` work on bytes. `for` and `chars()` work on
 UTF-8 code points.
@@ -553,12 +554,12 @@ for i, item in entry { ... }
 ```
 import std
 
-let std:map<string, int> ages = std:map()
+let std:Map<string, int> ages = std:map()
 ages.put("john", 22)
 ages["anna"] = 31                   // the same as put (std:Index)
 ages["anna"]                        // 31; a missing key is an error
-ages.find("bob")                    // none(): find returns an Option
-ages.find("bob").unwrap_or(0)       // 0
+ages.get("bob")                    // none(): get returns an Option
+ages.get("bob").unwrap_or(0)       // 0
 ages["anna"] += 1                   // 32
 "john" in ages                      // true, also ages.has("john")
 ages.remove("john")                 // some(22), none() if it was not there
@@ -566,17 +567,17 @@ for name, age in ages { }           // for name in ages: keys only
 ages.keys(), ages.values()          // arrays, in insertion order
 ages.entries()                      // [tuple("anna", 31)]
 
-const std:set<int> seen = std:set([1, 2, 2])     // set{1, 2}
+const std:Set<int> seen = std:set([1, 2, 2])     // Set{1, 2}
 seen.add(3)                         // true; false when it was already there
 seen.remove(1)                      // true; false when it was not there
 2 in seen, seen.has(2)
 a | b, a & b, a - b                 // union, intersection, difference (also a.union(b), ...)
 ```
 
-| | `std:map<K, V>` | `std:set<T>` |
+| | `std:Map<K, V>` | `std:Set<T>` |
 |-|-----------------|--------------|
 | create | `std:map()`, `std:map([tuple(k, v), ...])`, `std:map({ a: 1 })`, `std:map(other)` | `std:set()`, `std:set([...])`, `std:set(0...10)`, `std:set(other)` |
-| read | `find(m, k) -> V?`, `m[k]`, `has`, `k in m` | `has`, `x in s` |
+| read | `get(m, k) -> V?`, `m[k]`, `has`, `k in m` | `has`, `x in s` |
 | change | `put(m, k, v)`, `m[k] = v`, `remove(m, k) -> V?`, `clear` | `add(s, x) -> bool`, `remove(s, x) -> bool`, `clear` |
 | all | `keys`, `values`, `entries -> tuple<K, V>[]`, `#m`, `for k, v in m` | `values -> T[]`, `#s`, `for x in s`, `for i, x in s` |
 
@@ -588,18 +589,21 @@ a | b, a & b, a - b                 // union, intersection, difference (also a.u
   error that suggests a tuple. Keys are compared with `==`, so `1` and `1.0` are
   the same key.
 * Both keep **insertion order** (printing, `for`, `keys()`). Putting an existing
-  key keeps its place. `==` ignores the order. They print as `map{"a": 1}` and
-  `set{1, 2}`.
+  key keeps its place. `==` ignores the order. They print as `Map{"a": 1}` and
+  `Set{1, 2}`, and `type_of` gives `"Map"` / `"Set"`.
 * Like arrays, dispatch looks only at the first entry, and a declaration
-  (`const std:map<string, int> m = ...`) checks them all. A generic `K` is bound
-  by the first key, so `m.find(1.0)` and `m[1.0]` on a map of ints find no
+  (`const std:Map<string, int> m = ...`) checks them all. A generic `K` is bound
+  by the first key, so `m.get(1.0)` and `m[1.0]` on a map of ints find no
   overload, just as `1.0 in [1]` doesn't.
 * Adding or removing entries while a `for` loop walks the same map is allowed,
   but which of the new entries the loop visits is not specified.
-* The types are declared in `lib/std.pp` with `native type map<K, V>`, so they are
-  written `std:map<K, V>`. Importing them by name (`import std -> { map }`) would
-  hide the built-in `map(array, f)` in that file, so use the `std:` prefix.
-* Interfaces work as for other types: `impl std:Str for std:map`,
+* The types are declared in `lib/std.pp` with `native type Map<K, V>`, so they are
+  written `std:Map<K, V>` (types are PascalCase). A type is not callable:
+  `std:Map()` and `std:Map{}` are errors. Values come from the constructor
+  functions `std:map(...)` and `std:set(...)` (constructors are snake_case or
+  flatcase). Importing `map` by name (`import std -> { map }`) merges it with the
+  built-in `map(array, f)`, like any imported function.
+* Interfaces work as for other types: `impl std:Str for std:Map`,
   `impl std:Str for tuple<int, int>`. A map implements `std:Index`, which is
   where `m[k]` and `m[k] = v` come from.
 

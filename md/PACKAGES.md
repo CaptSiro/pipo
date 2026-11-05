@@ -162,10 +162,127 @@ io:print("hello", 42)        // like console.log / System.out.println
 | `args() -> string[]` | the script path, then the arguments after it |
 | `join(parts...) -> string` | joins with the platform separator; empty parts are skipped, an absolute part starts over |
 | `join_pp(parts...) -> string` | `join(pp:dir(), parts...)`: a path next to the file the call is written in |
-| `fs:exists(path) -> bool` | a file or directory exists |
-| `fs:is_dir(path) -> bool` | the path is a directory |
 
-`os:fs` is a native submodule: `import os:fs` binds it as `fs`.
+## The `types` module
+
+Typed arrays: fixed-length arrays of raw numbers, like Java's `byte[]` /
+`int[]` or JavaScript's `Int8Array`. `lib/types.pp` declares them and
+`src/modules/types.c` implements them.
+
+```
+import types
+
+const buf = types:int8array(4)        // Int8Array[0, 0, 0, 0]: the length never changes
+buf[0] = 127
+buf[-1] = -128                        // negative indices count from the end
+buf[1] = 128                          // error: 128 does not fit in Int8Array (-128...=127)
+buf[1] = 1.5                          // error: Int8Array holds ints, got float
+types:float32array([1, 2.5])          // a copy of an array: Float32Array[1.0, 2.5]
+types:int64array(buf)                 // or of another typed array
+types:Int8Array(4)                    // error: a type is not callable (types:Int8Array{} neither)
+```
+
+| type | constructor | elements |
+|------|-------------|----------|
+| `Int8Array`, `Int16Array`, `Int32Array`, `Int64Array` | `int8array`, `int16array`, `int32array`, `int64array` | ints of 8 to 64 bits; only ints that fit |
+| `Float32Array`, `Float64Array` | `float32array`, `float64array` | floats; ints are converted |
+| `IntArray`, `FloatArray`, `TypedArray` | | unions of the above, for parameters |
+
+* The constructor takes the length (the elements start at 0), an array, or a
+  typed array to copy. The constructors are flatcase, matching the type names
+  (the other modules use snake_case). Every value written is checked: a float or an int out of
+  range is an error, never silently cut down.
+* `#a`, `a[i]`, `a[i] = v`, `a[i] += v`, `for x in a`, `for i, x in a`, `copy(a)`,
+  `==` (same type, length and elements) and printing (`Int8Array[1, 2]`) work
+  like on arrays. Reading gives an `int` or a `float`.
+* There is no `push`: the length is fixed when the array is made.
+
+| function | |
+|----------|-|
+| `fill(a, v)`, `fill(a, v, start, end)` | sets every element / the ones in `[start, end)` |
+| `slice(a, start)`, `slice(a, start, end)` | a new typed array of the same kind (negative indices as for arrays) |
+| `to_array(a)` | the elements as `int[]` / `float[]` |
+| `copy_into(src, src_pos, dst, dst_pos, length)` | like Java's `System.arraycopy`; same kinds, ranges may overlap |
+| `element_size(a)` | bytes per element |
+| `bytes(string) -> Int8Array` | the UTF-8 bytes of a string |
+| `text(bytes)`, `text(bytes, start, end)` | bytes read back as a string |
+
+The functions are exported, not `global`: call them as dot calls (`buf.fill(0)`,
+found in the module that declared the receiver's type) or as `types:fill(buf, 0)`.
+
+## The `fs` module
+
+Files and directories, modelled on Java's `java.io.File` and its streams.
+A `File` or `Directory` holds a path; nothing is opened or created until a
+function runs, and each function looks at the file system again. Contents are
+bytes in a `types:Int8Array`.
+
+```
+import fs
+import types
+
+const dir = fs:directory("data")
+dir.create_all()                              // like Java's mkdirs
+const f = dir.file("order.txt")               // or fs:file("data", "order.txt")
+f.write("hello")                              // success(5)
+f.read_text()                                 // success("hello")
+f.read()                                      // success(Int8Array[104, 101, 108, 108, 111])
+
+const input = f.open_read().unwrap()          // a stream: read a piece at a time
+const buf = types:int8array(4096)
+let n = input.read(buf)                       // bytes read, -1 at the end
+while n != -1 {
+    io:write(buf.text(0, n))
+    n = input.read(buf)
+}
+input.close()
+```
+
+What can fail for reasons outside the program (opening, reading or writing a
+whole file, listing a directory) returns an `Error` whose failure is a message
+such as `cannot open 'x.txt': No such file or directory`. Simple queries answer
+like Java does: `exists()` is false, `size()` is 0 and `delete()` is false.
+
+| plain paths | |
+|-------------|-|
+| `separator`, `path_separator` | constants: `"\"` / `";"` on Windows, `"/"` / `":"` elsewhere |
+| `exists(path)`, `is_dir(path)`, `is_file(path)` | what is at a path |
+| `cwd() -> Directory` | the working directory |
+
+| `File` and `Directory` | |
+|------------------------|-|
+| `file(path)`, `file(parent, name)` | the constructor (the type `File` is not callable); `parent` is a string or a `Directory`; `directory(...)` the same |
+| `d.file(name)`, `d.dir(name)` | `file(d, name)`, `directory(d, name)` |
+| `path()`, `name()` | the path as written, its last part |
+| `parent() -> Directory?` | the path without its last part, `none()` for `"x.txt"` |
+| `absolute()` | the same kind of value with an absolute path |
+| `exists()`, `modified()` | exists; last change in ms since 1970 (0 when missing) |
+| `rename(to)` | `to` is a string or the same kind; false when it failed |
+
+| `File` | |
+|--------|-|
+| `is_file()`, `extension()`, `size()` | `"txt"` for `order.txt` (`""` for `.gitignore`); bytes |
+| `read() -> Error<types:Int8Array>`, `read_text() -> Error<string>` | the whole contents |
+| `write(data)`, `append(data) -> Error<int>` | `data` is a string or `types:Int8Array`; `append` creates the file |
+| `create() -> Error<bool>` | an empty file; `success(false)` when it already existed |
+| `delete() -> bool`, `copy_to(to) -> Error<int>` | |
+| `open_read() -> Error<InputStream>`, `open_write()`, `open_append() -> Error<OutputStream>` | streams |
+
+| `Directory` | |
+|-------------|-|
+| `is_dir()`, `create()`, `create_all()`, `delete()` | `create_all` makes missing parents; `delete` needs it empty |
+| `list() -> Error<string[]>`, `files() -> Error<File[]>`, `dirs() -> Error<Directory[]>` | the contents, sorted by name |
+
+| streams | |
+|---------|-|
+| `InputStream.read() -> int` | the next byte as 0...=255, -1 at the end |
+| `InputStream.read(buffer)`, `read(buffer, offset, length) -> int` | fills a `types:Int8Array`; bytes read, -1 at the end |
+| `InputStream.skip(n) -> int` | |
+| `OutputStream.write(byte)`, `write(data)`, `write(buffer, offset, length)`, `flush()` | `data` is a string or `types:Int8Array` |
+| `close()`, `is_open()`, `path()` | using a closed stream is an error; closing twice is not |
+
+Close streams when done. One that is dropped without `close()` is only closed
+when the garbage collector frees it, which may be much later.
 
 ## The `pp` module
 
@@ -194,7 +311,7 @@ The interpreter core keeps only the most basic functions internal
 | package | contents (ideas) |
 |---------|------------------|
 | `os`    | env vars, exit, processes (`platform` and `args()` exist) |
-| `os:fs` | directories, paths, file metadata (`exists`, `is_dir` exist) |
+| `fs`    | `File`, `Directory` and streams exist; more metadata, permissions, temp files |
 | `math`  | trig, logarithms, constants, random |
 | `time`  | wall clock, dates, sleep |
 | `json`  | parse / stringify |
@@ -241,6 +358,9 @@ it from `vm_new` (`src/interp.c`), next to `mod_io_register`. This is how
 `src/modules/os.c` is built.
 
 ### Mixed modules (.pp + C)
+
+[NATIVE_MODULES.md](NATIVE_MODULES.md) walks through a complete one (`fs`): its
+object types, allocation and freeing, constants, and file streams.
 
 A module can also be **mixed**: the `.pp` file in `lib/` is the module. It
 declares the types, interfaces, constants and exports, and leaves only some
@@ -306,9 +426,70 @@ void mod_geometry_register(VM* vm) {
 * Declarations without a C body fail when the module loads:
   `module 'geometry' has no native implementation named 'dot'`. C entries
   without a declaration are simply unused.
-* `native type map<K, V>` binds a type the interpreter implements in C. Only
-  `map` and `set` exist (the containers in `src/collections.c`), and the generic
-  parameters must match them. `lib/std.pp` uses it to export `std:map` and
-  `std:set`.
+* `native type Map<K, V>` binds a type implemented in C. `Map` and `Set` are the
+  interpreter's own (the containers in `src/collections.c`; the generic
+  parameters must match them), and `lib/std.pp` uses them to export `std:Map` and
+  `std:Set`. Any other name must be a class the module's C half registered, see
+  [Native types](#native-types).
 * Don't register a pure native module (`vm_register_native_module`) under the
   same name. It is found first, and the `.pp` file would be ignored.
+
+### Native types
+
+A mixed module can also implement **types** in C, like `lib/types.pp`
+(`Int8Array`, ...) and `lib/fs.pp` (`File`, ...). The C half describes each one
+with a `NativeClass` and registers them; the `.pp` file binds them by name:
+
+```
+// lib/geometry.pp
+export native type Buffer                        // PascalCase, and not callable
+export native function buffer(int size) -> Buffer  // the constructor: an ordinary native function
+export native function size(Buffer) -> int       // functions take and return it like any type
+```
+
+```c
+typedef struct {
+    ObjInstance base; /* the header every instance starts with */
+    int64_t size;
+    char* bytes;      /* plain C data only: the GC does not look inside instances */
+} ObjBuffer;
+
+/* buffer(int size) -> Buffer: geometry.pp already checked the argument */
+static Value geo_buffer(VM* vm, int argc, Value* a) {
+    if (a[0].as.i < 0) rt_error(vm, 0, "buffer(size): the size must not be negative");
+    ObjBuffer* b = (ObjBuffer*)instance_new(vm, vm_native_type(vm, "geometry", "Buffer")); /* zeroed */
+    b->size = a[0].as.i;
+    b->bytes = calloc((size_t)b->size + 1, 1);
+    return obj_val(b);
+}
+static void buf_free(ObjInstance* self) { free(((ObjBuffer*)self)->bytes); }
+
+static const NativeClass TYPES[] = {
+    {.name = "Buffer", .size = sizeof(ObjBuffer), .constructor = "geometry:buffer", .free = buf_free},
+    {.name = NULL},
+};
+
+void mod_geometry_register(VM* vm) {
+    vm_register_native_types(vm, "geometry", TYPES);
+    vm_register_native_impls(vm, "geometry", GEOMETRY);
+}
+```
+
+* A native type cannot be called: `geometry:Buffer(16)` and `geometry:Buffer{}`
+  are errors that name the `constructor` given in the class
+  (`type 'Buffer' cannot be called; make a value with geometry:buffer(...)`).
+  Values are made by the module's own functions with `instance_new`. The hooks
+  are optional: `free` (release what the instance
+  owns), `format` (printing, default `<Buffer>`), `equals` (`==` between two
+  instances of the class, default identity), `copy` (`copy(x)`, default `x`
+  itself), `length` (`#x`), `get` / `set` (`x[i]`, `x[i] = v`, and `for` when
+  `length` and `get` are both given) and `data`, a pointer the class's hooks can
+  share.
+* `type_of(x)` is the class name, and dot calls find the functions exported by the
+  module that bound the type, as for records.
+* The types exist from registration on, before the module is imported, so C code
+  can make values of another module's type: `vm_native_type(vm, "types", "Int8Array")`
+  gives the type to pass to `instance_new`. `src/modules/fs.c` uses
+  `typed_array_new` (declared in `vm.h`) to return file contents.
+* Instances must not hold references to GC objects (strings, arrays, ...); copy
+  what they need into C memory.

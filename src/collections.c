@@ -1,5 +1,5 @@
 /*
- * Tuples and the hash table behind std:map and std:set.
+ * Tuples and the hash table behind std:Map and std:Set.
  *
  * Keys are compared with values_equal, so the hash must agree with it:
  * 1 == 1.0, so an integral float hashes like the int it equals. Only values
@@ -225,7 +225,8 @@ static void map_add_all(VM* vm, ObjMap* m, Value from, int line) {
 
 /* std:map(), std:map([tuple("a", 1)]), std:set(), std:set([1, 2, 2]) */
 Value native_type_construct(VM* vm, ObjNativeType* t, int argc, Value* args, int line) {
-    if (argc > 1) rt_error(vm, line, "std:%s(...) takes at most one value to copy from, got %d", t->name->chars, argc);
+    if (argc > 1)
+        rt_error(vm, line, "std:%s(...) takes at most one value to copy from, got %d", t->which == NT_MAP ? "map" : "set", argc);
     ObjMap* m = map_new(vm, t->which == NT_MAP ? OBJ_MAP : OBJ_SET);
     if (argc == 1) {
         if (t->which == NT_MAP) map_add_all(vm, m, args[0], line);

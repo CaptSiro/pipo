@@ -28,7 +28,7 @@ static Binding* find_binding(Bindings* b, ObjString* name) {
 
 static bool is_callable_obj(Obj* o) {
     return o->kind == OBJ_FUNCTION || o->kind == OBJ_NATIVE || o->kind == OBJ_OVERLOAD ||
-           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF || o->kind == OBJ_NATIVE_TYPE;
+           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF;
 }
 
 bool same_kind(Value a, Value b) {
@@ -40,6 +40,7 @@ bool same_kind(Value a, Value b) {
     if (x->kind == OBJ_OBJECT) return ((ObjObject*)x)->tag == ((ObjObject*)y)->tag;
     if (x->kind == OBJ_ENUM_VALUE) return ((ObjEnumValue*)x)->en == ((ObjEnumValue*)y)->en;
     if (x->kind == OBJ_TUPLE) return ((ObjTuple*)x)->count == ((ObjTuple*)y)->count;
+    if (x->kind == OBJ_INSTANCE) return ((ObjInstance*)x)->type == ((ObjInstance*)y)->type;
     return true;
 }
 
@@ -141,11 +142,15 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
 static int min_score(int a, int b) { return a < b ? a : b; }
 
 /*
- * std:map<K, V> / std:set<T> (or bare std:map, any keys and values). Like an
+ * std:Map<K, V> / std:Set<T> (or bare std:Map, any keys and values). Like an
  * array, dispatch looks at the first entry only and a declaration (deep)
  * checks them all: 2 + the weakest element score, 3 when empty.
  */
 static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
+    if (nt->which == NT_CLASS) {
+        if (t->nargs) rt_error(vm, t->line, "type '%s' takes no type arguments", nt->name->chars);
+        return IS_KIND(v, OBJ_INSTANCE) && AS_INSTANCE(v)->type == nt ? 5 : 0;
+    }
     if (t->nargs && t->nargs != nt->ngenerics)
         rt_error(vm, t->line, "type 'std:%s' takes %d type argument(s) but %d were given", nt->name->chars, nt->ngenerics,
                  t->nargs);
@@ -388,7 +393,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
         }
         if (IS_KIND(pv, OBJ_TYPEDEF) || IS_KIND(pv, OBJ_ENUM)) return at->kind == TY_NAME && av.as.o == pv.as.o;
         if (IS_KIND(pv, OBJ_NATIVE_TYPE)) {
-            /* map<K, V> accepts map<K2, V2> when the arguments do; a bare std:map accepts any map */
+            /* Map<K, V> accepts Map<K2, V2> when the arguments do; a bare std:Map accepts any map */
             if (at->kind != TY_NAME || av.as.o != pv.as.o) return false;
             if (!pt->nargs || !at->nargs) return true;
             for (int i = 0; i < pt->nargs && i < at->nargs; i++)
@@ -452,7 +457,7 @@ static Signature* obj_sig(Obj* o) {
 static ObjEnv* obj_env(VM* vm, Obj* o) {
     switch (o->kind) {
         case OBJ_FUNCTION: return ((ObjFunction*)o)->closure;
-        /* a `native function` declared in a .pp module names that module's types (std:map in lib/std.pp) */
+        /* a `native function` declared in a .pp module names that module's types (std:Map in lib/std.pp) */
         case OBJ_NATIVE: return ((ObjNative*)o)->env ? ((ObjNative*)o)->env : vm->builtins;
         case OBJ_VARIANT_CTOR: return ((ObjVariantCtor*)o)->en->env;
         default: return vm->builtins;
@@ -477,7 +482,7 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
         return false;
     }
     if (c->kind == OBJ_TYPEDEF) return !impl_mode && (variadic || nargs == 1);
-    if (c->kind == OBJ_NATIVE_TYPE) return !impl_mode && (variadic || nargs <= 1);
+    if (c->kind == OBJ_NATIVE_TYPE) return false; /* not callable */
     Signature* sig = obj_sig(c);
     if (!sig) return false;
     if (variadic) return impl_mode ? sig->variadic : true;
@@ -591,6 +596,7 @@ static Type* sample_type(VM* vm, Value v) {
         case OBJ_NATIVE_TYPE: return prim_ctype(vm, PRIM_TYPE);
         case OBJ_MAP: return direct_ctype(vm, (Obj*)vm->t_map, vm->t_map->name); /* element types unknown: any map */
         case OBJ_SET: return direct_ctype(vm, (Obj*)vm->t_set, vm->t_set->name);
+        case OBJ_INSTANCE: return direct_ctype(vm, (Obj*)AS_INSTANCE(v)->type, AS_INSTANCE(v)->type->name);
         case OBJ_TUPLE: {
             Type* c = new_ctype(TY_TUPLE); /* element types unknown: tuple<any, ...> */
             c->nargs = AS_TUPLE(v)->count;
@@ -742,7 +748,7 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
                  app->nargs);
     for (int i = 0; i < it->nimpls; i++) {
         Impl* im = &it->impls[i];
-        /* <K, V>impl Index<K, V> for std:map<K, V>: matching the value binds K and V */
+        /* <K, V>impl Index<K, V> for std:Map<K, V>: matching the value binds K and V */
         Bindings ib;
         impl_bindings(im, &ib);
         Value tv;

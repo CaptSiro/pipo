@@ -10,8 +10,6 @@
  *
  * Kept deliberately small; it is also the example of a native submodule.
  */
-#include <sys/stat.h>
-
 #include "vm.h"
 
 #ifdef _WIN32
@@ -85,26 +83,6 @@ static Value os_join_pp(VM* vm, int argc, Value* a) {
     return join_args(vm, "join_pp", &sb, argc, a);
 }
 
-static Value fs_exists(VM* vm, int argc, Value* a) {
-    struct stat st;
-    return bool_val(stat(AS_STR(a[0])->chars, &st) == 0);
-}
-
-static Value fs_is_dir(VM* vm, int argc, Value* a) {
-    struct stat st;
-    return bool_val(stat(AS_STR(a[0])->chars, &st) == 0 && (st.st_mode & S_IFMT) == S_IFDIR);
-}
-
-static ObjModule* fs_init(VM* vm) {
-    ObjModule* m = module_new(vm, "fs", "<native os:fs>", vm->builtins);
-    vm_push(vm, obj_val(m));
-    def_native(vm, m->env, "exists", "(string path) -> bool", fs_exists);
-    def_native(vm, m->env, "is_dir", "(string path) -> bool", fs_is_dir);
-    module_export_all(m);
-    vm->sp--;
-    return m;
-}
-
 static ObjModule* os_init(VM* vm) {
     ObjModule* m = module_new(vm, "os", "<native os>", vm->builtins);
     vm_push(vm, obj_val(m));
@@ -112,7 +90,6 @@ static ObjModule* os_init(VM* vm) {
     def_native(vm, m->env, "args", "() -> string[]", os_args);
     def_native(vm, m->env, "join", "(...) -> string", os_join);
     def_native(vm, m->env, "join_pp", "(...) -> string", os_join_pp);
-    def_submodule(vm, m, "fs", fs_init);
     module_export_all(m);
     vm->sp--;
     return m;

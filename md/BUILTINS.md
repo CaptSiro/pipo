@@ -51,7 +51,7 @@ Not global. Printing and reading come from the `io` module
 
 `tuple(first, ...)` builds a tuple (`tuple<int, string>` for `tuple(1, "a")`); see
 [LANGUAGE.md](LANGUAGE.md#tuples). `copy` also copies maps and sets, and returns a
-tuple unchanged. The functions of `std:map` and `std:set` are in `lib/std.pp`
+tuple unchanged. The functions of `std:Map` and `std:Set` are in `lib/std.pp`
 ([LANGUAGE.md](LANGUAGE.md#maps-and-sets)).
 
 `sort`, `reverse`, `concat`, `slice`, `map` and `filter` return new arrays.

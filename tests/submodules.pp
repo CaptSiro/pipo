@@ -5,8 +5,6 @@ import "./modules/ui":shapes -> { area }
 import "./modules/ui":shapes -> geo
 import "./modules/ui":widgets
 import os
-import os:fs
-import os:fs -> { exists }
 
 // dot calls find area() in the module that declared Rect (ui:shapes)
 const ui:shapes:Rect r = ui:shapes:rect(2, 3)
@@ -23,6 +21,5 @@ io:print_nl(describe(r), ui:shapes, ui:shapes == shapes)
 // a sibling file that the package does not export
 io:print_nl(widgets:button("ok"))
 
-// native submodule
-io:print_nl(os:fs:exists("."), fs:is_dir("."), exists("definitely/missing/file"))
-io:print_nl(type_of(os:platform), type_of(os:args()), os:fs)
+// native module
+io:print_nl(type_of(os:platform), type_of(os:args()), os)

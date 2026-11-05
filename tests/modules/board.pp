@@ -9,8 +9,8 @@ export function board(int width, int height) -> Board {
     return Board({ width: width, cells: cells })
 }
 
-// only find and put are written: [] and []= are the interface's defaults
-function find(Board b, tuple<int, int> at) -> string? {
+// only get and put are written: [] and []= are the interface's defaults
+function get(Board b, tuple<int, int> at) -> string? {
     const i = at[1] * b:width + at[0]
     if i < 0 || i >= #b:cells { return none() }
     return some(b:cells[i])
@@ -24,6 +24,8 @@ impl std:Index<tuple<int, int>, string> for Board
 
 export function rows(Board b) -> string[] {
     const out = [].repeat(0)
-    for y in ...(#b:cells / b:width) { out.push(b:cells.slice(y * b:width, (y + 1) * b:width).join("")) }
+    for y in ...(#b:cells / b:width) {
+        out.push(b:cells.slice(y * b:width, (y + 1) * b:width).join(""))
+    }
     return out
 }

@@ -197,6 +197,7 @@ static Value n_len(VM* vm, int argc, Value* a) {
     if (IS_KIND(v, OBJ_RANGE)) return int_val(range_length(AS_RANGE(v)));
     if (IS_KIND(v, OBJ_TUPLE)) return int_val(AS_TUPLE(v)->count);
     if (IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET)) return int_val(AS_MAP(v)->live);
+    if (IS_KIND(v, OBJ_INSTANCE) && AS_INSTANCE(v)->type->cls->length) return int_val(AS_INSTANCE(v)->type->cls->length(AS_INSTANCE(v)));
     rt_error(vm, 0, "'#' expects a string, array, object, range, tuple, map or set, got %s", value_type_name(v));
 }
 
@@ -693,6 +694,8 @@ static Value n_copy(VM* vm, int argc, Value* a) {
             if (x->entries[i].live) map_put(r, x->entries[i].key, x->entries[i].hash, x->entries[i].value);
         return obj_val(r);
     }
+    if (IS_KIND(v, OBJ_INSTANCE) && AS_INSTANCE(v)->type->cls->copy)
+        return obj_val(AS_INSTANCE(v)->type->cls->copy(vm, AS_INSTANCE(v)));
     return v; /* tuples cannot change, so they need no copy */
 }
 

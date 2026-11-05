@@ -182,7 +182,7 @@ struct Node {
             InlineCache* ic2;
             InlineCache* ic3;
         } assign;
-        /* def NULL: `native type map<K, V>`, a type implemented in C */
+        /* def NULL: `native type Map<K, V>`, a type implemented in C */
         struct { ObjString* name; ObjString** generics; int ngenerics; Type* def; } type_decl;
         struct {
             ObjString* name;
@@ -216,7 +216,7 @@ struct Node {
             Type** parents; /* impl Parent for Name: the interfaces this one extends */
             int nparents;
         } iface;
-        /* <K, V>impl Index<K, V> for std:map<K, V>: generics are bound by the value being matched */
+        /* <K, V>impl Index<K, V> for std:Map<K, V>: generics are bound by the value being matched */
         struct { Type* iface; Type* target; ObjString** generics; int ngenerics; } impl;
         struct { ObjString* op; int rel; ObjString* other; } prec;
         struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;

@@ -3,5 +3,4 @@
 5.0 Rect
 2.0x3.0 <module shapes> true
 [ok] 4.0
-true true false
-string array <module fs>
+string array <module os>

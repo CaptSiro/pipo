@@ -73,7 +73,7 @@ interface   = generics? 'interface' ident generics? '{' (requirement | extends)*
 requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)? block?
                                                             block: default implementation, parameters need names
 extends     = 'impl' type 'for' ident                        ident: the interface's own name
-impl        = generics? 'impl' type 'for' type             <K, V>impl Index<K, V> for map<K, V>
+impl        = generics? 'impl' type 'for' type             <K, V>impl Index<K, V> for Map<K, V>
 enum_decl   = 'enum' type? ident enum_generics? '{' variant (','? variant)* ','? '}'
 enum_generics = '<' ident ('=' type)? (',' ident ('=' type)?)* '>'
 variant     = ident ('(' (type (',' type)*)? ')')? ('=' expression)?
@@ -89,7 +89,7 @@ type        = postfix_type ('||' postfix_type)*
 postfix_type = primary_type ('[' ']' | '?')*
 primary_type = prim
             | 'tuple' '<' type (',' type)* '>'                  type arguments required: tuple<int, string>
-            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, std:map<K, V>
+            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, std:Map<K, V>
             | 'function'
             | '{' (type ident ','?)* '}'                         record
             | '(' type ')'

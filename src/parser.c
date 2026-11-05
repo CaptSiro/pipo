@@ -1400,14 +1400,14 @@ static bool at_native(Parser* p) {
     if (!tok_is(t, T_IDENT, "native")) return false;
     Token* a = peek_at(p, 1);
     if (a->nl_before) return false;
-    if (tok_is(a, T_IDENT, "type")) return peek_at(p, 2)->kind == T_IDENT; /* native type map<K, V> */
+    if (tok_is(a, T_IDENT, "type")) return peek_at(p, 2)->kind == T_IDENT; /* native type Map<K, V> */
     return a->kind == T_FUNCTION || a->kind == T_STRING || (a->kind == T_OP && a->start[0] == '<');
 }
 
 /*
- * native type map<K, V>
+ * native type Map<K, V>
  *
- * Binds a type that is implemented in C (std:map, std:set). Only the types the
+ * Binds a type that is implemented in C (std:Map, std:Set). Only the types the
  * interpreter itself provides exist; the generic parameters must match them.
  */
 static Node* parse_native_type(Parser* p, Token* kw) {
@@ -1456,7 +1456,7 @@ static Node* parse_native(Parser* p) {
     return fn;
 }
 
-/* impl Iface for Type, <K, V>impl Index<K, V> for std:map<K, V>; the current token is `impl` */
+/* impl Iface for Type, <K, V>impl Index<K, V> for std:Map<K, V>; the current token is `impl` */
 static Node* parse_impl(Parser* p, ObjString** gens, int ngen) {
     Token* kw = advance(p);
     Node* n = new_node(S_IMPL, kw->line);

@@ -23,19 +23,36 @@ static int open_depth(const char* s) {
     char quote = 0;
     for (const char* p = s; *p; p++) {
         if (quote) {
-            if (*p == '\\' && p[1]) p++;
-            else if (*p == quote) quote = 0;
+            if (*p == '\\' && p[1]) {
+                p++;
+            } else if (*p == quote) {
+                quote = 0;
+            }
+
             continue;
         }
+
         if (p[0] == '/' && p[1] == '/') {
-            while (*p && *p != '\n') p++;
-            if (!*p) break;
+            while (*p && *p != '\n') {
+                p++;
+            }
+
+            if (!*p) {
+                break;
+            }
+
             continue;
         }
-        if (*p == '"' || *p == '\'') quote = *p;
-        else if (*p == '(' || *p == '[' || *p == '{') depth++;
-        else if (*p == ')' || *p == ']' || *p == '}') depth--;
+
+        if (*p == '"' || *p == '\'') {
+            quote = *p;
+        } else if (*p == '(' || *p == '[' || *p == '{') {
+            depth++;
+        } else if (*p == ')' || *p == ']' || *p == '}') {
+            depth--;
+        }
     }
+
     return depth;
 }
 
@@ -49,19 +66,36 @@ static int repl(VM* vm) {
     for (;;) {
         fputs(input.len ? ".. " : ">> ", stdout);
         fflush(stdout);
-        if (!fgets(line, sizeof line, stdin)) break;
+        if (!fgets(line, sizeof line, stdin)) {
+            break;
+        }
+
         size_t n = strlen(line);
-        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
-        if (input.len == 0 && (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0)) break;
+        while (n > 0 && (line[n - 1] == '\n' || line[n - 1] == '\r')) {
+            line[--n] = '\0';
+        }
+
+        if (input.len == 0 && (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0)) {
+            break;
+        }
+
         sb_puts(&input, line);
         sb_putc(&input, '\n');
-        if (open_depth(input.data) > 0) continue;
+        if (open_depth(input.data) > 0) {
+            continue;
+        }
+
         vm_exec_repl(vm, input.data, env);
-        if (vm->esp == 0) vm->envs[vm->esp++] = env; /* restored after an error */
+        if (vm->esp == 0) {
+            vm->envs[vm->esp++] = env; /* restored after an error */
+        }
+
         input.len = 0;
         input.data[0] = '\0';
     }
+
     sb_free(&input);
+
     return 0;
 }
 
@@ -74,12 +108,15 @@ int main(int argc, char** argv) {
         usage();
         return 0;
     }
+
     if (argc >= 2 && (strcmp(argv[1], "--version") == 0 || strcmp(argv[1], "-v") == 0)) {
         printf("pp " PP_VERSION "\n");
         return 0;
     }
+
     VM* vm = vm_new(argc, argv);
-    int code = argc >= 2 ? vm_run_file(vm, argv[1]) : repl(vm);
+    const int code = argc >= 2 ? vm_run_file(vm, argv[1]) : repl(vm);
     fflush(stdout);
+
     return code;
 }

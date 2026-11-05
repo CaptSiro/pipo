@@ -19,7 +19,7 @@ typedef struct {
 
 static const char* tok_desc(Token* t) {
     static char buf[128];
-    int len = t->len > 40 ? 40 : t->len;
+    const int len = t->len > 40 ? 40 : t->len;
     switch (t->kind) {
         case T_EOF: return "end of file";
         case T_STRING: return "string literal";
@@ -59,13 +59,19 @@ static Token* peek(Parser* p) {
 
 static Token* peek_at(Parser* p, int n) {
     int i = p->pos + n;
-    if (i >= p->count) i = p->count - 1;
+    if (i >= p->count) {
+        i = p->count - 1;
+    }
+
     return &p->toks[i];
 }
 
 static Token* advance(Parser* p) {
     Token* t = &p->toks[p->pos];
-    if (t->kind != T_EOF) p->pos++;
+    if (t->kind != T_EOF) {
+        p->pos++;
+    }
+
     return t;
 }
 
@@ -74,18 +80,25 @@ static bool check(Parser* p, TokKind k) {
 }
 
 static bool accept(Parser* p, TokKind k) {
-    if (!check(p, k)) return false;
+    if (!check(p, k)) {
+        return false;
+    }
+
     advance(p);
+
     return true;
 }
 
 static Token* expect(Parser* p, TokKind k, const char* what) {
-    if (!check(p, k)) perr(p, peek(p), "expected %s but found %s", what, tok_desc(peek(p)));
+    if (!check(p, k)) {
+        perr(p, peek(p), "expected %s but found %s", what, tok_desc(peek(p)));
+    }
+
     return advance(p);
 }
 
 static bool tok_is(Token* t, TokKind k, const char* s) {
-    int n = (int)strlen(s);
+    const int n = (int)strlen(s);
     return t->kind == k && t->len == n && memcmp(t->start, s, (size_t)n) == 0;
 }
 
@@ -101,7 +114,9 @@ static bool is_terminator(Token* t) {
  * A token that can name a function: an identifier, an operator, or the
  * keyword `in`, which is also an infix operator (`x in xs` calls in(x, xs)).
  */
-static bool is_fn_name(TokKind k) { return k == T_IDENT || k == T_OP || k == T_IN; }
+static bool is_fn_name(TokKind k) {
+    return k == T_IDENT || k == T_OP || k == T_IN;
+}
 
 /*
  * A function name at offset `at`: an identifier, an operator, `in`, or a bracket
@@ -110,41 +125,56 @@ static bool is_fn_name(TokKind k) { return k == T_IDENT || k == T_OP || k == T_I
  * expression `[]` stays an empty array.
  */
 static bool at_fn_name(Parser* p, int at) {
-    Token* t = peek_at(p, at);
-    if (is_fn_name(t->kind)) return true;
-    Token* c = peek_at(p, at + 1);
+    const Token* t = peek_at(p, at);
+    if (is_fn_name(t->kind)) {
+        return true;
+    }
+
+    const Token* c = peek_at(p, at + 1);
+
     return t->kind == T_LBRACKET && c->kind == T_RBRACKET && !c->space_before && !c->nl_before;
 }
 
 /* consumes the name at_fn_name accepted */
 static ObjString* take_fn_name(Parser* p) {
     Token* t = advance(p);
-    if (t->kind != T_LBRACKET) return intern_tok(p, t);
+    if (t->kind != T_LBRACKET) {
+        return intern_tok(p, t);
+    }
+
     advance(p); /* ] */
-    Token* eq = peek(p);
+    const Token* eq = peek(p);
     if (eq->kind == T_ASSIGN && !eq->space_before && !eq->nl_before) {
         advance(p);
         return str_cintern(p->vm, "[]=");
     }
+
     return str_cintern(p->vm, "[]");
 }
 
-static bool is_assignable(Node* e) { return e->kind == N_IDENT || e->kind == N_FIELD || e->kind == N_INDEX; }
+static bool is_assignable(Node* e) {
+    return e->kind == N_IDENT || e->kind == N_FIELD || e->kind == N_INDEX;
+}
 
 /* consumes a prefix of an operator token, e.g. one '>' out of '>>' */
 static bool eat_op_prefix(Parser* p, const char* s) {
     Token* t = peek(p);
     int n = (int)strlen(s);
-    if (t->kind != T_OP || t->len < n || memcmp(t->start, s, (size_t)n) != 0) return false;
+    if (t->kind != T_OP || t->len < n || memcmp(t->start, s, (size_t)n) != 0) {
+        return false;
+    }
+
     if (t->len == n) {
         advance(p);
         return true;
     }
+
     t->start += n;
     t->len -= n;
     t->col += n;
     t->space_before = false;
     t->nl_before = false;
+
     return true;
 }
 
@@ -152,6 +182,7 @@ static Node* new_node(NodeKind k, int line) {
     Node* n = pp_calloc(1, sizeof(Node));
     n->kind = k;
     n->line = line;
+
     return n;
 }
 
@@ -163,6 +194,7 @@ static void nl_push(NodeList* l, Node* n) {
 static InlineCache* new_ic(Parser* p) {
     InlineCache* ic = pp_calloc(1, sizeof(InlineCache));
     vm_register_ic(p->vm, ic);
+
     return ic;
 }
 
@@ -170,6 +202,7 @@ static Node* new_call(Parser* p, Node* callee, int line) {
     Node* c = new_node(N_CALL, line);
     c->as.call.callee = callee;
     c->as.call.ic = new_ic(p);
+
     return c;
 }
 
@@ -177,6 +210,7 @@ static Type* new_type(TypeKind k, int line) {
     Type* t = pp_calloc(1, sizeof(Type));
     t->kind = k;
     t->line = line;
+
     return t;
 }
 
@@ -195,6 +229,7 @@ static bool prim_from_name(const char* s, int len, Prim* out) {
             return true;
         }
     }
+
     return false;
 }
 
@@ -217,11 +252,14 @@ static Type* parse_type_primary(Parser* p) {
             ty->prim = pr;
             return ty;
         }
+
         if (t->len == 5 && memcmp(t->start, "tuple", 5) == 0) {
             /* tuple<int>, tuple<string, float>: the type arguments are the elements, so they are required */
             Token* n = peek(p);
-            if (!(n->kind == T_OP && !n->nl_before && n->start[0] == '<'))
+            if (!(n->kind == T_OP && !n->nl_before && n->start[0] == '<')) {
                 perr(p, t, "'tuple' needs its element types as type arguments, e.g. tuple<int, string>");
+            }
+
             eat_op_prefix(p, "<");
             Type* ty = new_type(TY_TUPLE, t->line);
             int cap = 0;
@@ -230,9 +268,13 @@ static Type* parse_type_primary(Parser* p) {
                 GROW(ty->args, ty->nargs, cap);
                 ty->args[ty->nargs++] = a;
             } while (accept(p, T_COMMA));
-            if (!eat_op_prefix(p, ">")) perr(p, peek(p), "expected '>' to close the element types of 'tuple'");
+            if (!eat_op_prefix(p, ">")) {
+                perr(p, peek(p), "expected '>' to close the element types of 'tuple'");
+            }
+
             return ty;
         }
+
         Type* ty = new_type(TY_NAME, t->line);
         ty->name = intern_tok(p, t);
         int qcap = 0;
@@ -243,6 +285,7 @@ static Type* parse_type_primary(Parser* p) {
             ty->quals[ty->nquals++] = ty->name;
             ty->name = intern_tok(p, expect(p, T_IDENT, "type name after ':'"));
         }
+
         Token* n = peek(p);
         if (n->kind == T_OP && !n->nl_before && n->start[0] == '<') {
             eat_op_prefix(p, "<");
@@ -252,22 +295,30 @@ static Type* parse_type_primary(Parser* p) {
                 GROW(ty->args, ty->nargs, cap);
                 ty->args[ty->nargs++] = a;
             } while (accept(p, T_COMMA));
-            if (!eat_op_prefix(p, ">")) perr(p, peek(p), "expected '>' to close the type arguments of '%s'", ty->name->chars);
+            if (!eat_op_prefix(p, ">")) {
+                perr(p, peek(p), "expected '>' to close the type arguments of '%s'", ty->name->chars);
+            }
         }
+
         return ty;
     }
+
     if (t->kind == T_FUNCTION) {
         advance(p);
         Type* ty = new_type(TY_PRIM, t->line);
         ty->prim = PRIM_FUNCTION;
         return ty;
     }
+
     if (t->kind == T_LBRACE) {
         advance(p);
         Type* ty = new_type(TY_RECORD, t->line);
         int cap = 0, cap2 = 0, n2 = 0;
         while (!check(p, T_RBRACE)) {
-            if (accept(p, T_COMMA) || accept(p, T_SEMI)) continue;
+            if (accept(p, T_COMMA) || accept(p, T_SEMI)) {
+                continue;
+            }
+
             Type* ft = parse_type(p);
             Token* name = expect(p, T_IDENT, "field name");
             GROW(ty->fnames, ty->nfields, cap);
@@ -275,15 +326,18 @@ static Type* parse_type_primary(Parser* p) {
             ty->fnames[ty->nfields++] = intern_tok(p, name);
             ty->ftypes[n2++] = ft;
         }
+
         expect(p, T_RBRACE, "'}'");
         return ty;
     }
+
     if (t->kind == T_LPAREN) {
         advance(p);
         Type* ty = parse_type(p);
         expect(p, T_RPAREN, "')'");
         return ty;
     }
+
     perr(p, t, "expected a type but found %s", tok_desc(t));
 }
 
@@ -299,6 +353,7 @@ static Type* parse_type_postfix(Parser* p) {
             t = a;
             continue;
         }
+
         if (n->kind == T_OP && !n->nl_before && n->start[0] == '?') {
             eat_op_prefix(p, "?");
             /* T? is sugar for Option<T> */
@@ -310,8 +365,10 @@ static Type* parse_type_postfix(Parser* p) {
             t = o;
             continue;
         }
+
         break;
     }
+
     return t;
 }
 
@@ -324,6 +381,7 @@ static Type* parse_type(Parser* p) {
         u->b = parse_type_postfix(p);
         t = u;
     }
+
     return t;
 }
 
@@ -331,13 +389,20 @@ static Type* parse_type(Parser* p) {
 static int matching_paren(Parser* p, int at) {
     int depth = 0;
     for (int i = at; p->pos + i < p->count; i++) {
-        TokKind k = peek_at(p, i)->kind;
-        if (k == T_EOF) return -1;
-        if (k == T_LPAREN || k == T_LBRACKET || k == T_LBRACE) depth++;
-        else if (k == T_RPAREN || k == T_RBRACKET || k == T_RBRACE) {
-            if (--depth == 0) return k == T_RPAREN ? i : -1;
+        const TokKind k = peek_at(p, i)->kind;
+        if (k == T_EOF) {
+            return -1;
+        }
+
+        if (k == T_LPAREN || k == T_LBRACKET || k == T_LBRACE) {
+            depth++;
+        } else if (k == T_RPAREN || k == T_RBRACKET || k == T_RBRACE) {
+            if (--depth == 0) {
+                return k == T_RPAREN ? i : -1;
+            }
         }
     }
+
     return -1;
 }
 
@@ -361,44 +426,62 @@ static Type* parse_type_def(Parser* p) {
                     fn->variadic = true;
                     break;
                 }
+
                 Type* a = parse_type(p);
                 GROW(fn->args, fn->nargs, cap);
                 fn->args[fn->nargs++] = a;
-                if (!accept(p, T_COMMA)) break;
+                if (!accept(p, T_COMMA)) {
+                    break;
+                }
             }
+
             expect(p, T_RPAREN, "')' to close the callback parameter types");
         }
     }
+
     if (!fn) {
         Type* single = parse_type(p);
-        if (!check(p, T_ARROW) || peek(p)->nl_before) return single;
+        if (!check(p, T_ARROW) || peek(p)->nl_before) {
+            return single;
+        }
+
         fn = new_type(TY_FUNC, single->line);
         fn->args = pp_malloc(sizeof(Type*));
         fn->args[0] = single;
         fn->nargs = 1;
     }
+
     expect(p, T_ARROW, "'->' and the return type of the callback type");
     fn->inner = parse_type_def(p);
+
     return fn;
 }
 
 static void no_inline_fn_type(Parser* p) {
-    if (check(p, T_ARROW))
+    if (check(p, T_ARROW)) {
         perr(p, peek(p), "a callback type cannot be written inline, name it first: type ToInt = float -> int");
+    }
 }
 
 /* <T, U = string> -- the opening '<' must be the current token */
 static void parse_generic_params(Parser* p, ObjString*** names, Type*** defaults, int* count, bool allow_defaults) {
-    if (!eat_op_prefix(p, "<")) perr(p, peek(p), "expected '<'");
+    if (!eat_op_prefix(p, "<")) {
+        perr(p, peek(p), "expected '<'");
+    }
+
     int cap = 0, cap2 = 0, n2 = 0;
     do {
         Token* name = expect(p, T_IDENT, "generic parameter name");
         Type* def = NULL;
         if (check(p, T_ASSIGN)) {
-            if (!allow_defaults) perr(p, peek(p), "default type arguments are only allowed on enums");
+            if (!allow_defaults) {
+                perr(p, peek(p), "default type arguments are only allowed on enums");
+            }
+
             advance(p);
             def = parse_type(p);
         }
+
         GROW(*names, *count, cap);
         (*names)[(*count)++] = intern_tok(p, name);
         if (defaults) {
@@ -406,7 +489,9 @@ static void parse_generic_params(Parser* p, ObjString*** names, Type*** defaults
             (*defaults)[n2++] = def;
         }
     } while (accept(p, T_COMMA));
-    if (!eat_op_prefix(p, ">")) perr(p, peek(p), "expected '>' to close the generic parameter list");
+    if (!eat_op_prefix(p, ">")) {
+        perr(p, peek(p), "expected '>' to close the generic parameter list");
+    }
 }
 
 /*
@@ -422,33 +507,46 @@ static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
             sig->variadic = true;
             break;
         }
+
         Param prm;
         memset(&prm, 0, sizeof prm);
         Token* t = peek(p);
-        TokKind nk = peek_at(p, 1)->kind;
+        const TokKind nk = peek_at(p, 1)->kind;
         if (t->kind == T_IDENT && (nk == T_COMMA || nk == T_RPAREN)) {
             advance(p);
             prm.name = intern_tok(p, t);
             /* (int) is a type without a name: fine in a declaration, an error anywhere else */
             Prim pr;
             if (prim_from_name(t->start, t->len, &pr)) {
-                if (!unnamed) perr(p, peek(p), "expected parameter name but found %s", tok_desc(peek(p)));
-                if (!*unnamed) *unnamed = peek(p);
+                if (!unnamed) {
+                    perr(p, peek(p), "expected parameter name but found %s", tok_desc(peek(p)));
+                }
+
+                if (!*unnamed) {
+                    *unnamed = peek(p);
+                }
             }
         } else {
             prm.type = parse_type(p);
             no_inline_fn_type(p);
             if (unnamed && !check(p, T_IDENT)) {
-                if (!*unnamed) *unnamed = peek(p);
+                if (!*unnamed) {
+                    *unnamed = peek(p);
+                }
+
                 prm.name = str_cintern(p->vm, "");
             } else {
                 prm.name = intern_tok(p, expect(p, T_IDENT, "parameter name"));
             }
         }
+
         GROW(sig->params, sig->nparams, cap);
         sig->params[sig->nparams++] = prm;
-        if (!accept(p, T_COMMA)) break;
+        if (!accept(p, T_COMMA)) {
+            break;
+        }
     }
+
     expect(p, T_RPAREN, "')'");
 }
 
@@ -472,6 +570,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
                 pt->kind = P_BIND;
                 pt->name = e->as.str;
             }
+
             return pt;
         case N_FIELD:
             pt->kind = P_VARIANT;
@@ -483,25 +582,35 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
             if (c->kind == N_IDENT && str_equals(c->as.str, "-") && args->count == 1 &&
                 (args->items[0]->kind == N_INT || args->items[0]->kind == N_FLOAT)) {
                 Node* lit = args->items[0];
-                if (lit->kind == N_INT) lit->as.ival = -lit->as.ival;
-                else lit->as.fval = -lit->as.fval;
+                if (lit->kind == N_INT) {
+                    lit->as.ival = -lit->as.ival;
+                } else {
+                    lit->as.fval = -lit->as.fval;
+                }
+
                 pt->kind = P_LITERAL;
                 pt->lit = lit;
                 return pt;
             }
+
             if (c->kind == N_IDENT || c->kind == N_FIELD) {
                 pt->kind = P_VARIANT;
                 pt->ctor = c;
                 pt->has_parens = true;
                 pt->nsubs = args->count;
                 pt->subs = pp_calloc((size_t)(args->count ? args->count : 1), sizeof(Pattern*));
-                for (int i = 0; i < args->count; i++) pt->subs[i] = to_pattern(p, args->items[i], at);
+                for (int i = 0; i < args->count; i++) {
+                    pt->subs[i] = to_pattern(p, args->items[i], at);
+                }
+
                 return pt;
             }
+
             break;
         }
         default: break;
     }
+
     perr(p, at, "invalid pattern (expected a literal, a name, '_' or a variant like some(x))");
 }
 
@@ -512,8 +621,11 @@ static void parse_args(Parser* p, NodeList* out) {
     p->depth++;
     while (!check(p, T_RPAREN)) {
         nl_push(out, parse_expression(p));
-        if (!accept(p, T_COMMA)) break;
+        if (!accept(p, T_COMMA)) {
+            break;
+        }
     }
+
     expect(p, T_RPAREN, "')' to close the argument list");
     p->depth--;
 }
@@ -532,11 +644,17 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     } else {
         sig->name = str_cintern(p->vm, "anonymous");
     }
+
     Token* unnamed = NULL;
     parse_params(p, sig, statement && named ? &unnamed : NULL);
-    if (accept(p, T_ARROW)) sig->ret = parse_type(p);
-    if (p->in_native && check(p, T_LBRACE))
+    if (accept(p, T_ARROW)) {
+        sig->ret = parse_type(p);
+    }
+
+    if (p->in_native && check(p, T_LBRACE)) {
         perr(p, peek(p), "native function '%s' cannot have a body: its implementation is written in C", sig->name->chars);
+    }
+
     if (statement && named && !check(p, T_LBRACE)) {
         /*
          * function a(int) -> float: a declaration, written like an interface
@@ -546,7 +664,10 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
         ObjString* empty = str_cintern(p->vm, "");
         for (int i = 0; i < sig->nparams; i++) {
             Param* prm = &sig->params[i];
-            if (prm->type || prm->name == empty) continue;
+            if (prm->type || prm->name == empty) {
+                continue;
+            }
+
             Prim pr;
             const char* nm = prm->name->chars;
             if (prim_from_name(nm, (int)strlen(nm), &pr)) {
@@ -556,18 +677,25 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
                 prm->type = new_type(TY_NAME, kw->line);
                 prm->type->name = prm->name;
             }
+
             prm->name = empty;
         }
+
         end_statement(p);
         Node* n = new_node(S_FUNCDECL, kw->line);
         n->as.func.sig = sig;
         return n;
     }
-    if (unnamed) perr(p, unnamed, "expected parameter name but found %s", tok_desc(unnamed));
+
+    if (unnamed) {
+        perr(p, unnamed, "expected parameter name but found %s", tok_desc(unnamed));
+    }
+
     Node* body = parse_block(p);
     Node* n = new_node(statement && named ? S_FUNCDECL : N_FUNC, kw->line);
     n->as.func.sig = sig;
     n->as.func.body = body;
+
     return n;
 }
 
@@ -591,6 +719,7 @@ static Node* parse_lambda(Parser* p) {
     } else {
         parse_params(p, sig, NULL);
     }
+
     expect(p, T_ARROW, "'->'");
     bool saved_nl = p->no_lambda;
     p->no_lambda = false;
@@ -606,27 +735,37 @@ static Node* parse_lambda(Parser* p) {
         body = new_node(N_BLOCK, e->line);
         nl_push(&body->as.block.stmts, st);
     }
+
     p->no_lambda = saved_nl;
     Node* n = new_node(N_FUNC, start->line);
     n->as.func.sig = sig;
     n->as.func.body = body;
     n->as.func.lambda = true;
+
     return n;
 }
 
 static bool at_lambda(Parser* p) {
-    if (p->no_lambda) return false;
-    Token* t = peek(p);
+    if (p->no_lambda) {
+        return false;
+    }
+
+    const Token* t = peek(p);
     if (t->kind == T_IDENT) {
-        Token* a = peek_at(p, 1);
+        const Token* a = peek_at(p, 1);
         return a->kind == T_ARROW && !a->nl_before;
     }
+
     if (t->kind == T_LPAREN) {
-        int close = matching_paren(p, 0);
-        if (close <= 0) return false;
-        Token* a = peek_at(p, close + 1);
+        const int close = matching_paren(p, 0);
+        if (close <= 0) {
+            return false;
+        }
+
+        const Token* a = peek_at(p, close + 1);
         return a->kind == T_ARROW && !a->nl_before;
     }
+
     return false;
 }
 
@@ -640,6 +779,7 @@ static Node* parse_if(Parser* p) {
     } else if (accept(p, T_CONST)) {
         forced = true;
     }
+
     Token* cond_tok = peek(p);
     Node* cond = parse_expression(p);
     if (check(p, T_ASSIGN)) {
@@ -649,12 +789,17 @@ static Node* parse_if(Parser* p) {
     } else if (forced) {
         perr(p, peek(p), "expected '=' after the pattern of 'if let'");
     }
+
     n->as.if_.cond = cond;
     n->as.if_.then_b = parse_block(p);
     if (accept(p, T_ELSE)) {
-        if (check(p, T_IF)) n->as.if_.else_b = parse_if(p);
-        else n->as.if_.else_b = parse_block(p);
+        if (check(p, T_IF)) {
+            n->as.if_.else_b = parse_if(p);
+        } else {
+            n->as.if_.else_b = parse_block(p);
+        }
     }
+
     return n;
 }
 
@@ -667,8 +812,14 @@ static Node* parse_match(Parser* p) {
     p->depth = 0;
     int cap = 0;
     while (!check(p, T_RBRACE)) {
-        if (accept(p, T_COMMA) || accept(p, T_SEMI)) continue;
-        if (check(p, T_EOF)) perr(p, peek(p), "unterminated match (missing '}')");
+        if (accept(p, T_COMMA) || accept(p, T_SEMI)) {
+            continue;
+        }
+
+        if (check(p, T_EOF)) {
+            perr(p, peek(p), "unterminated match (missing '}')");
+        }
+
         MatchArm arm;
         memset(&arm, 0, sizeof arm);
         Token* pt = peek(p);
@@ -676,7 +827,10 @@ static Node* parse_match(Parser* p) {
         bool saved_nl = p->no_lambda;
         p->no_lambda = true;
         arm.pat = to_pattern(p, parse_expression(p), pt);
-        if (accept(p, T_IF)) arm.guard = parse_expression(p);
+        if (accept(p, T_IF)) {
+            arm.guard = parse_expression(p);
+        }
+
         p->no_lambda = saved_nl;
         expect(p, T_ARROW, "'->' after the match pattern");
         if (check(p, T_LBRACE)) {
@@ -685,16 +839,22 @@ static Node* parse_match(Parser* p) {
         } else {
             arm.body = parse_expression(p);
         }
+
         GROW(n->as.match.arms, n->as.match.narms, cap);
         n->as.match.arms[n->as.match.narms++] = arm;
     }
+
     expect(p, T_RBRACE, "'}'");
     p->depth = saved;
+
     return n;
 }
 
 static bool starts_juxtaposed_arg(Token* t) {
-    if (t->nl_before) return false;
+    if (t->nl_before) {
+        return false;
+    }
+
     switch (t->kind) {
         case T_IDENT:
         case T_INT:
@@ -710,7 +870,10 @@ static bool starts_juxtaposed_arg(Token* t) {
 
 static Node* parse_primary(Parser* p) {
     Token* t = peek(p);
-    if ((t->kind == T_IDENT || t->kind == T_LPAREN) && at_lambda(p)) return parse_lambda(p);
+    if ((t->kind == T_IDENT || t->kind == T_LPAREN) && at_lambda(p)) {
+        return parse_lambda(p);
+    }
+
     switch (t->kind) {
         case T_INT: {
             advance(p);
@@ -747,6 +910,7 @@ static Node* parse_primary(Parser* p) {
                 nl_push(&c->as.call.args, parse_expression(p));
                 return c;
             }
+
             return id;
         }
         case T_LPAREN: {
@@ -763,8 +927,11 @@ static Node* parse_primary(Parser* p) {
             Node* n = new_node(N_ARRAY, t->line);
             while (!check(p, T_RBRACKET)) {
                 nl_push(&n->as.array.items, parse_expression(p));
-                if (!accept(p, T_COMMA)) break;
+                if (!accept(p, T_COMMA)) {
+                    break;
+                }
             }
+
             expect(p, T_RBRACKET, "']' to close the array");
             p->depth--;
             return n;
@@ -777,9 +944,14 @@ static Node* parse_primary(Parser* p) {
             while (!check(p, T_RBRACE)) {
                 Token* k = peek(p);
                 ObjString* key;
-                if (k->kind == T_STRING) key = str_intern(p->vm, k->sval, k->slen);
-                else if (k->kind == T_IDENT || (k->kind >= T_IMPORT && k->kind <= T_FALSE)) key = intern_tok(p, k);
-                else perr(p, k, "expected an object key but found %s", tok_desc(k));
+                if (k->kind == T_STRING) {
+                    key = str_intern(p->vm, k->sval, k->slen);
+                } else if (k->kind == T_IDENT || (k->kind >= T_IMPORT && k->kind <= T_FALSE)) {
+                    key = intern_tok(p, k);
+                } else {
+                    perr(p, k, "expected an object key but found %s", tok_desc(k));
+                }
+
                 advance(p);
                 Node* value;
                 if (accept(p, T_COLON)) {
@@ -790,11 +962,15 @@ static Node* parse_primary(Parser* p) {
                 } else {
                     perr(p, peek(p), "expected ':' after object key");
                 }
+
                 GROW(n->as.object.keys, nkeys, cap);
                 n->as.object.keys[nkeys++] = key;
                 nl_push(&n->as.object.values, value);
-                if (!accept(p, T_COMMA)) break;
+                if (!accept(p, T_COMMA)) {
+                    break;
+                }
             }
+
             expect(p, T_RBRACE, "'}' to close the object");
             p->depth--;
             return n;
@@ -807,7 +983,10 @@ static Node* parse_primary(Parser* p) {
 }
 
 static Node* parse_postfix(Parser* p, Node* e) {
-    if (e->kind == N_IF || e->kind == N_MATCH) return e;
+    if (e->kind == N_IF || e->kind == N_MATCH) {
+        return e;
+    }
+
     for (;;) {
         Token* t = peek(p);
         if (t->kind == T_LPAREN && !t->nl_before) {
@@ -816,6 +995,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
             e = c;
             continue;
         }
+
         if (t->kind == T_LBRACE && !t->nl_before && !t->space_before &&
             (e->kind == N_IDENT || e->kind == N_FIELD)) {
             /* record construction shorthand: Rect{ ... } == Rect({ ... }) */
@@ -824,13 +1004,17 @@ static Node* parse_postfix(Parser* p, Node* e) {
             e = c;
             continue;
         }
+
         if (t->kind == T_LBRACKET && !t->nl_before && !t->space_before) {
             advance(p);
             p->depth++;
             Node* ix = new_node(N_INDEX, t->line);
             ix->as.index.obj = e;
             ix->as.index.ic = new_ic(p);
-            if (check(p, T_RBRACKET)) perr(p, peek(p), "expected an index between '[' and ']'");
+            if (check(p, T_RBRACKET)) {
+                perr(p, peek(p), "expected an index between '[' and ']'");
+            }
+
             do {
                 nl_push(&ix->as.index.args, parse_expression(p));
             } while (accept(p, T_COMMA) && !check(p, T_RBRACKET));
@@ -839,36 +1023,49 @@ static Node* parse_postfix(Parser* p, Node* e) {
             e = ix;
             continue;
         }
+
         if (t->kind == T_COLON && !t->nl_before) {
             /* attribute access: object:field, module:symbol, Enum:VARIANT */
             advance(p);
             Token* nm = peek(p);
-            if (!at_fn_name(p, 0)) perr(p, nm, "expected an attribute name after ':' but found %s", tok_desc(nm));
+            if (!at_fn_name(p, 0)) {
+                perr(p, nm, "expected an attribute name after ':' but found %s", tok_desc(nm));
+            }
+
             Node* f = new_node(N_FIELD, nm->line);
             f->as.field.obj = e;
             f->as.field.name = take_fn_name(p);
             e = f;
             continue;
         }
+
         if (t->kind == T_DOT) {
             /* dot syntax: a.f(b) == f(a, b), a.mod:f(b) == mod:f(a, b) */
             advance(p);
             Token* nm = peek(p);
-            if (!at_fn_name(p, 0)) perr(p, nm, "expected a function name after '.' but found %s", tok_desc(nm));
+            if (!at_fn_name(p, 0)) {
+                perr(p, nm, "expected a function name after '.' but found %s", tok_desc(nm));
+            }
+
             Node* callee = new_node(N_IDENT, nm->line);
             callee->as.str = take_fn_name(p);
             while (check(p, T_COLON) && !peek(p)->nl_before) {
                 advance(p);
                 Token* part = peek(p);
-                if (!at_fn_name(p, 0))
+                if (!at_fn_name(p, 0)) {
                     perr(p, part, "expected an attribute name after ':' but found %s", tok_desc(part));
+                }
+
                 Node* f = new_node(N_FIELD, part->line);
                 f->as.field.obj = callee;
                 f->as.field.name = take_fn_name(p);
                 callee = f;
             }
-            if (!check(p, T_LPAREN) || peek(p)->nl_before)
+
+            if (!check(p, T_LPAREN) || peek(p)->nl_before) {
                 perr(p, nm, "'.' calls a function, expected '(' after '.%.*s' (use ':' to access an attribute)", nm->len, nm->start);
+            }
+
             Node* m = new_node(N_METHOD, nm->line);
             m->as.method.recv = e;
             m->as.method.callee = callee;
@@ -877,8 +1074,10 @@ static Node* parse_postfix(Parser* p, Node* e) {
             e = m;
             continue;
         }
+
         break;
     }
+
     return e;
 }
 
@@ -888,49 +1087,61 @@ static Node* parse_unary(Parser* p) {
         advance(p);
         Node* id = new_node(N_IDENT, t->line);
         id->as.str = intern_tok(p, t);
-        Token* nx = peek(p);
+        const Token* nx = peek(p);
         if (nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
-            nx->kind == T_EOF || nx->kind == T_SEMI || nx->nl_before)
+            nx->kind == T_EOF || nx->kind == T_SEMI || nx->nl_before) {
             return id; /* operator used as a value: reduce(xs, +, 0) */
+        }
+
         if (nx->kind == T_LPAREN && !nx->space_before) {
             /* classic call of an operator: +(a, b) */
             Node* c = new_call(p, id, t->line);
             parse_args(p, &c->as.call.args);
             return parse_postfix(p, c);
         }
+
         Node* c = new_call(p, id, t->line);
         nl_push(&c->as.call.args, parse_unary(p));
         return c;
     }
+
     if (t->kind == T_IN) {
         /* `in` is a keyword but also a function: in(3, 0...3), or a value: any(xs, in) */
-        Token* nx = peek_at(p, 1);
+        const Token* nx = peek_at(p, 1);
         bool call = nx->kind == T_LPAREN && !nx->space_before;
-        bool value = nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
+        const bool value = nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
                      nx->kind == T_EOF || nx->kind == T_SEMI || nx->nl_before;
         if (call || value) {
             advance(p);
             Node* id = new_node(N_IDENT, t->line);
             id->as.str = intern_tok(p, t);
-            if (value) return parse_postfix(p, id);
+            if (value) {
+                return parse_postfix(p, id);
+            }
+
             Node* c = new_call(p, id, t->line);
             parse_args(p, &c->as.call.args);
             return parse_postfix(p, c);
         }
+
         perr(p, t, "'in' needs a left operand (x in xs) or call parentheses with no space (in(x, xs))");
     }
+
     return parse_postfix(p, parse_primary(p));
 }
 
 /* an infix operator continues the expression: any operator token, or `in` */
 static bool at_infix(Parser* p) {
-    Token* t = peek(p);
+    const Token* t = peek(p);
     return (t->kind == T_OP || t->kind == T_IN) && (!t->nl_before || p->depth > 0);
 }
 
 static Node* parse_expression(Parser* p) {
     Node* first = parse_unary(p);
-    if (!at_infix(p)) return first;
+    if (!at_infix(p)) {
+        return first;
+    }
+
     Node* n = new_node(N_CHAIN, first->line);
     nl_push(&n->as.chain.operands, first);
     int cap = 0;
@@ -940,9 +1151,14 @@ static Node* parse_expression(Parser* p) {
         n->as.chain.ops[n->as.chain.nops++] = intern_tok(p, op);
         nl_push(&n->as.chain.operands, parse_unary(p));
     }
+
     n->as.chain.ics = pp_calloc((size_t)n->as.chain.nops, sizeof(InlineCache));
-    for (int i = 0; i < n->as.chain.nops; i++) vm_register_ic(p->vm, &n->as.chain.ics[i]);
+    for (int i = 0; i < n->as.chain.nops; i++) {
+        vm_register_ic(p->vm, &n->as.chain.ics[i]);
+    }
+
     n->as.chain.version = -1;
+
     return n;
 }
 
@@ -951,15 +1167,26 @@ static Node* parse_expression(Parser* p) {
 static void sig_types_to_string(Signature* sig, StrBuf* sb) {
     if (sig->ngenerics) {
         sb_putc(sb, '<');
-        for (int i = 0; i < sig->ngenerics; i++) sb_printf(sb, i ? ", %s" : "%s", sig->generics[i]->chars);
+        for (int i = 0; i < sig->ngenerics; i++) {
+            sb_printf(sb, i ? ", %s" : "%s", sig->generics[i]->chars);
+        }
+
         sb_putc(sb, '>');
     }
+
     sb_printf(sb, "%s(", sig->name->chars);
     for (int i = 0; i < sig->nparams; i++) {
-        if (i) sb_puts(sb, ", ");
+        if (i) {
+            sb_puts(sb, ", ");
+        }
+
         type_to_string(sig->params[i].type, sb);
     }
-    if (sig->variadic) sb_puts(sb, sig->nparams ? ", ..." : "...");
+
+    if (sig->variadic) {
+        sb_puts(sb, sig->nparams ? ", ..." : "...");
+    }
+
     sb_puts(sb, ") -> ");
     type_to_string(sig->ret, sb);
 }
@@ -977,31 +1204,47 @@ static Node* unwrap_export(Node* s) {
 static void check_declarations(Parser* p, NodeList* stmts) {
     for (int i = 0; i < stmts->count; i++) {
         Node* d = unwrap_export(stmts->items[i]);
-        if (d->kind != S_FUNCDECL || d->as.func.body || d->as.func.native) continue; /* native: the body is in C */
+        if (d->kind != S_FUNCDECL || d->as.func.body || d->as.func.native) {
+            continue; /* native: the body is in C */
+        }
+
         StrBuf want;
         sb_init(&want);
         sig_types_to_string(d->as.func.sig, &want);
         Node* def = NULL;
         for (int j = i + 1; j < stmts->count && !def; j++) {
             Node* s = unwrap_export(stmts->items[j]);
-            if (s->kind != S_FUNCDECL || s->as.func.sig->name != d->as.func.sig->name) continue;
+            if (s->kind != S_FUNCDECL || s->as.func.sig->name != d->as.func.sig->name) {
+                continue;
+            }
+
             StrBuf got;
             sb_init(&got);
             sig_types_to_string(s->as.func.sig, &got);
             bool same = strcmp(want.data, got.data) == 0;
             sb_free(&got);
-            if (!same) continue;
-            if (!s->as.func.body)
+            if (!same) {
+                continue;
+            }
+
+            if (!s->as.func.body) {
                 perr_line(p, s->line, "function %s is already declared on line %d", want.data, d->line);
-            if (s->as.func.global != d->as.func.global)
+            }
+
+            if (s->as.func.global != d->as.func.global) {
                 perr_line(p, s->line, "function %s is declared %s on line %d, so its definition must be %s too", want.data,
                           d->as.func.global ? "'global'" : "without 'global'", d->line,
                           d->as.func.global ? "'global'" : "without 'global'");
+            }
+
             def = s;
         }
-        if (!def)
+
+        if (!def) {
             perr_line(p, d->line, "function %s is declared but not defined (the definition must follow in the same block, with the same types)",
                       want.data);
+        }
+
         def->as.func.decl = d->as.func.sig;
         sb_free(&want);
     }
@@ -1014,8 +1257,14 @@ static Node* parse_block(Parser* p) {
     p->block_depth++;
     Node* b = new_node(N_BLOCK, open->line);
     while (!check(p, T_RBRACE)) {
-        if (check(p, T_EOF)) perr(p, peek(p), "unterminated block (missing '}' for the block opened on line %d)", open->line);
-        if (accept(p, T_SEMI)) continue;
+        if (check(p, T_EOF)) {
+            perr(p, peek(p), "unterminated block (missing '}' for the block opened on line %d)", open->line);
+        }
+
+        if (accept(p, T_SEMI)) {
+            continue;
+        }
+
         Node* s = parse_statement(p);
         nl_push(&b->as.block.stmts, s);
         switch (s->kind) {
@@ -1028,10 +1277,12 @@ static Node* parse_block(Parser* p) {
             default: break;
         }
     }
+
     advance(p);
     p->depth = saved;
     p->block_depth--;
     check_declarations(p, &b->as.block.stmts);
+
     return b;
 }
 
@@ -1041,8 +1292,15 @@ static void end_statement(Parser* p) {
         while (accept(p, T_SEMI)) {}
         return;
     }
-    if (is_terminator(t)) return;
-    if (p->pos > 0 && p->toks[p->pos - 1].kind == T_RBRACE) return;
+
+    if (is_terminator(t)) {
+        return;
+    }
+
+    if (p->pos > 0 && p->toks[p->pos - 1].kind == T_RBRACE) {
+        return;
+    }
+
     perr(p, t, "expected the end of the statement (a newline or ';') before %s", tok_desc(t));
 }
 
@@ -1060,20 +1318,26 @@ static Node* parse_let(Parser* p) {
         no_inline_fn_type(p);
         n->as.let.name = intern_tok(p, expect(p, T_IDENT, "variable name"));
     }
+
     if (accept(p, T_ASSIGN)) {
         n->as.let.init = parse_expression(p);
-        if (n->as.let.init->kind == N_FUNC && n->as.let.init->as.func.lambda && !n->as.let.type)
+        if (n->as.let.init->kind == N_FUNC && n->as.let.init->as.func.lambda && !n->as.let.type) {
             perr(p, kw, "a lambda stored in a variable needs a callback type: type Fn = (int) -> int, then %s Fn %s = ...",
                  n->as.let.is_const ? "const" : "let", n->as.let.name->chars);
+        }
     } else if (n->as.let.is_const && n->as.let.type) {
         perr(p, peek(p), "constant '%s' needs a value", n->as.let.name->chars);
     }
+
     return n;
 }
 
 static Node* parse_import(Parser* p) {
     Token* kw = advance(p);
-    if (p->block_depth > 0) perr(p, kw, "'import' is only allowed at the top of a file, before any other statement");
+    if (p->block_depth > 0) {
+        perr(p, kw, "'import' is only allowed at the top of a file, before any other statement");
+    }
+
     Node* n = new_node(S_IMPORT, kw->line);
     StrBuf path;
     sb_init(&path);
@@ -1081,14 +1345,27 @@ static Node* parse_import(Parser* p) {
     if (check(p, T_STRING)) {
         /* import "./file" - a file relative to the importing file */
         Token* s = advance(p);
-        if (s->slen == 0) perr(p, s, "empty import path");
+        if (s->slen == 0) {
+            perr(p, s, "empty import path");
+        }
+
         sb_append(&path, s->sval, (size_t)s->slen);
         const char* base = s->sval;
-        for (const char* c = s->sval; *c; c++)
-            if (*c == '/' || *c == '\\') base = c + 1;
+        for (const char* c = s->sval; *c; c++) {
+            if (*c == '/' || *c == '\\') {
+                base = c + 1;
+            }
+        }
+
         int len = (int)strlen(base);
-        if (len > 3 && strcmp(base + len - 3, ".pp") == 0) len -= 3;
-        if (len == 0) perr(p, s, "import path '%s' does not name a file", s->sval);
+        if (len > 3 && strcmp(base + len - 3, ".pp") == 0) {
+            len -= 3;
+        }
+
+        if (len == 0) {
+            perr(p, s, "import path '%s' does not name a file", s->sval);
+        }
+
         last = str_intern(p->vm, base, len);
         n->as.import.is_file = true;
     } else {
@@ -1097,6 +1374,7 @@ static Node* parse_import(Parser* p) {
         sb_append(&path, id->start, (size_t)id->len);
         last = intern_tok(p, id);
     }
+
     /* submodules: import os:fs, import "./ui":shapes */
     int scap = 0;
     while (check(p, T_COLON) && !peek(p)->nl_before) {
@@ -1106,6 +1384,7 @@ static Node* parse_import(Parser* p) {
         GROW(n->as.import.subs, n->as.import.nsubs, scap);
         n->as.import.subs[n->as.import.nsubs++] = last;
     }
+
     n->as.import.path = str_intern(p->vm, path.data, (int)path.len);
     sb_free(&path);
     n->as.import.alias = last;
@@ -1115,16 +1394,23 @@ static Node* parse_import(Parser* p) {
             int cap = 0;
             while (!check(p, T_RBRACE)) {
                 Token* nm = peek(p);
-                if (!at_fn_name(p, 0)) perr(p, nm, "expected a name to import but found %s", tok_desc(nm));
+                if (!at_fn_name(p, 0)) {
+                    perr(p, nm, "expected a name to import but found %s", tok_desc(nm));
+                }
+
                 GROW(n->as.import.names, n->as.import.nnames, cap);
                 n->as.import.names[n->as.import.nnames++] = take_fn_name(p);
-                if (!accept(p, T_COMMA)) break;
+                if (!accept(p, T_COMMA)) {
+                    break;
+                }
             }
+
             expect(p, T_RBRACE, "'}'");
         } else {
             n->as.import.alias = intern_tok(p, expect(p, T_IDENT, "alias name"));
         }
     }
+
     return n;
 }
 
@@ -1142,8 +1428,11 @@ static bool at_exported_decl(Parser* p) {
         case T_ENUM: return true;
         case T_OP: return is_generic_prefix(p);
         case T_IDENT: {
-            Token* a = peek_at(p, 1);
-            if (at_native(p)) return true;
+            const Token* a = peek_at(p, 1);
+            if (at_native(p)) {
+                return true;
+            }
+
             return (tok_is(t, T_IDENT, "type") || tok_is(t, T_IDENT, "interface")) && a->kind == T_IDENT && !a->nl_before;
         }
         default: return false;
@@ -1168,19 +1457,26 @@ static ObjString* declared_name(Node* d) {
  */
 static Node* parse_export(Parser* p) {
     Token* kw = advance(p);
-    if (p->block_depth > 0) perr(p, kw, "'export' is only allowed at the top level of a file");
+    if (p->block_depth > 0) {
+        perr(p, kw, "'export' is only allowed at the top level of a file");
+    }
+
     if (check(p, T_IMPORT)) {
         /* export import "./fs" == import "./fs" + export fs */
         Node* im = parse_import(p);
         im->as.import.reexport = true;
         return im;
     }
+
     Node* n = new_node(S_EXPORT, kw->line);
     if (at_exported_decl(p)) {
         Token* at = peek(p);
         Node* d = parse_statement(p);
         ObjString* name = declared_name(d);
-        if (!name) perr(p, at, "'export' before a statement needs a named declaration (type, enum, interface, function, const or let)");
+        if (!name) {
+            perr(p, at, "'export' before a statement needs a named declaration (type, enum, interface, function, const or let)");
+        }
+
         n->as.export_.decl = d;
         n->as.export_.names = pp_malloc(sizeof(ObjString*));
         n->as.export_.aliases = pp_malloc(sizeof(ObjString*));
@@ -1189,53 +1485,83 @@ static Node* parse_export(Parser* p) {
         n->as.export_.count = 1;
         return n;
     }
+
     int cap = 0, cap2 = 0, n2 = 0;
     bool braces = accept(p, T_LBRACE);
     do {
-        if (braces && check(p, T_RBRACE)) break;
+        if (braces && check(p, T_RBRACE)) {
+            break;
+        }
+
         Token* nm = peek(p);
-        if (!at_fn_name(p, 0)) perr(p, nm, "expected a name to export but found %s", tok_desc(nm));
+        if (!at_fn_name(p, 0)) {
+            perr(p, nm, "expected a name to export but found %s", tok_desc(nm));
+        }
+
         ObjString* name = take_fn_name(p);
         ObjString* alias = name;
         if (accept(p, T_ARROW)) {
             Token* a = peek(p);
-            if (!at_fn_name(p, 0)) perr(p, a, "expected an export alias but found %s", tok_desc(a));
+            if (!at_fn_name(p, 0)) {
+                perr(p, a, "expected an export alias but found %s", tok_desc(a));
+            }
+
             alias = take_fn_name(p);
         }
+
         GROW(n->as.export_.names, n->as.export_.count, cap);
         GROW(n->as.export_.aliases, n2, cap2);
         n->as.export_.names[n->as.export_.count++] = name;
         n->as.export_.aliases[n2++] = alias;
     } while (braces && accept(p, T_COMMA));
-    if (braces) expect(p, T_RBRACE, "'}'");
+    if (braces) {
+        expect(p, T_RBRACE, "'}'");
+    }
+
     return n;
 }
 
 static Node* parse_for(Parser* p) {
     Token* kw = advance(p);
     Node* n = new_node(S_FOR, kw->line);
-    if (accept(p, T_LET)) n->as.for_.mut = true;
-    else accept(p, T_CONST);
+    if (accept(p, T_LET)) {
+        n->as.for_.mut = true;
+    } else {
+        accept(p, T_CONST);
+    }
+
     n->as.for_.var1 = intern_tok(p, expect(p, T_IDENT, "loop variable name"));
-    if (accept(p, T_COMMA)) n->as.for_.var2 = intern_tok(p, expect(p, T_IDENT, "second loop variable name"));
+    if (accept(p, T_COMMA)) {
+        n->as.for_.var2 = intern_tok(p, expect(p, T_IDENT, "second loop variable name"));
+    }
+
     expect(p, T_IN, "'in'");
     n->as.for_.iter = parse_expression(p);
     n->as.for_.body = parse_block(p);
+
     return n;
 }
 
 static Node* parse_enum(Parser* p) {
     Token* kw = advance(p);
     Node* n = new_node(S_ENUM, kw->line);
-    if (check(p, T_IDENT) && peek_at(p, 1)->kind == T_IDENT) n->as.enum_decl.value_type = parse_type(p);
+    if (check(p, T_IDENT) && peek_at(p, 1)->kind == T_IDENT) {
+        n->as.enum_decl.value_type = parse_type(p);
+    }
+
     n->as.enum_decl.name = intern_tok(p, expect(p, T_IDENT, "enum name"));
     Token* lt = peek(p);
-    if (lt->kind == T_OP && lt->start[0] == '<')
+    if (lt->kind == T_OP && lt->start[0] == '<') {
         parse_generic_params(p, &n->as.enum_decl.generics, &n->as.enum_decl.defaults, &n->as.enum_decl.ngenerics, true);
+    }
+
     expect(p, T_LBRACE, "'{'");
     int cap = 0;
     while (!check(p, T_RBRACE)) {
-        if (accept(p, T_COMMA) || accept(p, T_SEMI)) continue;
+        if (accept(p, T_COMMA) || accept(p, T_SEMI)) {
+            continue;
+        }
+
         VariantDecl vd;
         memset(&vd, 0, sizeof vd);
         vd.name = intern_tok(p, expect(p, T_IDENT, "variant name"));
@@ -1246,30 +1572,49 @@ static Node* parse_enum(Parser* p) {
                 Type* t = parse_type(p);
                 GROW(vd.payload, vd.npayload, pcap);
                 vd.payload[vd.npayload++] = t;
-                if (!accept(p, T_COMMA)) break;
+                if (!accept(p, T_COMMA)) {
+                    break;
+                }
             }
+
             expect(p, T_RPAREN, "')'");
         }
-        if (accept(p, T_ASSIGN)) vd.value = parse_expression(p);
+
+        if (accept(p, T_ASSIGN)) {
+            vd.value = parse_expression(p);
+        }
+
         GROW(n->as.enum_decl.variants, n->as.enum_decl.nvariants, cap);
         n->as.enum_decl.variants[n->as.enum_decl.nvariants++] = vd;
     }
+
     expect(p, T_RBRACE, "'}'");
+
     return n;
 }
 
 static bool is_generic_prefix(Parser* p) {
-    Token* t = peek(p);
-    if (!(t->kind == T_OP && t->len == 1 && t->start[0] == '<')) return false;
+    const Token* t = peek(p);
+    if (!(t->kind == T_OP && t->len == 1 && t->start[0] == '<')) {
+        return false;
+    }
+
     int i = 1;
     for (;;) {
-        if (peek_at(p, i)->kind != T_IDENT) return false;
-        Token* sep = peek_at(p, i + 1);
+        if (peek_at(p, i)->kind != T_IDENT) {
+            return false;
+        }
+
+        const Token* sep = peek_at(p, i + 1);
         if (sep->kind == T_COMMA) {
             i += 2;
             continue;
         }
-        if (!(sep->kind == T_OP && sep->start[0] == '>')) return false;
+
+        if (!(sep->kind == T_OP && sep->start[0] == '>')) {
+            return false;
+        }
+
         Token* after = peek_at(p, i + 2);
         return after->kind == T_FUNCTION || tok_is(after, T_IDENT, "type") || tok_is(after, T_IDENT, "interface") ||
                tok_is(after, T_IDENT, "impl");
@@ -1279,20 +1624,30 @@ static bool is_generic_prefix(Parser* p) {
 /* type Name = ..., type Name<T> = ...; the current token is the name */
 static Node* parse_type_decl(Parser* p, int line, ObjString** gens, int ngen) {
     Token* a = advance(p);
-    if (a->kind != T_IDENT) perr(p, a, "expected a type name but found %s", tok_desc(a));
+    if (a->kind != T_IDENT) {
+        perr(p, a, "expected a type name but found %s", tok_desc(a));
+    }
+
     Prim pr;
-    if (prim_from_name(a->start, a->len, &pr) || (a->len == 5 && memcmp(a->start, "tuple", 5) == 0))
+    if (prim_from_name(a->start, a->len, &pr) || (a->len == 5 && memcmp(a->start, "tuple", 5) == 0)) {
         perr(p, a, "cannot redefine the built-in type '%.*s'", a->len, a->start);
+    }
+
     Node* n = new_node(S_TYPE, line);
     n->as.type_decl.name = intern_tok(p, a);
     n->as.type_decl.generics = gens;
     n->as.type_decl.ngenerics = ngen;
     if (check(p, T_OP)) {
-        if (ngen) perr(p, peek(p), "generic parameters are already given before 'type'");
+        if (ngen) {
+            perr(p, peek(p), "generic parameters are already given before 'type'");
+        }
+
         parse_generic_params(p, &n->as.type_decl.generics, NULL, &n->as.type_decl.ngenerics, false);
     }
+
     expect(p, T_ASSIGN, "'='");
     n->as.type_decl.def = parse_type_def(p);
+
     return n;
 }
 
@@ -1315,34 +1670,50 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
     n->as.iface.generics = gens;
     n->as.iface.ngenerics = ngen;
     if (check(p, T_OP)) {
-        if (ngen) perr(p, peek(p), "generic parameters are already given before 'interface'");
+        if (ngen) {
+            perr(p, peek(p), "generic parameters are already given before 'interface'");
+        }
+
         parse_generic_params(p, &n->as.iface.generics, NULL, &n->as.iface.ngenerics, false);
     }
+
     expect(p, T_LBRACE, "'{' to open the interface");
     int cap = 0, pcap_parents = 0;
     ObjString* empty = str_cintern(p->vm, "");
     while (!check(p, T_RBRACE)) {
-        if (accept(p, T_SEMI) || accept(p, T_COMMA)) continue;
+        if (accept(p, T_SEMI) || accept(p, T_COMMA)) {
+            continue;
+        }
+
         if (at_impl(p)) {
             advance(p);
             Type* parent = parse_type(p);
             expect(p, T_FOR, "'for'");
             Token* self = peek(p);
             Type* target = parse_type(p);
-            if (target->kind != TY_NAME || target->nquals || target->nargs || target->name != n->as.iface.name)
+            if (target->kind != TY_NAME || target->nquals || target->nargs || target->name != n->as.iface.name) {
                 perr(p, self, "inside an interface, 'impl' extends another interface: write 'impl Other for %s'",
                      n->as.iface.name->chars);
+            }
+
             GROW(n->as.iface.parents, n->as.iface.nparents, pcap_parents);
             n->as.iface.parents[n->as.iface.nparents++] = parent;
             continue;
         }
+
         Signature* sig = pp_calloc(1, sizeof(Signature));
         sig->file = p->file;
-        if (is_generic_prefix(p)) parse_generic_params(p, &sig->generics, NULL, &sig->ngenerics, false);
+        if (is_generic_prefix(p)) {
+            parse_generic_params(p, &sig->generics, NULL, &sig->ngenerics, false);
+        }
+
         Token* kw = expect(p, T_FUNCTION, "'function' (an interface lists the functions a type must have)");
         sig->line = kw->line;
         Token* fname = peek(p);
-        if (!at_fn_name(p, 0)) perr(p, fname, "expected a function name but found %s", tok_desc(fname));
+        if (!at_fn_name(p, 0)) {
+            perr(p, fname, "expected a function name but found %s", tok_desc(fname));
+        }
+
         sig->name = take_fn_name(p);
         expect(p, T_LPAREN, "'('");
         int pcap = 0;
@@ -1352,55 +1723,90 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
                 sig->variadic = true;
                 break;
             }
+
             Param prm;
             prm.type = parse_type(p);
             no_inline_fn_type(p);
             prm.name = check(p, T_IDENT) ? intern_tok(p, advance(p)) : empty; /* the name is optional */
             GROW(sig->params, sig->nparams, pcap);
             sig->params[sig->nparams++] = prm;
-            if (!accept(p, T_COMMA)) break;
+            if (!accept(p, T_COMMA)) {
+                break;
+            }
         }
+
         expect(p, T_RPAREN, "')'");
-        if (accept(p, T_ARROW)) sig->ret = parse_type(p);
+        if (accept(p, T_ARROW)) {
+            sig->ret = parse_type(p);
+        }
+
         Node* body = NULL;
         if (check(p, T_LBRACE)) {
-            for (int i = 0; i < sig->nparams; i++)
-                if (sig->params[i].name == empty)
+            for (int i = 0; i < sig->nparams; i++) {
+                if (sig->params[i].name == empty) {
                     perr(p, peek(p), "the parameters of a default implementation need names (parameter %d of '%s' has none)", i + 1,
                          sig->name->chars);
+                }
+            }
+
             body = parse_block(p);
         }
+
         int old_cap = cap;
         GROW(n->as.iface.reqs, n->as.iface.nreqs, cap);
-        if (cap != old_cap) n->as.iface.bodies = pp_realloc(n->as.iface.bodies, sizeof(Node*) * (size_t)cap);
+        if (cap != old_cap) {
+            n->as.iface.bodies = pp_realloc(n->as.iface.bodies, sizeof(Node*) * (size_t)cap);
+        }
+
         n->as.iface.bodies[n->as.iface.nreqs] = body;
         n->as.iface.reqs[n->as.iface.nreqs++] = sig;
     }
+
     expect(p, T_RBRACE, "'}' to close the interface");
+
     return n;
 }
 
 /* impl Iface for Type, impl Container<int> for IntList */
 static bool at_impl(Parser* p) {
     Token* t = peek(p);
-    if (!tok_is(t, T_IDENT, "impl") || peek_at(p, 1)->kind != T_IDENT || peek_at(p, 1)->nl_before) return false;
+    if (!tok_is(t, T_IDENT, "impl") || peek_at(p, 1)->kind != T_IDENT || peek_at(p, 1)->nl_before) {
+        return false;
+    }
+
     for (int i = 2;; i++) {
-        Token* x = peek_at(p, i);
-        if (x->nl_before || x->kind == T_EOF) return false;
-        if (x->kind == T_FOR) return true;
-        if (!(x->kind == T_IDENT || x->kind == T_COLON || x->kind == T_COMMA || x->kind == T_OP || x->kind == T_LBRACKET ||
-              x->kind == T_RBRACKET))
+        const Token* x = peek_at(p, i);
+        if (x->nl_before || x->kind == T_EOF) {
             return false;
+        }
+
+        if (x->kind == T_FOR) {
+            return true;
+        }
+
+        if (!(x->kind == T_IDENT || x->kind == T_COLON || x->kind == T_COMMA || x->kind == T_OP || x->kind == T_LBRACKET ||
+              x->kind == T_RBRACKET)) {
+            return false;
+        }
     }
 }
 
 /* `native` is contextual: native function f(...), native "impl" function f(...), native <T>function f(...) */
 static bool at_native(Parser* p) {
     Token* t = peek(p);
-    if (!tok_is(t, T_IDENT, "native")) return false;
+    if (!tok_is(t, T_IDENT, "native")) {
+        return false;
+    }
+
     Token* a = peek_at(p, 1);
-    if (a->nl_before) return false;
-    if (tok_is(a, T_IDENT, "type")) return peek_at(p, 2)->kind == T_IDENT; /* native type Map<K, V> */
+    if (a->nl_before) {
+        return false;
+    }
+
+    if (tok_is(a, T_IDENT, "type")) {
+        return peek_at(p, 2)->kind == T_IDENT; /* native type Map<K, V> */
+    }
+
     return a->kind == T_FUNCTION || a->kind == T_STRING || (a->kind == T_OP && a->start[0] == '<');
 }
 
@@ -1415,10 +1821,15 @@ static Node* parse_native_type(Parser* p, Token* kw) {
     Token* name = expect(p, T_IDENT, "type name after 'native type'");
     Node* n = new_node(S_TYPE, kw->line);
     n->as.type_decl.name = intern_tok(p, name);
-    Token* lt = peek(p);
-    if (lt->kind == T_OP && !lt->nl_before && lt->start[0] == '<')
+    const Token* lt = peek(p);
+    if (lt->kind == T_OP && !lt->nl_before && lt->start[0] == '<') {
         parse_generic_params(p, &n->as.type_decl.generics, NULL, &n->as.type_decl.ngenerics, false);
-    if (check(p, T_ASSIGN)) perr(p, peek(p), "native type '%s' cannot have a definition: it is implemented in C", n->as.type_decl.name->chars);
+    }
+
+    if (check(p, T_ASSIGN)) {
+        perr(p, peek(p), "native type '%s' cannot have a definition: it is implemented in C", n->as.type_decl.name->chars);
+    }
+
     return n;
 }
 
@@ -1433,26 +1844,43 @@ static Node* parse_native_type(Parser* p, Token* kw) {
  */
 static Node* parse_native(Parser* p) {
     Token* kw = advance(p);
-    if (p->block_depth > 0) perr(p, kw, "'native' is only allowed at the top level of a file");
+    if (p->block_depth > 0) {
+        perr(p, kw, "'native' is only allowed at the top level of a file");
+    }
+
     ObjString* impl = NULL;
     if (check(p, T_STRING)) {
         Token* s = advance(p);
-        if (s->slen == 0) perr(p, s, "empty native implementation name");
+        if (s->slen == 0) {
+            perr(p, s, "empty native implementation name");
+        }
+
         impl = str_intern(p->vm, s->sval, s->slen);
     }
+
     if (tok_is(peek(p), T_IDENT, "type")) {
-        if (impl) perr(p, peek(p), "a native type takes no implementation name");
+        if (impl) {
+            perr(p, peek(p), "a native type takes no implementation name");
+        }
+
         return parse_native_type(p, kw);
     }
+
     ObjString** gens = NULL;
     int ngen = 0;
-    if (is_generic_prefix(p)) parse_generic_params(p, &gens, NULL, &ngen, false);
-    if (!check(p, T_FUNCTION) || !at_fn_name(p, 1))
+    if (is_generic_prefix(p)) {
+        parse_generic_params(p, &gens, NULL, &ngen, false);
+    }
+
+    if (!check(p, T_FUNCTION) || !at_fn_name(p, 1)) {
         perr(p, peek(p), "expected a named function declaration after 'native' but found %s", tok_desc(peek(p)));
+    }
+
     p->in_native = true;
     Node* fn = parse_function(p, gens, ngen, true);
     p->in_native = false;
     fn->as.func.native = impl ? impl : fn->as.func.sig->name;
+
     return fn;
 }
 
@@ -1465,12 +1893,16 @@ static Node* parse_impl(Parser* p, ObjString** gens, int ngen) {
     n->as.impl.iface = parse_type(p);
     expect(p, T_FOR, "'for'");
     n->as.impl.target = parse_type(p);
+
     return n;
 }
 
 static Node* parse_statement(Parser* p) {
     Token* t = peek(p);
-    if (at_native(p)) return parse_native(p);
+    if (at_native(p)) {
+        return parse_native(p);
+    }
+
     Node* n = NULL;
     switch (t->kind) {
         case T_IMPORT: n = parse_import(p); break;
@@ -1478,11 +1910,16 @@ static Node* parse_statement(Parser* p) {
         case T_GLOBAL: {
             /* global function f(...) / global <T>function f(...): visible everywhere once the file is loaded */
             advance(p);
-            if (p->block_depth > 0) perr(p, t, "'global' is only allowed at the top level of a file");
+            if (p->block_depth > 0) {
+                perr(p, t, "'global' is only allowed at the top level of a file");
+            }
+
             Node* fn;
             if (at_native(p)) {
                 fn = parse_native(p); /* global native function f(...) */
-                if (fn->kind != S_FUNCDECL) perr_line(p, fn->line, "'global' only applies to functions, not to a native type");
+                if (fn->kind != S_FUNCDECL) {
+                    perr_line(p, fn->line, "'global' only applies to functions, not to a native type");
+                }
             } else if (is_generic_prefix(p)) {
                 ObjString** gens = NULL;
                 int ngen = 0;
@@ -1493,13 +1930,17 @@ static Node* parse_statement(Parser* p) {
             } else {
                 perr(p, peek(p), "expected a named function declaration after 'global' but found %s", tok_desc(peek(p)));
             }
+
             fn->as.func.global = true;
             return fn;
         }
         case T_CONST:
         case T_LET: n = parse_let(p); break;
         case T_FUNCTION: {
-            if (at_fn_name(p, 1)) return parse_function(p, NULL, 0, true);
+            if (at_fn_name(p, 1)) {
+                return parse_function(p, NULL, 0, true);
+            }
+
             break;
         }
         case T_OP:
@@ -1512,23 +1953,36 @@ static Node* parse_statement(Parser* p) {
                     n = parse_type_decl(p, t->line, gens, ngen);
                     break;
                 }
+
                 if (tok_is(peek(p), T_IDENT, "interface")) {
                     advance(p);
                     return parse_interface(p, t->line, gens, ngen);
                 }
+
                 if (tok_is(peek(p), T_IDENT, "impl")) {
-                    if (!at_impl(p)) perr(p, peek(p), "expected 'impl Interface for Type' after the generic parameter list");
+                    if (!at_impl(p)) {
+                        perr(p, peek(p), "expected 'impl Interface for Type' after the generic parameter list");
+                    }
+
                     n = parse_impl(p, gens, ngen);
                     break;
                 }
-                if (!check(p, T_FUNCTION)) perr(p, peek(p), "expected 'function' after the generic parameter list");
+
+                if (!check(p, T_FUNCTION)) {
+                    perr(p, peek(p), "expected 'function' after the generic parameter list");
+                }
+
                 return parse_function(p, gens, ngen, true);
             }
+
             break;
         case T_RETURN:
             advance(p);
             n = new_node(S_RETURN, t->line);
-            if (!is_terminator(peek(p))) n->as.ret.value = parse_expression(p);
+            if (!is_terminator(peek(p))) {
+                n->as.ret.value = parse_expression(p);
+            }
+
             break;
         case T_BREAK:
             advance(p);
@@ -1557,32 +2011,40 @@ static Node* parse_statement(Parser* p) {
                 n = parse_type_decl(p, t->line, NULL, 0);
                 break;
             }
+
             if (tok_is(t, T_IDENT, "interface") && a->kind == T_IDENT && !a->nl_before &&
                 (b->kind == T_LBRACE || (b->kind == T_OP && b->start[0] == '<'))) {
                 advance(p);
                 return parse_interface(p, t->line, NULL, 0);
             }
+
             if (at_impl(p)) {
                 n = parse_impl(p, NULL, 0);
                 break;
             }
+
             if (tok_is(t, T_IDENT, "precedence") && is_fn_name(a->kind) && !a->nl_before &&
                 (tok_is(b, T_IDENT, "over") || tok_is(b, T_IDENT, "under") || tok_is(b, T_IDENT, "as"))) {
                 advance(p);
                 advance(p);
                 advance(p);
                 Token* c = advance(p);
-                if (!is_fn_name(c->kind)) perr(p, c, "expected an operator after '%.*s'", b->len, b->start);
+                if (!is_fn_name(c->kind)) {
+                    perr(p, c, "expected an operator after '%.*s'", b->len, b->start);
+                }
+
                 n = new_node(S_PRECEDENCE, t->line);
                 n->as.prec.op = intern_tok(p, a);
                 n->as.prec.other = intern_tok(p, c);
                 n->as.prec.rel = tok_is(b, T_IDENT, "over") ? 1 : tok_is(b, T_IDENT, "under") ? -1 : 0;
                 break;
             }
+
             break;
         }
         default: break;
     }
+
     if (!n) {
         /*
          * `target op= value` is a statement even when the lexer read `op=` as one operator (because a
@@ -1599,8 +2061,12 @@ static Node* parse_statement(Parser* p) {
             e = parse_expression(p);
             at = peek(p);
         }
+
         if (opeq || at->kind == T_ASSIGN || at->kind == T_COMPOUND) {
-            if (!is_assignable(e)) perr(p, at, "invalid assignment target (expected a variable, field or index)");
+            if (!is_assignable(e)) {
+                perr(p, at, "invalid assignment target (expected a variable, field or index)");
+            }
+
             advance(p);
             n = new_node(S_ASSIGN, at->line);
             n->as.assign.target = e;
@@ -1611,14 +2077,20 @@ static Node* parse_statement(Parser* p) {
                 n->as.assign.ic = new_ic(p);
                 n->as.assign.ic2 = new_ic(p);
             }
-            if (e->kind == N_INDEX) n->as.assign.ic3 = new_ic(p);
+
+            if (e->kind == N_INDEX) {
+                n->as.assign.ic3 = new_ic(p);
+            }
+
             n->as.assign.value = parse_expression(p);
         } else {
             n = new_node(S_EXPR, e->line);
             n->as.expr.expr = e;
         }
     }
+
     end_statement(p);
+
     return n;
 }
 
@@ -1626,7 +2098,10 @@ static Node* parse_statement(Parser* p) {
 
 Node* parse_program(VM* vm, const char* src, const char* file) {
     TokenList tl = {0};
-    if (!lex(src, file, &tl)) return NULL;
+    if (!lex(src, file, &tl)) {
+        return NULL;
+    }
+
     Parser p;
     memset(&p, 0, sizeof p);
     p.vm = vm;
@@ -1637,36 +2112,57 @@ Node* parse_program(VM* vm, const char* src, const char* file) {
         free(tl.toks);
         return NULL;
     }
+
     Node* block = new_node(N_BLOCK, 1);
     block->as.block.scoped = true;
     /* a file is: imports, then the code, then exports */
     enum { IMPORTS, CODE, EXPORTS } part = IMPORTS;
     int code_line = 0, export_line = 0;
     while (!check(&p, T_EOF)) {
-        if (accept(&p, T_SEMI)) continue;
-        if (check(&p, T_RBRACE)) perr(&p, peek(&p), "unexpected '}'");
+        if (accept(&p, T_SEMI)) {
+            continue;
+        }
+
+        if (check(&p, T_RBRACE)) {
+            perr(&p, peek(&p), "unexpected '}'");
+        }
+
         Token* start = peek(&p);
         Node* s = parse_statement(&p);
         if (s->kind == S_IMPORT) {
-            if (part == CODE)
+            if (part == CODE) {
                 perr(&p, start, "imports must come first in a file, before any other statement (code starts on line %d)",
                      code_line);
-            if (part == EXPORTS)
+            }
+
+            if (part == EXPORTS) {
                 perr(&p, start, "imports must come first in a file, before any other statement (exports start on line %d)",
                      export_line);
+            }
         } else if (s->kind == S_EXPORT && !s->as.export_.decl) {
-            if (part != EXPORTS) export_line = start->line;
+            if (part != EXPORTS) {
+                export_line = start->line;
+            }
+
             part = EXPORTS;
         } else {
-            if (part == EXPORTS)
+            if (part == EXPORTS) {
                 perr(&p, start, "exports must be the last statements of a file (exports start on line %d)", export_line);
-            if (part == IMPORTS) code_line = start->line;
+            }
+
+            if (part == IMPORTS) {
+                code_line = start->line;
+            }
+
             part = CODE;
         }
+
         nl_push(&block->as.block.stmts, s);
     }
+
     check_declarations(&p, &block->as.block.stmts);
     free(tl.toks);
+
     return block;
 }
 
@@ -1676,6 +2172,7 @@ Signature* parse_native_signature(VM* vm, const char* name, const char* sig_src)
         fprintf(stderr, "fatal: bad native signature for '%s'\n", name);
         exit(70);
     }
+
     Parser p;
     memset(&p, 0, sizeof p);
     p.vm = vm;
@@ -1686,12 +2183,20 @@ Signature* parse_native_signature(VM* vm, const char* name, const char* sig_src)
         fprintf(stderr, "fatal: bad native signature for '%s': %s\n", name, sig_src);
         exit(70);
     }
+
     Signature* sig = pp_calloc(1, sizeof(Signature));
     sig->name = str_cintern(vm, name);
     sig->file = "<internal>";
-    if (check(&p, T_OP) && peek(&p)->start[0] == '<') parse_generic_params(&p, &sig->generics, NULL, &sig->ngenerics, false);
+    if (check(&p, T_OP) && peek(&p)->start[0] == '<') {
+        parse_generic_params(&p, &sig->generics, NULL, &sig->ngenerics, false);
+    }
+
     parse_params(&p, sig, NULL);
-    if (accept(&p, T_ARROW)) sig->ret = parse_type(&p);
+    if (accept(&p, T_ARROW)) {
+        sig->ret = parse_type(&p);
+    }
+
     free(tl.toks);
+
     return sig;
 }

@@ -15,22 +15,34 @@
  */
 static Value std_range_has(VM* vm, int argc, Value* a) {
     ObjRange* r = AS_RANGE(a[0]);
-    Value x = a[1];
-    int64_t len = range_length(r);
-    if (len == 0) return bool_val(false);
+    const Value x = a[1];
+    const int64_t len = range_length(r);
+    if (len == 0) {
+        return bool_val(false);
+    }
 
     if (x.kind == VAL_INT && !range_is_float(r)) {
         int64_t start = r->start.as.i, step = r->step.as.i, d = x.as.i - start;
-        if (d % step != 0) return bool_val(false);
-        int64_t k = d / step;
+        if (d % step != 0) {
+            return bool_val(false);
+        }
+
+        const int64_t k = d / step;
         return bool_val(k >= 0 && k < len);
     }
 
     double xf = num_as_double(x), start = num_as_double(r->start), step = num_as_double(r->step);
-    if (!isfinite(xf)) return bool_val(false);
-    double k = round((xf - start) / step);
-    if (k < 0 || k >= (double)len) return bool_val(false);
-    double elem = num_as_double(range_at(r, (int64_t)k));
+    if (!isfinite(xf)) {
+        return bool_val(false);
+    }
+
+    const double k = round((xf - start) / step);
+    if (k < 0 || k >= (double)len) {
+        return bool_val(false);
+    }
+
+    const double elem = num_as_double(range_at(r, (int64_t)k));
+
     return bool_val(fabs(elem - xf) <= fabs(step) * 1e-9);
 }
 
@@ -39,25 +51,23 @@ static Value std_range_has(VM* vm, int argc, Value* a) {
  * The bounds follow the range's direction and end: 0...5 is [0, 5),
  * 5...1 is (1, 5], 5...=1 is [1, 5] and range(0, 1, 0.25) is [0, 1).
  */
-static Value std_in_range(VM* vm, int argc, Value* a)
-{
+static Value std_in_range(VM* vm, int argc, Value* a) {
     const Value x = a[0];
-    ObjRange* r = AS_RANGE(a[1]);
+    const ObjRange* r = AS_RANGE(a[1]);
     const double xf = num_as_double(x);
-    if (!isfinite(xf))
-    {
+    if (!isfinite(xf)) {
         return bool_val(false);
     }
 
     const double start = num_as_double(r->start);
     const double step = num_as_double(r->step);
     double end = num_as_double(r->end);
-    if (r->inclusive)
-    {
+    if (r->inclusive) {
         /* ...= stored end one step past the last element: undo that, the end is included */
         end -= step;
         return bool_val(step > 0 ? xf >= start && xf <= end : xf <= start && xf >= end);
     }
+
     return bool_val(step > 0 ? xf >= start && xf < end : xf <= start && xf > end);
 }
 
@@ -68,11 +78,16 @@ static Value std_in_range(VM* vm, int argc, Value* a)
  */
 
 /* the constructors: std:map(), std:map(from), std:set(), std:set(from) (see native_type_construct) */
-static Value map_new_fn(VM* vm, int argc, Value* a) { return native_type_construct(vm, vm->t_map, argc, a, 0); }
-static Value set_new_fn(VM* vm, int argc, Value* a) { return native_type_construct(vm, vm->t_set, argc, a, 0); }
+static Value map_new_fn(VM* vm, int argc, Value* a) {
+    return native_type_construct(vm, vm->t_map, argc, a, 0);
+}
+
+static Value set_new_fn(VM* vm, int argc, Value* a) {
+    return native_type_construct(vm, vm->t_set, argc, a, 0);
+}
 
 static Value map_get_fn(VM* vm, int argc, Value* a) {
-    MapEntry* e = map_find(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0));
+    const MapEntry* e = map_find(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0));
     return e ? make_some(vm, e->value) : make_none(vm);
 }
 
@@ -89,7 +104,10 @@ static Value map_has(VM* vm, int argc, Value* a) {
 
 static Value map_remove_fn(VM* vm, int argc, Value* a) {
     Value old;
-    if (!map_remove(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0), &old)) return make_none(vm);
+    if (!map_remove(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0), &old)) {
+        return make_none(vm);
+    }
+
     return make_some(vm, old);
 }
 
@@ -99,8 +117,9 @@ static Value set_remove(VM* vm, int argc, Value* a) {
 
 static Value set_add(VM* vm, int argc, Value* a) {
     ObjMap* s = AS_MAP(a[0]);
-    int before = s->live;
+    const int before = s->live;
     map_put(s, a[1], hash_key(vm, a[1], 0), void_val());
+
     return bool_val(s->live != before);
 }
 
@@ -108,16 +127,24 @@ static Value set_add(VM* vm, int argc, Value* a) {
 static Value map_keys(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
-    for (int i = 0; i < m->count; i++)
-        if (m->entries[i].live) r->items[r->count++] = m->entries[i].key;
+    for (int i = 0; i < m->count; i++) {
+        if (m->entries[i].live) {
+            r->items[r->count++] = m->entries[i].key;
+        }
+    }
+
     return obj_val(r);
 }
 
 static Value map_values(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
-    for (int i = 0; i < m->count; i++)
-        if (m->entries[i].live) r->items[r->count++] = m->entries[i].value;
+    for (int i = 0; i < m->count; i++) {
+        if (m->entries[i].live) {
+            r->items[r->count++] = m->entries[i].value;
+        }
+    }
+
     return obj_val(r);
 }
 
@@ -126,12 +153,16 @@ static Value map_entries(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
     for (int i = 0; i < m->count; i++) {
-        if (!m->entries[i].live) continue;
+        if (!m->entries[i].live) {
+            continue;
+        }
+
         ObjTuple* t = tuple_new(vm, 2);
         t->items[0] = m->entries[i].key;
         t->items[1] = m->entries[i].value;
         r->items[r->count++] = obj_val(t);
     }
+
     return obj_val(r);
 }
 
@@ -142,24 +173,43 @@ static Value map_clear_fn(VM* vm, int argc, Value* a) {
 
 /* union / intersection / difference build a new set, in the order of a, then b */
 static Value set_combine(VM* vm, Value* a, int mode) {
-    ObjMap* x = AS_MAP(a[0]);
+    const ObjMap* x = AS_MAP(a[0]);
     ObjMap* y = AS_MAP(a[1]);
     ObjMap* r = map_new(vm, OBJ_SET);
     for (int i = 0; i < x->count; i++) {
-        MapEntry* e = &x->entries[i];
-        if (!e->live) continue;
-        bool in_y = map_find(y, e->key, e->hash) != NULL;
-        if (mode == 0 || (mode == 1 && in_y) || (mode == 2 && !in_y)) map_put(r, e->key, e->hash, void_val());
+        const MapEntry* e = &x->entries[i];
+        if (!e->live) {
+            continue;
+        }
+
+        const bool in_y = map_find(y, e->key, e->hash) != NULL;
+        if (mode == 0 || (mode == 1 && in_y) || (mode == 2 && !in_y)) {
+            map_put(r, e->key, e->hash, void_val());
+        }
     }
-    if (mode == 0)
-        for (int i = 0; i < y->count; i++)
-            if (y->entries[i].live) map_put(r, y->entries[i].key, y->entries[i].hash, void_val());
+
+    if (mode == 0) {
+        for (int i = 0; i < y->count; i++) {
+            if (y->entries[i].live) {
+                map_put(r, y->entries[i].key, y->entries[i].hash, void_val());
+            }
+        }
+    }
+
     return obj_val(r);
 }
 
-static Value set_union(VM* vm, int argc, Value* a) { return set_combine(vm, a, 0); }
-static Value set_intersection(VM* vm, int argc, Value* a) { return set_combine(vm, a, 1); }
-static Value set_difference(VM* vm, int argc, Value* a) { return set_combine(vm, a, 2); }
+static Value set_union(VM* vm, int argc, Value* a) {
+    return set_combine(vm, a, 0);
+}
+
+static Value set_intersection(VM* vm, int argc, Value* a) {
+    return set_combine(vm, a, 1);
+}
+
+static Value set_difference(VM* vm, int argc, Value* a) {
+    return set_combine(vm, a, 2);
+}
 
 static const NativeImpl STD[] = {
     {"std_in_range", std_in_range},
@@ -182,7 +232,6 @@ static const NativeImpl STD[] = {
     {NULL, NULL},
 };
 
-void mod_std_register(VM* vm)
-{
+void mod_std_register(VM* vm) {
     vm_register_native_impls(vm, "std", STD);
 }

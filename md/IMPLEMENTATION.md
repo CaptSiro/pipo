@@ -69,6 +69,82 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
   (`vm_push`), on the scope stack, or reachable from a scope or module. All
   evaluation code follows this. Interned names and literals are permanent.
 
+## Code style
+
+These rules apply to the C sources and, where they make sense, to `.pp` code
+too (`lib/`, `examples/`, the prelude in `src/prelude.c`): braces at the end
+of the line, no one-line `if` / `for` / `while` bodies, no one-line function
+bodies, and statements grouped with blank lines. In `.pp`, short `match` arms
+(`some(x) -> { return x }`) and lambdas (`x -> { total += x }`) are
+expressions and may stay on one line, like `case X: return y;` in a C
+`switch`. The test scripts in `tests/` may stay compact, since some of them
+test exactly that syntax, and the `.err` files depend on their line numbers.
+
+### C
+
+* Use `const` if possible: for local variables that are never reassigned
+  (`const int n = ...`), and for pointers whose target is not modified through
+  them (`const ObjString* s = ...`)
+* Curly brackets at the end of a line and not on the next line:
+```
+// wrong
+int f() 
+{
+    return 0;
+}
+
+// right
+int f() {
+    return 0;
+}
+```
+* The same bracket rule applies to all statements that use brackets
+* Do not use one-line if statements. For example, this is wrong: `if (condition) statement;`, correct:
+```
+if (condition) {
+    statement;
+}
+```
+* Do not use one-line function statements. For example, this is wrong: `int f() { return 0; }`, correct:
+```
+int f() {
+    return 0;
+}
+```
+* Group statements with the use of new lines
+```
+// wrong
+static Value io_write_file(VM* vm, int argc, Value* a) {
+    const char* path = AS_STR(a[0])->chars;
+    ObjString* content = AS_STR(a[1]);
+    FILE* f = fopen(path, "wb");
+    if (!f) return fail_errno(vm, "open for writing", path);
+    size_t n = fwrite(content->chars, 1, (size_t)content->len, f);
+    bool ok = n == (size_t)content->len && fclose(f) == 0;
+    if (!ok) return fail_errno(vm, "write", path);
+    return make_success(vm, int_val((int64_t)n));
+}
+
+// correct
+static Value io_write_file(VM* vm, int argc, Value* a) {
+    const char* path = AS_STR(a[0])->chars;
+    const ObjString* content = AS_STR(a[1]);
+    
+    FILE* f = fopen(path, "wb");
+    if (!f) {
+        return fail_errno(vm, "open for writing", path);
+    }
+    
+    size_t n = fwrite(content->chars, 1, (size_t)content->len, f);
+    bool ok = n == (size_t)content->len && fclose(f) == 0;
+    if (!ok) {
+        return fail_errno(vm, "write", path);
+    }
+    
+    return make_success(vm, int_val((int64_t)n));
+}
+```
+
 ## Known limitations / next steps
 
 * Performance is roughly CPython-class for calls (`fib(27)` ~0.3 s). A

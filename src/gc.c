@@ -12,14 +12,19 @@ static Obj** gray;
 static int ngray, capgray;
 
 static void mark_obj(Obj* o) {
-    if (!o || o->marked || o->permanent) return;
+    if (!o || o->marked || o->permanent) {
+        return;
+    }
+
     o->marked = true;
     GROW(gray, ngray, capgray);
     gray[ngray++] = o;
 }
 
 static void mark_value(Value v) {
-    if (v.kind == VAL_OBJ) mark_obj(v.as.o);
+    if (v.kind == VAL_OBJ) {
+        mark_obj(v.as.o);
+    }
 }
 
 static void mark_table(Table* t) {
@@ -36,24 +41,34 @@ static void blacken(Obj* o) {
         case OBJ_NATIVE_TYPE:
         case OBJ_INSTANCE: break; /* its type is permanent, and instances hold no GC references */
         case OBJ_TUPLE: {
-            ObjTuple* t = (ObjTuple*)o;
-            for (int i = 0; i < t->count; i++) mark_value(t->items[i]);
+            const ObjTuple* t = (ObjTuple*)o;
+            for (int i = 0; i < t->count; i++) {
+                mark_value(t->items[i]);
+            }
+
             break;
         }
         case OBJ_MAP:
         case OBJ_SET: {
             ObjMap* m = (ObjMap*)o;
             for (int i = 0; i < m->count; i++) {
-                if (!m->entries[i].live) continue;
+                if (!m->entries[i].live) {
+                    continue;
+                }
+
                 mark_value(m->entries[i].key);
                 mark_value(m->entries[i].value);
             }
+
             break;
         }
         case OBJ_NATIVE: mark_obj((Obj*)((ObjNative*)o)->env); break;
         case OBJ_ARRAY: {
-            ObjArray* a = (ObjArray*)o;
-            for (int i = 0; i < a->count; i++) mark_value(a->items[i]);
+            const ObjArray* a = (ObjArray*)o;
+            for (int i = 0; i < a->count; i++) {
+                mark_value(a->items[i]);
+            }
+
             break;
         }
         case OBJ_OBJECT: {
@@ -64,8 +79,11 @@ static void blacken(Obj* o) {
         }
         case OBJ_FUNCTION: mark_obj((Obj*)((ObjFunction*)o)->closure); break;
         case OBJ_OVERLOAD: {
-            ObjOverload* s = (ObjOverload*)o;
-            for (int i = 0; i < s->count; i++) mark_obj(s->items[i]);
+            const ObjOverload* s = (ObjOverload*)o;
+            for (int i = 0; i < s->count; i++) {
+                mark_obj(s->items[i]);
+            }
+
             break;
         }
         case OBJ_ENUM: {
@@ -78,13 +96,17 @@ static void blacken(Obj* o) {
                 mark_obj((Obj*)en->variants[i].singleton);
                 mark_obj((Obj*)en->variants[i].ctor);
             }
+
             break;
         }
         case OBJ_VARIANT_CTOR: mark_obj((Obj*)((ObjVariantCtor*)o)->en); break;
         case OBJ_ENUM_VALUE: {
-            ObjEnumValue* ev = (ObjEnumValue*)o;
+            const ObjEnumValue* ev = (ObjEnumValue*)o;
             mark_obj((Obj*)ev->en);
-            for (int i = 0; i < ev->count; i++) mark_value(ev->payload[i]);
+            for (int i = 0; i < ev->count; i++) {
+                mark_value(ev->payload[i]);
+            }
+
             break;
         }
         case OBJ_TYPEDEF:
@@ -93,11 +115,17 @@ static void blacken(Obj* o) {
             mark_table(&((ObjTypeDef*)o)->impl_fns);
             break;
         case OBJ_INTERFACE: {
-            ObjInterface* it = (ObjInterface*)o;
+            const ObjInterface* it = (ObjInterface*)o;
             mark_obj((Obj*)it->env);
             mark_obj((Obj*)it->module);
-            for (int i = 0; i < it->nimpls; i++) mark_obj((Obj*)it->impls[i].env);
-            for (int i = 0; i < it->nparents; i++) mark_obj((Obj*)it->parents[i]);
+            for (int i = 0; i < it->nimpls; i++) {
+                mark_obj((Obj*)it->impls[i].env);
+            }
+
+            for (int i = 0; i < it->nparents; i++) {
+                mark_obj((Obj*)it->parents[i]);
+            }
+
             break;
         }
         case OBJ_MODULE: {
@@ -126,7 +154,10 @@ static void free_obj(Obj* o) {
         case OBJ_SET: map_free((ObjMap*)o); break;
         case OBJ_INSTANCE: {
             ObjInstance* inst = (ObjInstance*)o;
-            if (inst->type->cls->free) inst->type->cls->free(inst);
+            if (inst->type->cls->free) {
+                inst->type->cls->free(inst);
+            }
+
             break;
         }
         case OBJ_ENUM:
@@ -145,18 +176,28 @@ static void free_obj(Obj* o) {
                 free(((ObjFunction*)o)->sig->params);
                 free(((ObjFunction*)o)->sig);
             }
+
             break;
         default: break;
     }
+
     free(o);
 }
 
 void gc_collect(VM* vm) {
     /* inline caches hold raw pointers; they must never outlive their targets */
-    for (int i = 0; i < vm->ncaches; i++) vm->caches[i]->sets[0] = NULL;
+    for (int i = 0; i < vm->ncaches; i++) {
+        vm->caches[i]->sets[0] = NULL;
+    }
 
-    for (int i = 0; i < vm->sp; i++) mark_value(vm->stack[i]);
-    for (int i = 0; i < vm->esp; i++) mark_obj((Obj*)vm->envs[i]);
+    for (int i = 0; i < vm->sp; i++) {
+        mark_value(vm->stack[i]);
+    }
+
+    for (int i = 0; i < vm->esp; i++) {
+        mark_obj((Obj*)vm->envs[i]);
+    }
+
     mark_obj((Obj*)vm->builtins);
     mark_table(&vm->modules);
     mark_table(&vm->globals);
@@ -169,13 +210,19 @@ void gc_collect(VM* vm) {
         mark_table(&nts[i]->impl_fns);
         mark_obj((Obj*)nts[i]->module);
     }
+
     for (int i = 0; i < vm->nnative_types; i++) {
         mark_table(&vm->native_types[i]->impl_fns);
         mark_obj((Obj*)vm->native_types[i]->module);
     }
-    for (int i = 0; i < vm->nctypes; i++) mark_obj(vm->ctypes[i]->direct);
 
-    while (ngray > 0) blacken(gray[--ngray]);
+    for (int i = 0; i < vm->nctypes; i++) {
+        mark_obj(vm->ctypes[i]->direct);
+    }
+
+    while (ngray > 0) {
+        blacken(gray[--ngray]);
+    }
 
     size_t live = 0;
     Obj** link = &vm->objects;
@@ -190,10 +237,13 @@ void gc_collect(VM* vm) {
             free_obj(o);
         }
     }
+
     vm->num_objects = live;
     vm->next_gc = live * 2 > 200000 ? live * 2 : 200000;
 }
 
 void gc_maybe(VM* vm) {
-    if (vm->gc_disabled == 0 && vm->num_objects >= vm->next_gc) gc_collect(vm);
+    if (vm->gc_disabled == 0 && vm->num_objects >= vm->next_gc) {
+        gc_collect(vm);
+    }
 }

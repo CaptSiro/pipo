@@ -23,25 +23,45 @@ static const char* script_file(VM* vm) {
 static char* current_dir(void) {
 #ifdef _WIN32
     char buf[_MAX_PATH * 4];
-    if (_fullpath(buf, ".", sizeof buf)) return pp_strdup(buf);
+    if (_fullpath(buf, ".", sizeof buf)) {
+        return pp_strdup(buf);
+    }
 #else
     char buf[PATH_MAX];
-    if (realpath(".", buf)) return pp_strdup(buf);
+    if (realpath(".", buf)) {
+        return pp_strdup(buf);
+    }
 #endif
+
     return pp_strdup(".");
 }
 
 char* vm_script_dir(VM* vm) {
     const char* f = script_file(vm);
-    if (!f) return current_dir();
+    if (!f) {
+        return current_dir();
+    }
+
     const char* slash = NULL;
-    for (const char* c = f; *c; c++)
-        if (*c == '/' || *c == '\\') slash = c;
-    if (!slash) return current_dir();
-    if (slash == f) return pp_strndup(f, 1); /* "/script.pp" -> "/" */
+    for (const char* c = f; *c; c++) {
+        if (*c == '/' || *c == '\\') {
+            slash = c;
+        }
+    }
+
+    if (!slash) {
+        return current_dir();
+    }
+
+    if (slash == f) {
+        return pp_strndup(f, 1); /* "/script.pp" -> "/" */
+    }
 #ifdef _WIN32
-    if (slash == f + 2 && f[1] == ':') return pp_strndup(f, 3); /* "C:\script.pp" -> "C:\" */
+    if (slash == f + 2 && f[1] == ':') {
+        return pp_strndup(f, 3); /* "C:\script.pp" -> "C:\" */
+    }
 #endif
+
     return pp_strndup(f, (size_t)(slash - f));
 }
 
@@ -54,8 +74,9 @@ static Value pp_file(VM* vm, int argc, Value* a) {
 /* dir() -> string: directory of that file (the working directory in the REPL) */
 static Value pp_dir(VM* vm, int argc, Value* a) {
     char* d = vm_script_dir(vm);
-    Value v = obj_val(str_cnew(vm, d));
+    const Value v = obj_val(str_cnew(vm, d));
     free(d);
+
     return v;
 }
 
@@ -72,6 +93,7 @@ static ObjModule* pp_init(VM* vm) {
     def_native(vm, m->env, "line", "() -> int", pp_line);
     module_export_all(m);
     vm->sp--;
+
     return m;
 }
 

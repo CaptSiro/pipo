@@ -24,8 +24,12 @@
 static Value os_args(VM* vm, int argc, Value* a) {
     ObjArray* arr = array_new(vm, vm->argc);
     vm_push(vm, obj_val(arr));
-    for (int i = 1; i < vm->argc; i++) array_push(arr, obj_val(str_cnew(vm, vm->argv[i])));
+    for (int i = 1; i < vm->argc; i++) {
+        array_push(arr, obj_val(str_cnew(vm, vm->argv[i])));
+    }
+
     vm->sp--;
+
     return obj_val(arr);
 }
 
@@ -35,10 +39,15 @@ static Value os_args(VM* vm, int argc, Value* a) {
 #define PP_SEP '/'
 #endif
 
-static bool is_sep(char c) { return c == '/' || c == '\\'; }
+static bool is_sep(char c) {
+    return c == '/' || c == '\\';
+}
 
 static bool path_is_absolute(const char* p) {
-    if (is_sep(p[0])) return true;
+    if (is_sep(p[0])) {
+        return true;
+    }
+
     return ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':';
 }
 
@@ -47,22 +56,37 @@ static bool path_is_absolute(const char* p) {
  * part starts over (like Python's os.path.join), an empty part is skipped.
  */
 static void join_part(StrBuf* sb, const char* part) {
-    if (!part[0]) return;
-    if (path_is_absolute(part)) sb->len = 0;
-    else if (sb->len && !is_sep(sb->data[sb->len - 1])) sb_putc(sb, PP_SEP);
-    if (sb->len && is_sep(sb->data[sb->len - 1]))
-        while (is_sep(*part)) part++;
+    if (!part[0]) {
+        return;
+    }
+
+    if (path_is_absolute(part)) {
+        sb->len = 0;
+    } else if (sb->len && !is_sep(sb->data[sb->len - 1])) {
+        sb_putc(sb, PP_SEP);
+    }
+
+    if (sb->len && is_sep(sb->data[sb->len - 1])) {
+        while (is_sep(*part)) {
+            part++;
+        }
+    }
+
     sb_puts(sb, part);
 }
 
 static Value join_args(VM* vm, const char* fname, StrBuf* sb, int argc, Value* a) {
     for (int i = 0; i < argc; i++) {
-        if (!IS_KIND(a[i], OBJ_STRING))
+        if (!IS_KIND(a[i], OBJ_STRING)) {
             rt_error(vm, 0, "os:%s expects strings, but argument %d is %s", fname, i + 1, value_type_name(a[i]));
+        }
+
         join_part(sb, AS_STR(a[i])->chars);
     }
-    Value v = obj_val(str_new(vm, sb->data ? sb->data : "", (int)sb->len));
+
+    const Value v = obj_val(str_new(vm, sb->data ? sb->data : "", (int)sb->len));
     sb_free(sb);
+
     return v;
 }
 
@@ -70,6 +94,7 @@ static Value join_args(VM* vm, const char* fname, StrBuf* sb, int argc, Value* a
 static Value os_join(VM* vm, int argc, Value* a) {
     StrBuf sb;
     sb_init(&sb);
+
     return join_args(vm, "join", &sb, argc, a);
 }
 
@@ -80,6 +105,7 @@ static Value os_join_pp(VM* vm, int argc, Value* a) {
     char* dir = vm_script_dir(vm);
     sb_puts(&sb, dir);
     free(dir);
+
     return join_args(vm, "join_pp", &sb, argc, a);
 }
 
@@ -92,6 +118,7 @@ static ObjModule* os_init(VM* vm) {
     def_native(vm, m->env, "join_pp", "(...) -> string", os_join_pp);
     module_export_all(m);
     vm->sp--;
+
     return m;
 }
 

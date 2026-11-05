@@ -40,6 +40,7 @@ static inline Value void_val(void) {
     Value v;
     v.kind = VAL_VOID;
     v.as.i = 0;
+
     return v;
 }
 
@@ -48,6 +49,7 @@ static inline Value bool_val(bool b) {
     v.kind = VAL_BOOL;
     v.as.i = 0;
     v.as.b = b;
+
     return v;
 }
 
@@ -55,6 +57,7 @@ static inline Value int_val(int64_t i) {
     Value v;
     v.kind = VAL_INT;
     v.as.i = i;
+
     return v;
 }
 
@@ -62,6 +65,7 @@ static inline Value float_val(double f) {
     Value v;
     v.kind = VAL_FLOAT;
     v.as.f = f;
+
     return v;
 }
 
@@ -69,6 +73,7 @@ static inline Value obj_val(void* o) {
     Value v;
     v.kind = VAL_OBJ;
     v.as.o = (Obj*)o;
+
     return v;
 }
 
@@ -246,8 +251,13 @@ typedef struct {
     bool inclusive; /* written with ...= : end was moved one step past the last element */
 } ObjRange;
 
-static inline bool range_is_float(const ObjRange* r) { return r->start.kind == VAL_FLOAT; }
-static inline double num_as_double(Value v) { return v.kind == VAL_FLOAT ? v.as.f : (double)v.as.i; }
+static inline bool range_is_float(const ObjRange* r) {
+    return r->start.kind == VAL_FLOAT;
+}
+
+static inline double num_as_double(Value v) {
+    return v.kind == VAL_FLOAT ? v.as.f : (double)v.as.i;
+}
 
 typedef struct {
     Type* type; /* NULL = untyped (any) */

@@ -53,3 +53,21 @@ intellijPlatformTesting {
         }
     }
 }
+
+// The library modules of the language (../../lib/*.pp: std, fs, math, types) are bundled
+// as a fallback, so `import fs` resolves in projects without a lib/ folder or a built pp.
+// A real lib/ (the project's, the interpreter's, PP_PATH) always comes first.
+val pipoLib = rootDir.resolve("../../lib")
+tasks.processResources {
+    from(pipoLib) {
+        include("*.pp")
+        into("pipo/lib")
+    }
+    inputs.dir(pipoLib).optional()
+    doLast {
+        val names = pipoLib.listFiles { f -> f.extension == "pp" }?.map { it.nameWithoutExtension }?.sorted() ?: emptyList()
+        val dir = destinationDir.resolve("pipo/lib")
+        dir.mkdirs()
+        dir.resolve("index.txt").writeText(names.joinToString("\n"))
+    }
+}

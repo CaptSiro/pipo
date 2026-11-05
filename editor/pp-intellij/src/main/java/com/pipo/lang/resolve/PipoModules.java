@@ -95,6 +95,9 @@ public final class PipoModules {
         }
         if (vf != null) {
             current = psi.findFile(vf);
+        } else if (current == null && folder == null && !path.isFile()) {
+            // no lib/ of its own: the copy of the language's library bundled with the plugin
+            current = PipoBuiltins.getInstance(project).libraryModule(first.getText());
         }
 
         for (String sub : path.getSubNames()) {
@@ -225,6 +228,7 @@ public final class PipoModules {
     /** module names usable in `import name` from file */
     public static Set<String> availableModules(PsiFile file) {
         Set<String> out = new TreeSet<>(PipoBuiltins.STUB_MODULES);
+        out.addAll(PipoBuiltins.bundledLibraryModules());
         List<VirtualFile> dirs = libraryDirs(file.getProject());
         VirtualFile self = file.getOriginalFile().getVirtualFile();
         for (VirtualFile d : dirs) {

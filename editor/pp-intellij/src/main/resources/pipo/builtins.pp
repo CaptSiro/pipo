@@ -219,3 +219,9 @@ native function call(function f, ...) -> any
         fail(_) -> { return fallback }
     }
 }
+
+// the value inside some(...); none() is returned from the calling function
+native <T>function lift(T? o) -> T
+
+// the value inside success(...); fail(...) is returned from the calling function
+native <S, F>function lift(Error<S, F> r) -> S

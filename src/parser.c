@@ -13,6 +13,7 @@ typedef struct {
     int block_depth; /* 0 = top level of the file */
     bool no_lambda;  /* parsing a match pattern / guard, where `x -> ...` starts the arm body */
     bool in_native;  /* parsing the declaration after `native` (it must not have a body) */
+    int lift_uses;   /* `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift */
 } Parser;
 
 /* ---------------------------------------------------------------- helpers */
@@ -630,6 +631,13 @@ static void parse_args(Parser* p, NodeList* out) {
     p->depth--;
 }
 
+/* lift() returns from the function whose body names it: count every mention (lift(x), x.lift(), lift as a value) */
+static void note_lift(Parser* p, ObjString* name) {
+    if (str_equals(name, "lift")) {
+        p->lift_uses++;
+    }
+}
+
 static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool statement) {
     Token* kw = expect(p, T_FUNCTION, "'function'");
     Signature* sig = pp_calloc(1, sizeof(Signature));
@@ -691,7 +699,9 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
         perr(p, unnamed, "expected parameter name but found %s", tok_desc(unnamed));
     }
 
+    int lifts = p->lift_uses;
     Node* body = parse_block(p);
+    sig->uses_lift = p->lift_uses != lifts;
     Node* n = new_node(statement && named ? S_FUNCDECL : N_FUNC, kw->line);
     n->as.func.sig = sig;
     n->as.func.body = body;
@@ -723,6 +733,7 @@ static Node* parse_lambda(Parser* p) {
     expect(p, T_ARROW, "'->'");
     bool saved_nl = p->no_lambda;
     p->no_lambda = false;
+    int lifts = p->lift_uses;
     Node* body;
     if (check(p, T_LBRACE)) {
         body = parse_block(p);
@@ -737,6 +748,7 @@ static Node* parse_lambda(Parser* p) {
     }
 
     p->no_lambda = saved_nl;
+    sig->uses_lift = p->lift_uses != lifts;
     Node* n = new_node(N_FUNC, start->line);
     n->as.func.sig = sig;
     n->as.func.body = body;
@@ -904,6 +916,7 @@ static Node* parse_primary(Parser* p) {
             advance(p);
             Node* id = new_node(N_IDENT, t->line);
             id->as.str = intern_tok(p, t);
+            note_lift(p, id->as.str);
             if (starts_juxtaposed_arg(peek(p))) {
                 /* unary syntax: `success value` == success(value) */
                 Node* c = new_call(p, id, t->line);
@@ -1049,6 +1062,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
 
             Node* callee = new_node(N_IDENT, nm->line);
             callee->as.str = take_fn_name(p);
+            note_lift(p, callee->as.str);
             while (check(p, T_COLON) && !peek(p)->nl_before) {
                 advance(p);
                 Token* part = peek(p);
@@ -1749,7 +1763,9 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
                 }
             }
 
+            int lifts = p->lift_uses;
             body = parse_block(p);
+            sig->uses_lift = p->lift_uses != lifts;
         }
 
         int old_cap = cap;

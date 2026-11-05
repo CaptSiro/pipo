@@ -188,7 +188,8 @@ public final class PipoResolver {
                 PsiElement alias = ((PipoElement) item).child(PipoElementTypes.NAME);
                 String exported = alias != null ? alias.getText() : ref.getReferencedName();
                 List<PsiElement> targets = targets(ref.getReference());
-                targets.removeIf(PipoPsiUtil::isInBuiltinStub);
+                // `export { str }` exports the module's own str, not the builtin overloads it also resolves to
+                targets.removeIf(t -> t.getContainingFile() != module);
                 if (targets.isEmpty()) {
                     sink.accept(exported, item);
                 }

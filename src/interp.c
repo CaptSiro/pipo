@@ -728,6 +728,67 @@ static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, 
     return check_return(vm, sig, r, nf->env, b);
 }
 
+/*
+ * Runs the body of a function that calls lift(): a lift() on none() / fail(..) longjmps back
+ * here, the stacks are cut back to what this call had, and the function returns that value.
+ * Kept out of call_function so the setjmp does not clobber its locals.
+ */
+static ExecStatus exec_lifting_block(VM* vm, ObjFunction* fn, ObjEnv* env, Value* last) {
+    LiftTarget lt;
+    lt.prev = vm->lift_top;
+    lt.err_jmp = vm->err_jmp;
+    lt.fp = vm->fp;
+    lt.sp = vm->sp;
+    lt.esp = vm->esp;
+    lt.gc_disabled = vm->gc_disabled;
+    lt.value = void_val();
+    vm->lift_top = &lt;
+    if (setjmp(lt.jb)) {
+        vm->lift_top = lt.prev;
+        vm->err_jmp = lt.err_jmp;
+        vm->fp = lt.fp;
+        vm->sp = lt.sp;
+        vm->esp = lt.esp;
+        vm->gc_disabled = lt.gc_disabled;
+        vm->cur_file = fn->sig->file;
+        vm->ret = lt.value;
+        return EX_RETURN;
+    }
+
+    ExecStatus st = exec_block(vm, fn->body, env, false, fn->sig->implicit_result ? last : NULL);
+    vm->lift_top = lt.prev;
+
+    return st;
+}
+
+/*
+ * lift(o): the payload of some(x) / success(x); none() and fail(..) return from the function
+ * that called lift(), as if it had written `return o`.
+ */
+Value vm_lift(VM* vm, Value v) {
+    if (IS_KIND(v, OBJ_ENUM_VALUE)) {
+        ObjEnumValue* ev = (ObjEnumValue*)v.as.o;
+        if (ev->en == vm->option_enum || ev->en == vm->error_enum) {
+            const char* name = ev->en->variants[ev->variant].name->chars;
+            if (strcmp(name, "some") == 0 || strcmp(name, "success") == 0) {
+                return ev->payload[0];
+            }
+
+            /* lift's own native frame sits right above the frame of the function that called it */
+            LiftTarget* lt = vm->lift_top;
+            if (!lt || lt->fp != vm->fp - 1) {
+                rt_error(vm, 0, "lift() on %s must be called directly in the body of a function (it returns from that function)",
+                         name);
+            }
+
+            lt->value = v;
+            longjmp(lt->jb, 1);
+        }
+    }
+
+    rt_error(vm, 0, "lift() expects an Option or an Error, got a value of type %s", value_type_name(v));
+}
+
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
     Signature* sig = fn->sig;
     if (!fn->body) {
@@ -755,7 +816,13 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
 
     vm->cur_file = sig->file;
     Value last = void_val();
-    ExecStatus st = exec_block(vm, fn->body, env, false, sig->implicit_result ? &last : NULL);
+    ExecStatus st;
+    if (sig->uses_lift) {
+        st = exec_lifting_block(vm, fn, env, &last);
+    } else {
+        st = exec_block(vm, fn->body, env, false, sig->implicit_result ? &last : NULL);
+    }
+
     Value result = st == EX_RETURN ? vm->ret : last;
     vm->ret = void_val();
     if (st == EX_BREAK || st == EX_CONTINUE) {
@@ -3169,6 +3236,7 @@ static void vm_reset(VM* vm) {
     vm->fp = 0;
     vm->gc_disabled = 0;
     vm->ret = void_val();
+    vm->lift_top = NULL;
     vm->cur_module = NULL;
 }
 

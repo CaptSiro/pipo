@@ -23,6 +23,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * (src/builtins.c and src/prelude.c) and the native modules that have no .pp file
  * (io, os, pp). They give completion, documentation and navigation for names the
  * interpreter defines in C. They open read-only.
+ * <p>
+ * It also holds the copies of the library modules (lib/*.pp) bundled at build time,
+ * used when a project has no lib/ folder to read them from.
  */
 @Service(Service.Level.PROJECT)
 public final class PipoBuiltins {
@@ -54,6 +57,42 @@ public final class PipoBuiltins {
         return load(name, "/pipo/modules/" + name + ".pp", name);
     }
 
+    /**
+     * The copy of a library module (lib/name.pp of the language repository) bundled when the
+     * plugin was built. Only a fallback, for projects that have no lib/ folder of their own.
+     */
+    public @Nullable PsiFile libraryModule(@NotNull String name) {
+        if (!bundledLibraryModules().contains(name)) {
+            return null;
+        }
+        return load("lib/" + name, "/pipo/lib/" + name + ".pp", LIB_PREFIX + name);
+    }
+
+    /** marks the bundled copies of library modules in {@link com.pipo.lang.psi.PipoKeys#STUB} */
+    public static final String LIB_PREFIX = "lib/";
+
+    private static volatile Set<String> bundledLibs;
+
+    public static Set<String> bundledLibraryModules() {
+        Set<String> names = bundledLibs;
+        if (names == null) {
+            names = new java.util.TreeSet<>();
+            try (InputStream in = PipoBuiltins.class.getResourceAsStream("/pipo/lib/index.txt")) {
+                if (in != null) {
+                    for (String line : new String(in.readAllBytes(), StandardCharsets.UTF_8).split("\\R")) {
+                        if (!line.isBlank()) {
+                            names.add(line.trim());
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                LOG.warn("cannot read the bundled library index", e);
+            }
+            bundledLibs = names;
+        }
+        return names;
+    }
+
     /* synchronized: two threads must never create two different PSI files for one stub (resolve results are cached) */
     private synchronized @Nullable PsiFile load(String fileName, String resource, String stubName) {
         Loaded l = files.get(fileName);
@@ -70,7 +109,8 @@ public final class PipoBuiltins {
             LOG.warn("cannot read " + resource, e);
             return null;
         }
-        LightVirtualFile vf = new LightVirtualFile(fileName + ".pp", PipoFileType.INSTANCE, text);
+        String shown = fileName.substring(fileName.lastIndexOf('/') + 1) + ".pp";
+        LightVirtualFile vf = new LightVirtualFile(shown, PipoFileType.INSTANCE, text);
         vf.setWritable(false);
         PsiFile psi = PsiManager.getInstance(project).findFile(vf);
         if (psi == null) {

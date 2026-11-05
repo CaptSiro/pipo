@@ -48,6 +48,7 @@
         <!-- navigation, references, documentation -->
         <lang.findUsagesProvider language="Pipo" implementationClass="com.pipo.lang.editor.PipoFindUsagesProvider"/>
         <lang.refactoringSupport language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$Refactoring"/>
+        <moveFileHandler implementation="com.pipo.lang.resolve.PipoMoveFileHandler"/>
         <lang.namesValidator language="Pipo" implementationClass="com.pipo.lang.editor.PipoBasics$Names"/>
         <lang.documentationProvider language="Pipo" implementationClass="com.pipo.lang.editor.PipoDocumentationProvider"/>
         <codeInsight.parameterInfo language="Pipo" implementationClass="com.pipo.lang.editor.PipoParameterInfoHandler"/>

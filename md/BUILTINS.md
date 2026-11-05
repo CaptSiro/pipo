@@ -133,6 +133,22 @@ parse_int("42").unwrap()        // 42
 parse_int("abc").unwrap_or(0)   // 0
 ```
 
+`lift(x)` (native) returns the value inside `some(...)` / `success(...)`. On
+`none()` / `fail(...)` it **returns that value from the function that called
+`lift`**, like `return x` written in its place, so the function's return type
+must accept it (an `Option` for `none()`, an `Error` for `fail(...)`).
+
+```
+function get_stock(string file) -> Error<Item[]> {
+    const text = fs:file(file).read_text().lift()   // fail(..) is returned from get_stock
+    ...
+}
+```
+
+`lift` must be called directly in the body of a function (or lambda, which it
+returns from). Calling it at the top level of a file, or passing it as a value
+(`xs.map(lift)`), is a runtime error once it meets `none()` / `fail(...)`.
+
 ## Misc
 
 | function                  |                                          |

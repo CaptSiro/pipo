@@ -256,6 +256,81 @@ public class PipoFeaturesTest extends BasePlatformTestCase {
         assertEquals(3, usages.size());
     }
 
+    /* -------------------------------- library modules without a lib/ folder */
+
+    public void testLibraryModulesResolveWithoutLibFolder() {
+        // a project of its own: no lib/, no built interpreter
+        myFixture.addFileToProject("item.pp", "export type Item = { string name, int count }\n");
+        myFixture.configureByText("stock.pp", """
+                import os
+                import fs
+                import "./item"
+
+                export function get_stock(string file) -> Error<item:Item[]> {
+                    const f = fs:<caret>file(file)
+                    return success([])
+                }
+                """);
+        myFixture.enableInspections(new com.pipo.lang.highlight.PipoUnresolvedReferenceInspection());
+        List<String> warnings = new ArrayList<>();
+        for (var info : myFixture.doHighlighting()) {
+            if (info.getSeverity().compareTo(com.intellij.lang.annotation.HighlightSeverity.WEAK_WARNING) >= 0) {
+                warnings.add(info.getDescription());
+            }
+        }
+        assertEquals(List.of(), warnings);
+
+        List<PsiElement> targets = resolveAtCaret();
+        assertEquals(3, targets.size()); // file(path), file(parent, name), file(Directory, name)
+        assertEquals("lib/fs", targets.get(0).getContainingFile().getUserData(PipoKeys.STUB));
+
+        List<String> modules = complete("other.pp", "import f<caret>\n");
+        assertTrue(modules.toString(), modules.isEmpty() || modules.contains("fs"));
+    }
+
+    /* ------------------------------------------- moving and renaming files */
+
+    private String text(String path) {
+        return myFixture.findFileInTempDir(path) == null ? null
+                : com.intellij.psi.PsiManager.getInstance(getProject())
+                .findFile(myFixture.findFileInTempDir(path)).getText();
+    }
+
+    public void testMovingAFileUpdatesImportsBothWays() {
+        myFixture.addFileToProject("lib2/helper.pp", "export function help() {}\n");
+        myFixture.addFileToProject("geometry.pp", """
+                import "./lib2/helper"
+                export function vec() {}
+                """);
+        myFixture.addFileToProject("main.pp", """
+                import "./geometry"
+                import "./geometry.pp" -> { vec }
+                import std
+                """);
+        myFixture.addFileToProject("shapes/.keep", "");
+
+        // what the stack trace came from: dragging a file into another folder
+        myFixture.moveFile("geometry.pp", "shapes");
+
+        assertEquals("""
+                import "./shapes/geometry"
+                import "./shapes/geometry.pp" -> { vec }
+                import std
+                """, text("main.pp"));
+        // the moved file's own import still reaches helper.pp
+        assertEquals("""
+                import "../lib2/helper"
+                export function vec() {}
+                """, text("shapes/geometry.pp"));
+    }
+
+    public void testRenamingAFileUpdatesImports() {
+        PsiFile geometry = myFixture.addFileToProject("geometry.pp", "export function vec() {}\n");
+        myFixture.addFileToProject("main.pp", "import \"./geometry\"\nimport \"./geometry.pp\" -> { vec }\n");
+        myFixture.renameElement(geometry, "geo.pp");
+        assertEquals("import \"./geo\"\nimport \"./geo.pp\" -> { vec }\n", text("main.pp"));
+    }
+
     /* ----------------------------------------------------------- formatter */
 
     public void testFormatterIndentsWithoutChangingMeaning() {

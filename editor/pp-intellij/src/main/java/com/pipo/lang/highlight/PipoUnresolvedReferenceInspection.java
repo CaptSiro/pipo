@@ -36,7 +36,11 @@ public final class PipoUnresolvedReferenceInspection extends LocalInspectionTool
                     checkType(type, holder);
                 } else if (e instanceof PipoModulePath path) {
                     if (targets(path.getReference()).isEmpty()) {
-                        holder.registerProblem(path, "Cannot find module " + path.getText(), ProblemHighlightType.WARNING);
+                        String hint = path.isFile() ? " (the path is relative to this file)"
+                                : " (searched: the library directories in Settings | Languages & Frameworks | PiPo,"
+                                + " the project's lib/, the interpreter's lib/, PP_PATH)";
+                        holder.registerProblem(path, "Cannot find module " + path.getText() + hint,
+                                ProblemHighlightType.WARNING);
                     }
                 } else if (e instanceof PipoFieldExpr field) {
                     checkField(field, holder);

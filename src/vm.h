@@ -18,6 +18,22 @@ typedef struct {
 
 typedef enum { EX_NORMAL, EX_BREAK, EX_CONTINUE, EX_RETURN } ExecStatus;
 
+/*
+ * A function whose body calls lift() installs one of these: lift() on none() / fail(..)
+ * longjmps here and the function returns that value. Only functions the parser marked
+ * (Signature.uses_lift) pay for the setjmp.
+ */
+typedef struct LiftTarget {
+    jmp_buf jb;
+    struct LiftTarget* prev;
+    jmp_buf* err_jmp;
+    int fp; /* vm->fp of the function's own frame: lift's native frame sits right above it */
+    int sp;
+    int esp;
+    int gc_disabled;
+    Value value;
+} LiftTarget;
+
 /* generic parameter bindings used while matching values against types */
 typedef struct Bindings Bindings;
 typedef struct {
@@ -88,6 +104,7 @@ struct VM {
     int capcaches;
 
     jmp_buf* err_jmp;
+    LiftTarget* lift_top;
     const char* cur_file;
     int cur_line;
 
@@ -132,6 +149,7 @@ Value make_some(VM* vm, Value v);
 Value make_none(VM* vm);
 Value make_success(VM* vm, Value v);
 Value make_fail(VM* vm, Value v);
+Value vm_lift(VM* vm, Value v);
 
 /* types.c */
 int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep);

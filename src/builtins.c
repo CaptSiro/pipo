@@ -765,6 +765,10 @@ static Value n_parse_float(VM* vm, int argc, Value* a) {
     return make_some(vm, float_val(r));
 }
 
+static Value n_lift(VM* vm, int argc, Value* a) {
+    return vm_lift(vm, a[0]);
+}
+
 static Value n_enum_value(VM* vm, int argc, Value* a) {
     if (!IS_KIND(a[0], OBJ_ENUM_VALUE)) {
         rt_error(vm, 0, "enum_value expects an enum value, got %s", value_type_name(a[0]));
@@ -1551,6 +1555,7 @@ void builtins_register(VM* vm) {
     def(vm, "float", "(any value) -> float", n_float);
     def(vm, "parse_int", "(string s)", n_parse_int);
     def(vm, "parse_float", "(string s)", n_parse_float);
+    def(vm, "lift", "(any o)", n_lift);
     def(vm, "type_of", "(any value) -> string", n_type_of);
     def(vm, "enum_value", "(any variant)", n_enum_value);
 

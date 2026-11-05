@@ -10,7 +10,7 @@ A native IntelliJ Platform plugin for `.pp` files. Unlike the TextMate bundle in
 | Highlighting | Keywords, literals, escapes, `format` specifiers. Semantic colors for declarations, calls, types, interfaces, type parameters, parameters, locals, top-level constants, fields, enum variants and modules. Configurable in *Settings, Editor, Color Scheme, PiPo*. |
 | Errors while typing | Syntax errors from a port of `src/parser.c`, with the interpreter's messages. Also the checks it makes after parsing: imports first and exports last, declarations without a definition, untyped lambdas in variables, bad escapes, literals that are too large. |
 | Unresolved names | The *PiPo, Unresolved reference* inspection covers names, types, modules, module members and enum variants. Object fields and dot calls are not checked, since only running the code can tell. |
-| Navigation | Go to declaration, find usages, highlight usages and rename. Resolution follows the interpreter's scoping, overload sets included, and works across `import "./file"`, `import name` (from `lib/`), submodules, `-> { a, b }`, re-exports, `module:symbol`, `Enum:VARIANT`, record fields and object keys. Built-in functions and the native modules `io`, `os` and `pp` resolve to bundled read-only stubs. |
+| Navigation | Go to declaration, find usages, highlight usages and rename. Resolution follows the interpreter's scoping, overload sets included, and works across `import "./file"`, `import name` (from `lib/`), submodules, `-> { a, b }`, re-exports, `module:symbol`, `Enum:VARIANT`, record fields and object keys. Built-in functions and the native modules `io`, `os` and `pp` resolve to bundled read-only stubs. Library modules (`std`, `fs`, `math`, `types`) come from the project's `lib/`, the interpreter's `lib/` or `PP_PATH`; in a project with none of these, a copy of the repository's `lib/` bundled at build time is used. |
 | Completion | Names in scope with every overload, module exports after `mod:`, variants after `Enum:`, fields after `value:`, types in type positions, module names after `import`, file paths in `import "./..."`, and keywords. |
 | Documentation | *Ctrl+Q* and *Ctrl+hover* show the signature and the `//` lines written directly above a declaration. Every overload of a call is listed. |
 | Parameter info | *Ctrl+P* lists every overload. In `recv.f(...)` the receiver counts as the first parameter. |
@@ -82,4 +82,5 @@ src/main/resources/pipo/
 
 When the interpreter gains a built-in function or a native module function, add its
 signature to `builtins.pp` or `modules/*.pp`. Library modules written in `.pp` files
-(`lib/std.pp`, `lib/fs.pp`, ...) need nothing: the plugin reads them directly.
+(`lib/std.pp`, `lib/fs.pp`, ...) need nothing: the plugin reads them directly, and `buildPlugin`
+bundles a copy of `lib/` for projects that have no `lib/` of their own (rebuild to refresh it).

@@ -272,6 +272,7 @@ typedef struct Signature {
     int nparams;
     bool variadic;
     bool implicit_result; /* lambda: the value of the body's last expression is returned */
+    bool uses_lift;       /* the body names `lift`: calls install a LiftTarget */
     Type* ret;
     const char* file;
     int line;

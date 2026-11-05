@@ -47,6 +47,21 @@ add_custom_target(pp_lib ALL
         VERBATIM)
 add_dependencies(pp pp_lib) # building just `pp` (e.g. from CLion) refreshes lib/ too
 
+# Every time pp.exe is relinked, rebuild the IntelliJ plugin too (gradlew buildPlugin), so its
+# zip in editor/pp-intellij/build/distributions/ matches the interpreter. A POST_BUILD step only
+# runs when pp actually changed; a failed plugin build is a warning, not a build error.
+option(PP_BUILD_EDITOR_PLUGIN "Rebuild the editor plugin (editor/pp-intellij) whenever pp is rebuilt" ON)
+set(PP_PLUGIN_JAVA_HOME "" CACHE PATH "JDK 17+ for the plugin's Gradle build (empty: JAVA_HOME, else the JBR of platformPath)")
+if (PP_BUILD_EDITOR_PLUGIN)
+    add_custom_command(TARGET pp POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+            -DPLUGIN_DIR=${CMAKE_SOURCE_DIR}/editor/pp-intellij
+            -DJAVA_HOME_OVERRIDE=${PP_PLUGIN_JAVA_HOME}
+            -P ${CMAKE_SOURCE_DIR}/editor/build_plugin.cmake
+            COMMENT "Rebuilding the editor plugin"
+            VERBATIM)
+endif ()
+
 enable_testing()
 file(GLOB PP_TESTS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.pp)
 foreach (test_file ${PP_TESTS})

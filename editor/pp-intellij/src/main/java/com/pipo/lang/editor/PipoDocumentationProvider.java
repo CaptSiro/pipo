@@ -8,6 +8,7 @@ import com.intellij.psi.PsiFile;
 import com.intellij.psi.PsiReference;
 import com.pipo.lang.lexer.PipoTokenTypes;
 import com.pipo.lang.psi.*;
+import com.pipo.lang.resolve.PipoBuiltins;
 import com.pipo.lang.resolve.PipoReferences;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
@@ -104,6 +105,10 @@ public final class PipoDocumentationProvider extends AbstractDocumentationProvid
         }
         String stub = f.getUserData(PipoKeys.STUB);
         if (stub != null) {
+            if (stub.startsWith(PipoBuiltins.LIB_PREFIX)) {
+                return "library module " + stub.substring(PipoBuiltins.LIB_PREFIX.length())
+                        + " (copy bundled with the plugin: no lib/ folder found)";
+            }
             return stub.isEmpty() ? "internal (the interpreter)" : "native module " + stub;
         }
         return f.getName();

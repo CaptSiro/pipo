@@ -345,6 +345,8 @@ enum string Messages { NOTICE = "Notice", WARNING = "Warning" }
 
 Prelude helpers: `is_some`, `is_none`, `unwrap`, `unwrap_or`, `is_success`,
 `is_fail` (overloaded for both `Option` and `Error`).
+`lift(x)` unwraps `some`/`success` and returns `none()`/`fail(..)` early from
+the calling function (see BUILTINS.md).
 
 ## Interfaces
 

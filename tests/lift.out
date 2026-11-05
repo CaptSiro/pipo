@@ -1,0 +1,10 @@
+quarter ok 2
+success(2)
+fail("odd: 3")
+fail("odd: 5")
+some(20.0)
+none()
+success(6)
+fail("odd: 3")
+[2, 4, 6]
+loop ok

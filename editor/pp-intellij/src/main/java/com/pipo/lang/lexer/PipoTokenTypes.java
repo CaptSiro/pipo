@@ -71,6 +71,9 @@ public interface PipoTokenTypes {
     IElementType UNDER_KW = new PipoTokenType("under");
     IElementType AS_KW = new PipoTokenType("as");
     IElementType NATIVE_KW = new PipoTokenType("native");
+    /** `scope _name(...)`, and `scope` as the value inside the block of a scope call */
+    IElementType SCOPE_KW = new PipoTokenType("scope");
+    IElementType DEFER_KW = new PipoTokenType("defer");
 
     Map<String, IElementType> KEYWORDS = Map.ofEntries(
             Map.entry("import", IMPORT), Map.entry("function", FUNCTION), Map.entry("return", RETURN),
@@ -87,7 +90,7 @@ public interface PipoTokenTypes {
     TokenSet HARD_KEYWORDS = TokenSet.create(IMPORT, FUNCTION, RETURN, CONST, LET, IF, ELSE, FOR, IN, WHILE, BREAK,
             CONTINUE, MATCH, ENUM, EXPORT, GLOBAL, TRUE, FALSE);
     TokenSet SOFT_KEYWORDS = TokenSet.create(TYPE_KW, INTERFACE_KW, IMPL_KW, PRECEDENCE_KW, OVER_KW, UNDER_KW, AS_KW,
-            NATIVE_KW);
+            NATIVE_KW, SCOPE_KW, DEFER_KW);
     TokenSet KEYWORDS_SET = TokenSet.orSet(HARD_KEYWORDS, SOFT_KEYWORDS);
 
     TokenSet OPERATORS = TokenSet.create(OP, ASSIGN, COMPOUND, ARROW);

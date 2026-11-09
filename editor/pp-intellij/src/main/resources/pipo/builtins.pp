@@ -19,6 +19,14 @@ enum Error<S, F = string> {
     fail(F)
 }
 
+// the block of a scope call (the first parameter of a scope): code() / code(value) runs it with `scope`
+// set to the value; it can only run while the scope call runs, and may return / break / continue / lift
+native type Block<T>
+
+// the block of a scope call that can be kept and called after the call ended; it cannot return,
+// break, continue or lift out of anything
+native type Callback<T>
+
 // ---- operators
 
 // addition of numbers, concatenation of strings

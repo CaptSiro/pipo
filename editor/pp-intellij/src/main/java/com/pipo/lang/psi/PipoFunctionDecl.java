@@ -28,6 +28,11 @@ public final class PipoFunctionDecl extends PipoNamedElement {
         return child(PipoTokenTypes.NATIVE_KW) != null;
     }
 
+    /** scope _name(Block<T> code, ...) { ... }: called as `_name args { ... }` */
+    public boolean isScope() {
+        return child(PipoTokenTypes.SCOPE_KW) != null;
+    }
+
     public boolean isExpression() {
         return type() == PipoElementTypes.FUNCTION_EXPR;
     }
@@ -114,7 +119,7 @@ public final class PipoFunctionDecl extends PipoNamedElement {
 
     @Override
     public @NotNull String kindName() {
-        return isRequirement() ? "interface function" : "function";
+        return isRequirement() ? "interface function" : isScope() ? "scope" : "function";
     }
 
     @Override

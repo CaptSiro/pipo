@@ -31,8 +31,30 @@ typedef struct LiftTarget {
     int sp;
     int esp;
     int gc_disabled;
+    struct ScopeCall* scope_top;
     Value value;
 } LiftTarget;
+
+/*
+ * A running scope call `_name args { body }`. When the body leaves early (return, break,
+ * continue, a failing lift), the block longjmps here: the scope function is unwound, its
+ * current `defer` block runs, and the exit continues from the call site.
+ */
+typedef struct ScopeCall {
+    jmp_buf jb;
+    struct ScopeCall* prev;
+    jmp_buf* err_jmp;
+    LiftTarget* lift_top;
+    int fp;
+    int sp;
+    int esp;
+    int gc_disabled;
+    const char* file;
+    int line;
+    ObjString* name; /* the scope's name, for messages */
+    int slot;        /* vm->stack[slot]: the value of an early return, [slot + 1]: the current defer block */
+    ExecStatus exit; /* EX_NORMAL until the body leaves early */
+} ScopeCall;
 
 /* generic parameter bindings used while matching values against types */
 typedef struct Bindings Bindings;
@@ -105,6 +127,7 @@ struct VM {
 
     jmp_buf* err_jmp;
     LiftTarget* lift_top;
+    ScopeCall* scope_top; /* innermost running scope call: `defer` replaces its cleanup */
     const char* cur_file;
     int cur_line;
 
@@ -127,6 +150,9 @@ struct VM {
     ObjString* s_and;
     ObjString* s_or;
     ObjString* s_wild;
+    ObjString* s_block;    /* "Block", "Callback": the built-in types of a scope's block parameter */
+    ObjString* s_callback;
+    ObjString* s_scope;    /* "scope": the variable holding the value a block was called with */
 };
 
 /* interp.c */

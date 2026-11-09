@@ -19,6 +19,7 @@ static Value eval(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value* out);
 static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out);
+static ExecStatus exec_scope_call(VM* vm, Node* n, ObjEnv* env, Value* out);
 static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic);
 static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl,
                             ObjOverload* impl);
@@ -733,7 +734,7 @@ static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, 
  * here, the stacks are cut back to what this call had, and the function returns that value.
  * Kept out of call_function so the setjmp does not clobber its locals.
  */
-static ExecStatus exec_lifting_block(VM* vm, ObjFunction* fn, ObjEnv* env, Value* last) {
+static ExecStatus exec_lifting_block(VM* vm, Node* body, const char* file, ObjEnv* env, Value* last) {
     LiftTarget lt;
     lt.prev = vm->lift_top;
     lt.err_jmp = vm->err_jmp;
@@ -741,6 +742,7 @@ static ExecStatus exec_lifting_block(VM* vm, ObjFunction* fn, ObjEnv* env, Value
     lt.sp = vm->sp;
     lt.esp = vm->esp;
     lt.gc_disabled = vm->gc_disabled;
+    lt.scope_top = vm->scope_top;
     lt.value = void_val();
     vm->lift_top = &lt;
     if (setjmp(lt.jb)) {
@@ -750,12 +752,13 @@ static ExecStatus exec_lifting_block(VM* vm, ObjFunction* fn, ObjEnv* env, Value
         vm->sp = lt.sp;
         vm->esp = lt.esp;
         vm->gc_disabled = lt.gc_disabled;
-        vm->cur_file = fn->sig->file;
+        vm->scope_top = lt.scope_top;
+        vm->cur_file = file;
         vm->ret = lt.value;
         return EX_RETURN;
     }
 
-    ExecStatus st = exec_block(vm, fn->body, env, false, fn->sig->implicit_result ? last : NULL);
+    ExecStatus st = exec_block(vm, body, env, false, last);
     vm->lift_top = lt.prev;
 
     return st;
@@ -789,6 +792,23 @@ Value vm_lift(VM* vm, Value v) {
     rt_error(vm, 0, "lift() expects an Option or an Error, got a value of type %s", value_type_name(v));
 }
 
+/* a block takes its kind (Block / Callback) and the type of its value from the first parameter it is passed to */
+static void bind_block(VM* vm, ObjBlock* bl, Type* pt, Signature* sig, ObjEnv* env) {
+    if (bl->bound || !pt || pt->kind != TY_NAME || pt->nquals || (pt->name != vm->s_block && pt->name != vm->s_callback)) {
+        return;
+    }
+
+    bl->bound = true;
+    bl->callback = pt->name == vm->s_callback;
+    Type* t = pt->nargs ? pt->args[0] : NULL;
+    if (t && t->kind == TY_PRIM && t->prim == PRIM_VOID) {
+        t = NULL;
+    }
+
+    bl->param = t;
+    bl->param_env = t && !sig->ngenerics ? env : NULL; /* a generic T is not checked */
+}
+
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
     Signature* sig = fn->sig;
     if (!fn->body) {
@@ -810,6 +830,10 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
             a = float_val((double)a.as.i);
         }
 
+        if (IS_KIND(a, OBJ_BLOCK)) {
+            bind_block(vm, (ObjBlock*)a.as.o, pt, sig, fn->closure);
+        }
+
         a = adopt_callback_types(vm, pt, a, fn->closure, b, sig->params[i].name);
         env_define(vm, env, sig->params[i].name, a, 0, sig->ngenerics ? NULL : pt);
     }
@@ -818,7 +842,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
     Value last = void_val();
     ExecStatus st;
     if (sig->uses_lift) {
-        st = exec_lifting_block(vm, fn, env, &last);
+        st = exec_lifting_block(vm, fn->body, sig->file, env, sig->implicit_result ? &last : NULL);
     } else {
         st = exec_block(vm, fn->body, env, false, sig->implicit_result ? &last : NULL);
     }
@@ -836,6 +860,76 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
     vm->cur_line = saved_line;
 
     return result;
+}
+
+/*
+ * code() / code(value) in a scope function: runs the block of the scope call in a fresh scope
+ * whose `scope` is the value. Its last expression is the result. When the block leaves early
+ * (return, break, continue, a failing lift), the exit is recorded in the scope call and the
+ * scope function is unwound by a longjmp to it (exec_scope_call runs its defer block).
+ */
+static Value call_block(VM* vm, ObjBlock* bl, int argc, Value* args, int line) {
+    if (bl->is_defer) {
+        rt_error(vm, line, "a defer block cannot be called");
+    }
+
+    if (!bl->callback && !bl->call) {
+        rt_error(vm, line, "the Block of '%s' can only run while its scope call runs (a Callback<T> can be kept for later)",
+                 bl->scope_name->chars);
+    }
+
+    if (bl->bound) {
+        const int want = bl->param ? 1 : 0;
+        if (argc != want) {
+            rt_error(vm, line, "the %s of '%s' takes %s, but %d were given", bl->callback ? "Callback" : "Block",
+                     bl->scope_name->chars, want ? "one value: code(value)" : "no values: code()", argc);
+        }
+
+        if (bl->param && bl->param_env && !type_match(vm, bl->param, args[0], bl->param_env, NULL, false)) {
+            StrBuf sb;
+            sb_init(&sb);
+            type_to_string(bl->param, &sb);
+            rt_error(vm, line, "the %s of '%s' takes a value of type %s but got %s", bl->callback ? "Callback" : "Block",
+                     bl->scope_name->chars, sb.data, value_type_name(args[0]));
+        }
+    } else if (argc > 1) {
+        rt_error(vm, line, "the block of '%s' takes at most one value, but %d were given", bl->scope_name->chars, argc);
+    }
+
+    push_frame(vm, bl->scope_name->chars, line);
+    const char* saved_file = vm->cur_file;
+    const int saved_line = vm->cur_line;
+    vm->cur_file = bl->file;
+    ObjEnv* env = env_new(vm, bl->env);
+    push_env(vm, env);
+    env_define(vm, env, vm->s_scope, argc ? args[0] : void_val(), VAR_CONST, NULL);
+    Value last = void_val();
+    ExecStatus st;
+    if (bl->uses_lift && !bl->callback) {
+        st = exec_lifting_block(vm, bl->body, bl->file, env, &last);
+    } else {
+        st = exec_block(vm, bl->body, env, false, &last);
+    }
+
+    pop_env(vm);
+    vm->fp--;
+    vm->cur_file = saved_file;
+    vm->cur_line = saved_line;
+    if (st == EX_NORMAL) {
+        return last;
+    }
+
+    const char* what = st == EX_BREAK ? "break" : st == EX_CONTINUE ? "continue" : "return";
+    if (bl->callback) {
+        rt_error(vm, line, "'%s' cannot leave the Callback of '%s': it may run after the scope call ended", what,
+                 bl->scope_name->chars);
+    }
+
+    ScopeCall* sc = bl->call;
+    sc->exit = st;
+    vm->stack[sc->slot] = st == EX_RETURN ? vm->ret : void_val();
+    vm->ret = void_val();
+    longjmp(sc->jb, 1);
 }
 
 static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int line) {
@@ -902,6 +996,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             }
 
             return invoke(vm, o, argc, args, &b, line);
+        case OBJ_BLOCK: return call_block(vm, (ObjBlock*)o, argc, args, line);
         case OBJ_TYPEDEF: {
             /* Person({...}) checks the value against the type and tags it */
             ObjTypeDef* td = (ObjTypeDef*)o;
@@ -1479,6 +1574,14 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
 
             return out;
         }
+        case N_SCOPECALL: {
+            Value out = void_val();
+            if (exec_scope_call(vm, n, env, &out) != EX_NORMAL) {
+                rt_error(vm, n->line, "'break', 'continue', 'return' and lift() cannot leave the block of a scope call that is used as a value");
+            }
+
+            return out;
+        }
         default: rt_error(vm, n->line, "internal error: cannot evaluate node kind %d", n->kind);
     }
 }
@@ -1655,6 +1758,151 @@ static bool pattern_binds(Pattern* p) {
 }
 
 /* ------------------------------------------------------------- statements */
+
+static ObjBlock* block_new(VM* vm, Node* body, ObjEnv* env, ObjString* scope_name, int line) {
+    ObjBlock* bl = (ObjBlock*)alloc_obj(vm, sizeof(ObjBlock), OBJ_BLOCK);
+    bl->body = body;
+    bl->env = env;
+    bl->scope_name = scope_name;
+    bl->file = vm->cur_file;
+    bl->line = line;
+
+    return bl;
+}
+
+/* the current defer block of a scope call, run when its scope function ended; it cannot leave anything */
+static void run_defer(VM* vm, Value d, int line) {
+    if (!IS_KIND(d, OBJ_BLOCK)) {
+        return;
+    }
+
+    ObjBlock* db = (ObjBlock*)d.as.o;
+    push_frame(vm, "defer", line);
+    const char* saved_file = vm->cur_file;
+    vm->cur_file = db->file;
+    ObjEnv* env = env_new(vm, db->env);
+    push_env(vm, env);
+    const ExecStatus st = exec_block(vm, db->body, env, false, NULL);
+    if (st != EX_NORMAL) {
+        rt_error(vm, db->line, "'%s' cannot leave a defer block",
+                 st == EX_BREAK ? "break" : st == EX_CONTINUE ? "continue" : "return");
+    }
+
+    pop_env(vm);
+    vm->fp--;
+    vm->cur_file = saved_file;
+}
+
+/*
+ * Calls the scope function; a block that leaves early longjmps back here with the stacks of the
+ * scope function still on top, and they are cut back to the call. Kept out of exec_scope_call so
+ * the setjmp does not clobber its locals.
+ */
+static Value run_scope(VM* vm, ScopeCall* sc, Value callee, int argc, Value* args, Node* n) {
+    if (setjmp(sc->jb)) {
+        vm->err_jmp = sc->err_jmp;
+        vm->lift_top = sc->lift_top;
+        vm->scope_top = sc;
+        vm->fp = sc->fp;
+        vm->sp = sc->sp;
+        vm->esp = sc->esp;
+        vm->gc_disabled = sc->gc_disabled;
+        vm->cur_file = sc->file;
+        vm->cur_line = sc->line;
+        return void_val();
+    }
+
+    return call_value(vm, callee, argc, args, n->line, n->as.scall.ic);
+}
+
+/*
+ * _name args { body }: calls the scope function _name with the body as a Block (its first
+ * argument) followed by the args. `const f = x` arguments pass x and bind f for the body only.
+ * When the scope function ended, normally or because the body left early, its current defer
+ * block runs; then an early exit (return / break / continue / lift) continues from here.
+ * The result is what the scope function returned.
+ */
+static ExecStatus exec_scope_call(VM* vm, Node* n, ObjEnv* env, Value* out) {
+    *out = void_val();
+    const int base = vm->sp;
+    ObjString* name = n->as.scall.name;
+    Value callee;
+    const Entry* e = env_find(env, name, NULL);
+    if (e) {
+        callee = e->value;
+    } else {
+        ObjOverload* g = global_set(vm, name);
+        if (!g) {
+            rt_error(vm, n->line, "undefined scope '%s'", name->chars);
+        }
+
+        callee = obj_val(g);
+    }
+
+    vm_push(vm, callee);
+    const int slot = vm->sp;
+    vm_push(vm, void_val()); /* the value of an early return */
+    vm_push(vm, void_val()); /* the current defer block */
+    ObjEnv* be = env_new(vm, env);
+    vm_push(vm, obj_val(be));
+    ObjBlock* bl = block_new(vm, n->as.scall.body, be, name, n->line);
+    bl->uses_lift = n->as.scall.uses_lift;
+    const int args_base = vm->sp;
+    vm_push(vm, obj_val(bl));
+    for (int i = 0; i < n->as.scall.args.count; i++) {
+        Node* a = n->as.scall.args.items[i];
+        if (a->kind != S_LET) {
+            vm_push(vm, eval(vm, a, env));
+            continue;
+        }
+
+        Value v = eval(vm, a->as.let.init, env);
+        if (v.kind == VAL_VOID) {
+            rt_error(vm, a->line, "cannot initialize '%s' with a void value", a->as.let.name->chars);
+        }
+
+        if (a->as.let.type) {
+            char what[160];
+            snprintf(what, sizeof what, "cannot initialize '%s'", a->as.let.name->chars);
+            v = coerce_to(vm, a->as.let.type, v, env, NULL, true, what, a->line, a->as.let.name);
+        }
+
+        env_define(vm, be, a->as.let.name, v, a->as.let.is_const ? VAR_CONST : 0, a->as.let.type);
+        vm_push(vm, v);
+    }
+
+    ScopeCall sc;
+    sc.prev = vm->scope_top;
+    sc.err_jmp = vm->err_jmp;
+    sc.lift_top = vm->lift_top;
+    sc.fp = vm->fp;
+    sc.sp = vm->sp;
+    sc.esp = vm->esp;
+    sc.gc_disabled = vm->gc_disabled;
+    sc.file = vm->cur_file;
+    sc.line = n->line;
+    sc.name = name;
+    sc.slot = slot;
+    sc.exit = EX_NORMAL;
+    bl->call = &sc;
+    vm->scope_top = &sc;
+    const Value r = run_scope(vm, &sc, callee, vm->sp - args_base, &vm->stack[args_base], n);
+    vm_push(vm, r);
+    bl->call = NULL;
+    vm->scope_top = sc.prev;
+    run_defer(vm, vm->stack[slot + 1], n->line);
+    vm->cur_line = n->line;
+    const ExecStatus st = sc.exit;
+    if (st == EX_RETURN) {
+        vm->ret = vm->stack[slot];
+    } else if (st == EX_NORMAL) {
+        *out = r;
+    }
+
+    vm->sp = base;
+
+    return st;
+}
 
 static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
     *out = void_val();
@@ -1879,6 +2127,8 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
             Node* e = s->as.expr.expr;
             if (e->kind == N_IF || e->kind == N_MATCH) {
                 st = exec_branchy(vm, e, env, out);
+            } else if (e->kind == N_SCOPECALL) {
+                st = exec_scope_call(vm, e, env, out);
             } else {
                 *out = eval(vm, e, env);
             }
@@ -2879,6 +3129,11 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
                 return exec_branchy(vm, e, env, &out);
             }
 
+            if (e->kind == N_SCOPECALL) {
+                Value out;
+                return exec_scope_call(vm, e, env, &out);
+            }
+
             eval(vm, e, env);
             return EX_NORMAL;
         }
@@ -2942,6 +3197,18 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             vm->ret = n->as.ret.value ? eval(vm, n->as.ret.value, env) : void_val();
             return EX_RETURN;
         case N_BLOCK: return exec_block(vm, n, env, true, NULL);
+        case S_DEFER: {
+            /* replaces the cleanup of the running scope call; it runs in this scope when the scope function ends */
+            ScopeCall* sc = vm->scope_top;
+            if (!sc) {
+                rt_error(vm, n->line, "'defer' can only run in the body of a scope");
+            }
+
+            ObjBlock* d = block_new(vm, n->as.defer.body, env, sc->name, n->line);
+            d->is_defer = true;
+            vm->stack[sc->slot + 1] = obj_val(d);
+            return EX_NORMAL;
+        }
         default: eval(vm, n, env); return EX_NORMAL;
     }
 }
@@ -3237,6 +3504,7 @@ static void vm_reset(VM* vm) {
     vm->gc_disabled = 0;
     vm->ret = void_val();
     vm->lift_top = NULL;
+    vm->scope_top = NULL;
     vm->cur_module = NULL;
 }
 
@@ -3344,6 +3612,9 @@ VM* vm_new(int argc, char** argv) {
     vm->s_and = str_cintern(vm, "&&");
     vm->s_or = str_cintern(vm, "||");
     vm->s_wild = str_cintern(vm, "_");
+    vm->s_block = str_cintern(vm, "Block");
+    vm->s_callback = str_cintern(vm, "Callback");
+    vm->s_scope = str_cintern(vm, "scope");
     vm->s_index = str_cintern(vm, "[]");
     vm->s_index_set = str_cintern(vm, "[]=");
     the_vm = vm;

@@ -247,6 +247,14 @@ public final class PipoResolver {
                 if (kind == Kind.VALUE && typeOf(child) != PipoElementTypes.PATTERN) {
                     patternBindings(((PipoElement) scope).child(PipoElementTypes.PATTERN), v);
                 }
+            } else if (t == PipoElementTypes.SCOPE_CALL_EXPR) {
+                // _name const f = open(...) { ... }: f exists only in the block
+                PsiElement args = ((PipoElement) scope).child(PipoElementTypes.SCOPE_ARGS);
+                if (kind == Kind.VALUE && typeOf(child) == PipoElementTypes.BLOCK && args instanceof PipoElement a) {
+                    for (PipoVarDecl var : a.children(PipoVarDecl.class)) {
+                        v.visit(var.getName(), var);
+                    }
+                }
             } else if (t == PipoElementTypes.IF_EXPR) {
                 if (kind == Kind.VALUE && child == ((PipoElement) scope).child(PipoElementTypes.BLOCK)) {
                     patternBindings(((PipoElement) scope).child(PipoElementTypes.PATTERN), v);

@@ -77,6 +77,7 @@ typedef enum {
     N_IF,
     N_MATCH,
     N_BLOCK,
+    N_SCOPECALL, /* _name args { body }: calls the scope _name with the body as its Block / Callback */
     /* statements */
     S_EXPR,
     S_LET,
@@ -93,7 +94,8 @@ typedef enum {
     S_WHILE,
     S_BREAK,
     S_CONTINUE,
-    S_RETURN
+    S_RETURN,
+    S_DEFER      /* defer { ... }: replaces the cleanup of the running scope call */
 } NodeKind;
 
 typedef struct {
@@ -222,6 +224,12 @@ struct Node {
         struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;
         struct { Node* cond; Node* body; } while_;
         struct { Node* value; } ret;
+        /*
+         * args: expressions, or S_LET nodes for `const f = file(...)` (the variable is visible in body only);
+         * uses_lift: body names lift, so a run of the block installs a LiftTarget
+         */
+        struct { ObjString* name; NodeList args; Node* body; InlineCache* ic; bool uses_lift; } scall;
+        struct { Node* body; } defer;
     } as;
 };
 

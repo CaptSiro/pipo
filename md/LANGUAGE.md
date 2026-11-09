@@ -305,6 +305,56 @@ whether `x` is one of the elements a `for` loop visits instead, so
 `2 in range(0, 10, 3)` is true but `has(range(0, 10, 3), 2)` is false. A module
 can add more `in` overloads, like any other operator.
 
+## Scopes
+
+A scope is a function that takes a block of code, so a library can define its
+own control flow. Names starting with `_` belong to scopes only: functions and
+variables cannot use them, and every `_name` in code is a scope call.
+
+```
+scope _resource(Block<void> code, Resource r) {
+    defer { r.close() }          // cleanup: runs when the scope function ends
+    code()                       // runs the block
+}
+
+_resource const f = fs:file("./a.txt") {
+    io:print_nl(f.read_text())   // f exists only in the block, like `if some(x) = ...`
+}
+
+scope _times(Block<int> code, int n) {
+    for i in ...n {
+        code(i)                  // the block sees the value as `scope`
+    }
+}
+
+_times 3 { io:print_nl(scope) }
+_times(3) { io:print_nl(scope) }
+```
+
+* The first parameter of a scope is its block, `Block<T>` or `Callback<T>`
+  (`Block` alone is `Block<void>`). The call's arguments fill the other
+  parameters, and overloads are resolved as for functions. An argument written
+  `const name = value` (or `let`) passes the value and binds `name` in the
+  block.
+* `code()` / `code(value)` runs the block in a fresh scope where `scope` is the
+  value. It returns the block's last expression. To reach the value of an outer
+  block from a nested one, store it first: `const outer = scope`.
+* `return`, `break` and `continue` in a `Block` act on the code around the
+  scope call, as they would inside an `if`. `lift()` returns from the
+  enclosing function the same way. The scope function stops at once, its
+  `defer` runs, and then the exit continues.
+* `defer { ... }` is only allowed directly in a scope's body. There is a single
+  cleanup slot per call, and each `defer` replaces it. The current one runs
+  when the scope function ends, normally or by an early exit. The cleanup
+  cannot `return`, `break` or `continue`.
+* A `Block` can only run while its scope call runs: calling it later is an
+  error. A `Callback` can be kept (`handlers.push(code)`) and called after the
+  scope call ended, so it cannot `return`, `break`, `continue` or lift out of
+  anything.
+* A scope call is an expression: its value is what the scope function
+  returned (`const x = _twice 3 { scope * 10 }`). Used as a value, its block
+  cannot leave early.
+
 ## match
 
 ```

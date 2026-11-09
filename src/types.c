@@ -35,7 +35,7 @@ static Binding* find_binding(Bindings* b, ObjString* name) {
 
 static bool is_callable_obj(Obj* o) {
     return o->kind == OBJ_FUNCTION || o->kind == OBJ_NATIVE || o->kind == OBJ_OVERLOAD ||
-           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF;
+           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF || o->kind == OBJ_BLOCK;
 }
 
 bool same_kind(Value a, Value b) {
@@ -261,6 +261,20 @@ static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env
 }
 
 static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
+    if (!t->nquals && !t->direct && (t->name == vm->s_block || t->name == vm->s_callback)) {
+        /* Block<T> / Callback<T>: the body of a scope call; it takes its kind from the first parameter it is passed to */
+        if (t->nargs > 1) {
+            rt_error(vm, t->line, "type '%s' takes at most one type argument", t->name->chars);
+        }
+
+        if (!IS_KIND(v, OBJ_BLOCK) || ((ObjBlock*)v.as.o)->is_defer) {
+            return 0;
+        }
+
+        const ObjBlock* bl = (ObjBlock*)v.as.o;
+        return !bl->bound || bl->callback == (t->name == vm->s_callback) ? 5 : 0;
+    }
+
     Binding* bd = t->nquals || t->direct ? NULL : find_binding(b, t->name);
     if (bd) {
         if (bd->type) {

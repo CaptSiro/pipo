@@ -142,6 +142,13 @@ static void blacken(Obj* o) {
             mark_table(&e->vars);
             break;
         }
+        case OBJ_BLOCK: {
+            const ObjBlock* bl = (ObjBlock*)o;
+            mark_obj((Obj*)bl->env);
+            mark_obj((Obj*)bl->param_env);
+            mark_obj((Obj*)bl->scope_name);
+            break;
+        }
     }
 }
 

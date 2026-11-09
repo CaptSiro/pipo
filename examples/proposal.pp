@@ -5,6 +5,7 @@
 
 // imports
 import io
+import fs
 import "./shapes"
 import "./shapes" -> renamed
 import "./shapes" -> { rect, area, describe }
@@ -187,3 +188,79 @@ io:print(john.greet(), john:age)
 // using the imported module
 const r = rect(3, 4)
 io:print(r.describe(), "area", r.area(), shapes:UNIT == renamed:rect(1, 1))
+
+// scopes: functions that take a block of code. Their names start with '_' (and only theirs),
+// the first parameter is the block: Block<T> (runs only during the call) or Callback<T> (can be kept)
+interface Resource {
+    function close(Resource) -> void
+}
+
+impl Resource for fs:InputStream
+impl Resource for fs:OutputStream
+
+scope _resource(Block<void> code, Resource r) {
+    defer { r.close() } // the cleanup: runs when the scope ends, also when the block leaves early
+    code()
+}
+
+const tmp = fs:file("./proposal.tmp")
+
+// `const name = value` binds name for the block only, like `if some(x) = ...`
+if success(output) = tmp.open_write() {
+    _resource const out = output {
+        out.write("first line\nsecond line\n")
+    }
+}
+
+// return / break / continue / lift in the block act on the code around the scope call
+function head(fs:File f, int length) -> Error<string> {
+    _resource const input = lift(f.open_read()) {
+        return success(input.read_text(length)) // input is closed before head returns
+    }
+
+    return fail("unreachable")
+}
+
+io:print(head(tmp, 10))
+tmp.delete()
+
+// the block is called with a value: `scope` (here the thread id of an omp-like parallel for)
+scope _parallel(Block<int> code, int threads) {
+    for id in ...threads {
+        code(id)
+    }
+}
+
+_parallel 2 {
+    // nested blocks have their own `scope`, store the outer one in a variable
+    const outer = scope
+    _parallel 2 {
+        io:print("thread", outer, scope)
+    }
+}
+
+// `scope` is a plain value, so it can be lifted out of the block
+scope _with(Block<string> code, string value) {
+    code(value)
+}
+
+let string lifted
+_with "string" {
+    lifted = scope
+}
+io:print(lifted)
+
+// a Callback outlives the scope call (it cannot return / break / continue out of anything)
+let Callback<string>[] listeners = []
+scope _on(Callback<string> code, string event) {
+    listeners.push(code)
+}
+
+_on "click" {
+    io:print("clicked:", scope)
+}
+
+for listener in listeners {
+    listener("button")
+}
+

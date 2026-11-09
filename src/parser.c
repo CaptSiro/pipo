@@ -14,6 +14,8 @@ typedef struct {
     bool no_lambda;  /* parsing a match pattern / guard, where `x -> ...` starts the arm body */
     bool in_native;  /* parsing the declaration after `native` (it must not have a body) */
     int lift_uses;   /* `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift */
+    int scope_blocks;   /* nesting inside the blocks of scope calls: `scope` names the value of the innermost one */
+    bool in_scope_body; /* directly in the body of a scope declaration, where `defer` is allowed */
 } Parser;
 
 /* ---------------------------------------------------------------- helpers */
@@ -105,6 +107,22 @@ static bool tok_is(Token* t, TokKind k, const char* s) {
 
 static ObjString* intern_tok(Parser* p, Token* t) {
     return str_intern(p->vm, t->start, t->len);
+}
+
+/* `_name`: the name of a scope (a lone `_` is the wildcard pattern) */
+static bool is_scope_name(const Token* t) {
+    return t->kind == T_IDENT && t->len > 1 && t->start[0] == '_';
+}
+
+/* names starting with '_' belong to scopes, and `scope` is the value inside the block of a scope call */
+static void check_var_name(Parser* p, Token* t, const char* what) {
+    if (is_scope_name(t)) {
+        perr(p, t, "%s '%.*s' cannot start with '_': names starting with '_' are scopes", what, t->len, t->start);
+    }
+
+    if (tok_is(t, T_IDENT, "scope")) {
+        perr(p, t, "'scope' is reserved: it is the value the block of a scope call was called with");
+    }
 }
 
 static bool is_terminator(Token* t) {
@@ -515,6 +533,7 @@ static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
         const TokKind nk = peek_at(p, 1)->kind;
         if (t->kind == T_IDENT && (nk == T_COMMA || nk == T_RPAREN)) {
             advance(p);
+            check_var_name(p, t, "parameter");
             prm.name = intern_tok(p, t);
             /* (int) is a type without a name: fine in a declaration, an error anywhere else */
             Prim pr;
@@ -537,7 +556,9 @@ static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
 
                 prm.name = str_cintern(p->vm, "");
             } else {
-                prm.name = intern_tok(p, expect(p, T_IDENT, "parameter name"));
+                Token* nm = expect(p, T_IDENT, "parameter name");
+                check_var_name(p, nm, "parameter");
+                prm.name = intern_tok(p, nm);
             }
         }
 
@@ -647,6 +668,11 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     sig->line = kw->line;
     bool named = false;
     if (at_fn_name(p, 0)) {
+        if (is_scope_name(peek(p))) {
+            perr(p, peek(p), "function names cannot start with '_': names starting with '_' are scopes (scope %.*s(Block<T> code, ...) { ... })",
+                 peek(p)->len, peek(p)->start);
+        }
+
         sig->name = take_fn_name(p);
         named = true;
     } else {
@@ -700,7 +726,10 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     }
 
     int lifts = p->lift_uses;
+    const bool saved_body = p->in_scope_body;
+    p->in_scope_body = false;
     Node* body = parse_block(p);
+    p->in_scope_body = saved_body;
     sig->uses_lift = p->lift_uses != lifts;
     Node* n = new_node(statement && named ? S_FUNCDECL : N_FUNC, kw->line);
     n->as.func.sig = sig;
@@ -733,6 +762,8 @@ static Node* parse_lambda(Parser* p) {
     expect(p, T_ARROW, "'->'");
     bool saved_nl = p->no_lambda;
     p->no_lambda = false;
+    const bool saved_body = p->in_scope_body;
+    p->in_scope_body = false;
     int lifts = p->lift_uses;
     Node* body;
     if (check(p, T_LBRACE)) {
@@ -748,6 +779,7 @@ static Node* parse_lambda(Parser* p) {
     }
 
     p->no_lambda = saved_nl;
+    p->in_scope_body = saved_body;
     sig->uses_lift = p->lift_uses != lifts;
     Node* n = new_node(N_FUNC, start->line);
     n->as.func.sig = sig;
@@ -862,6 +894,122 @@ static Node* parse_match(Parser* p) {
     return n;
 }
 
+static Node* parse_let(Parser* p);
+
+/* an argument of a scope call: an expression, or `const f = ...` / `let x = ...`, a variable of the block */
+static Node* parse_scope_arg(Parser* p) {
+    if (!check(p, T_CONST) && !check(p, T_LET)) {
+        return parse_expression(p);
+    }
+
+    Node* d = parse_let(p);
+    if (!d->as.let.init) {
+        perr_line(p, d->line, "variable '%s' declared in the arguments of a scope call needs a value", d->as.let.name->chars);
+    }
+
+    return d;
+}
+
+/*
+ * _name { ... }, _name a, b { ... }, _name(a, b) { ... }, _name const f = open(...) { ... }:
+ * calls the scope _name with the block as its first argument. The current token is the name.
+ */
+static Node* parse_scope_call(Parser* p) {
+    Token* nm = advance(p);
+    Node* n = new_node(N_SCOPECALL, nm->line);
+    n->as.scall.name = intern_tok(p, nm);
+    n->as.scall.ic = new_ic(p);
+    Token* t = peek(p);
+    if (t->kind == T_LPAREN && !t->space_before && !t->nl_before) {
+        advance(p);
+        p->depth++;
+        while (!check(p, T_RPAREN)) {
+            nl_push(&n->as.scall.args, parse_scope_arg(p));
+            if (!accept(p, T_COMMA)) {
+                break;
+            }
+        }
+
+        expect(p, T_RPAREN, "')' to close the arguments of the scope call");
+        p->depth--;
+    } else if (!check(p, T_LBRACE)) {
+        do {
+            nl_push(&n->as.scall.args, parse_scope_arg(p));
+        } while (accept(p, T_COMMA));
+    }
+
+    if (!check(p, T_LBRACE)) {
+        perr(p, peek(p), "expected '{' to open the block of scope '%s' but found %s", n->as.scall.name->chars,
+             tok_desc(peek(p)));
+    }
+
+    const bool saved_body = p->in_scope_body;
+    p->in_scope_body = false;
+    p->scope_blocks++;
+    const int lifts = p->lift_uses;
+    n->as.scall.body = parse_block(p);
+    n->as.scall.uses_lift = p->lift_uses != lifts;
+    p->scope_blocks--;
+    p->in_scope_body = saved_body;
+
+    return n;
+}
+
+static bool is_block_type(Type* t) {
+    return t && t->kind == TY_NAME && !t->nquals && (str_equals(t->name, "Block") || str_equals(t->name, "Callback"));
+}
+
+/* scope _name(Block<T> code, ...) -> R { body }, <T>scope _name(...): the current token is `scope` */
+static Node* parse_scope_decl(Parser* p, ObjString** generics, int ngenerics) {
+    Token* kw = advance(p);
+    Token* nm = peek(p);
+    if (nm->kind != T_IDENT) {
+        perr(p, nm, "expected the name of the scope after 'scope' but found %s", tok_desc(nm));
+    }
+
+    if (!is_scope_name(nm)) {
+        perr(p, nm, "scope names must start with '_' (scope _%.*s)", nm->len, nm->start);
+    }
+
+    advance(p);
+    Signature* sig = pp_calloc(1, sizeof(Signature));
+    sig->name = intern_tok(p, nm);
+    sig->generics = generics;
+    sig->ngenerics = ngenerics;
+    sig->file = p->file;
+    sig->line = kw->line;
+    parse_params(p, sig, NULL);
+    if (accept(p, T_ARROW)) {
+        sig->ret = parse_type(p);
+    }
+
+    if (sig->nparams == 0 || !is_block_type(sig->params[0].type)) {
+        perr_line(p, kw->line, "the first parameter of scope '%s' must be its block: Block<T> or Callback<T>", sig->name->chars);
+    }
+
+    for (int i = 1; i < sig->nparams; i++) {
+        if (is_block_type(sig->params[i].type)) {
+            perr_line(p, kw->line, "scope '%s' can take only one block (its first parameter)", sig->name->chars);
+        }
+    }
+
+    const bool saved_body = p->in_scope_body;
+    const int saved_blocks = p->scope_blocks;
+    p->in_scope_body = true;
+    p->scope_blocks = 0;
+    const int lifts = p->lift_uses;
+    Node* body = parse_block(p);
+    sig->uses_lift = p->lift_uses != lifts;
+    p->in_scope_body = saved_body;
+    p->scope_blocks = saved_blocks;
+
+    Node* n = new_node(S_FUNCDECL, kw->line);
+    n->as.func.sig = sig;
+    n->as.func.body = body;
+
+    return n;
+}
+
 static bool starts_juxtaposed_arg(Token* t) {
     if (t->nl_before) {
         return false;
@@ -913,9 +1061,21 @@ static Node* parse_primary(Parser* p) {
             return n;
         }
         case T_IDENT: {
+            if (is_scope_name(t)) {
+                return parse_scope_call(p);
+            }
+
             advance(p);
             Node* id = new_node(N_IDENT, t->line);
             id->as.str = intern_tok(p, t);
+            if (tok_is(t, T_IDENT, "scope")) {
+                if (p->scope_blocks == 0) {
+                    perr(p, t, "'scope' can only be used inside the block of a scope call (_name { ... scope ... })");
+                }
+
+                return id;
+            }
+
             note_lift(p, id->as.str);
             if (starts_juxtaposed_arg(peek(p))) {
                 /* unary syntax: `success value` == success(value) */
@@ -996,7 +1156,7 @@ static Node* parse_primary(Parser* p) {
 }
 
 static Node* parse_postfix(Parser* p, Node* e) {
-    if (e->kind == N_IF || e->kind == N_MATCH) {
+    if (e->kind == N_IF || e->kind == N_MATCH || e->kind == N_SCOPECALL) {
         return e;
     }
 
@@ -1326,11 +1486,14 @@ static Node* parse_let(Parser* p) {
     Token* nx = peek_at(p, 1);
     if (t->kind == T_IDENT && (nx->kind == T_ASSIGN || is_terminator(nx))) {
         advance(p);
+        check_var_name(p, t, "variable");
         n->as.let.name = intern_tok(p, t);
     } else {
         n->as.let.type = parse_type(p);
         no_inline_fn_type(p);
-        n->as.let.name = intern_tok(p, expect(p, T_IDENT, "variable name"));
+        Token* nm = expect(p, T_IDENT, "variable name");
+        check_var_name(p, nm, "variable");
+        n->as.let.name = intern_tok(p, nm);
     }
 
     if (accept(p, T_ASSIGN)) {
@@ -1447,7 +1610,8 @@ static bool at_exported_decl(Parser* p) {
                 return true;
             }
 
-            return (tok_is(t, T_IDENT, "type") || tok_is(t, T_IDENT, "interface")) && a->kind == T_IDENT && !a->nl_before;
+            return (tok_is(t, T_IDENT, "type") || tok_is(t, T_IDENT, "interface") || tok_is(t, T_IDENT, "scope")) &&
+                   a->kind == T_IDENT && !a->nl_before;
         }
         default: return false;
     }
@@ -1631,7 +1795,7 @@ static bool is_generic_prefix(Parser* p) {
 
         Token* after = peek_at(p, i + 2);
         return after->kind == T_FUNCTION || tok_is(after, T_IDENT, "type") || tok_is(after, T_IDENT, "interface") ||
-               tok_is(after, T_IDENT, "impl");
+               tok_is(after, T_IDENT, "impl") || tok_is(after, T_IDENT, "scope");
     }
 }
 
@@ -1975,6 +2139,10 @@ static Node* parse_statement(Parser* p) {
                     return parse_interface(p, t->line, gens, ngen);
                 }
 
+                if (tok_is(peek(p), T_IDENT, "scope")) {
+                    return parse_scope_decl(p, gens, ngen);
+                }
+
                 if (tok_is(peek(p), T_IDENT, "impl")) {
                     if (!at_impl(p)) {
                         perr(p, peek(p), "expected 'impl Interface for Type' after the generic parameter list");
@@ -2021,6 +2189,31 @@ static Node* parse_statement(Parser* p) {
         case T_IDENT: {
             Token* a = peek_at(p, 1);
             Token* b = peek_at(p, 2);
+            if (is_scope_name(t)) {
+                /* parsed once here: the generic path below would parse the whole block twice */
+                Node* e = parse_scope_call(p);
+                n = new_node(S_EXPR, e->line);
+                n->as.expr.expr = e;
+                break;
+            }
+
+            if (tok_is(t, T_IDENT, "scope") && a->kind == T_IDENT && !a->nl_before && b->kind == T_LPAREN) {
+                return parse_scope_decl(p, NULL, 0);
+            }
+
+            if (tok_is(t, T_IDENT, "defer") && a->kind == T_LBRACE && !a->nl_before) {
+                if (!p->in_scope_body) {
+                    perr(p, t, "'defer' can only be used directly in the body of a scope (scope _name(...) { defer { ... } })");
+                }
+
+                advance(p);
+                n = new_node(S_DEFER, t->line);
+                p->in_scope_body = false; /* no defer inside a defer */
+                n->as.defer.body = parse_block(p);
+                p->in_scope_body = true;
+                return n;
+            }
+
             if (tok_is(t, T_IDENT, "type") && a->kind == T_IDENT && !a->nl_before &&
                 (b->kind == T_ASSIGN || (b->kind == T_OP && b->start[0] == '<'))) {
                 advance(p);

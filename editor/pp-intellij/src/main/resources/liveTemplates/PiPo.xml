@@ -17,6 +17,13 @@
         <variable name="TYPE" expression="" defaultValue="&quot;T&quot;" alwaysStopAt="true"/>
         <context><option name="PIPO" value="true"/></context>
     </template>
+    <template name="scope" value="scope _$NAME$(Block&lt;$T$&gt; code$PARAMS$) {&#10;    defer { $CLEANUP$ }&#10;    code($END$)&#10;}" description="scope with a cleanup" toReformat="true" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <variable name="T" expression="" defaultValue="&quot;void&quot;" alwaysStopAt="true"/>
+        <variable name="PARAMS" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="CLEANUP" expression="" defaultValue="" alwaysStopAt="true"/>
+        <context><option name="PIPO" value="true"/></context>
+    </template>
     <template name="for" value="for $VAR$ in $ITER$ {&#10;    $END$&#10;}" description="for loop" toReformat="true" toShortenFQNames="false">
         <variable name="VAR" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
         <variable name="ITER" expression="" defaultValue="&quot;xs&quot;" alwaysStopAt="true"/>

@@ -1,0 +1,38 @@
+open a
+using a
+close a
+open b
+close b
+from b
+open loop0
+body 0
+close loop0
+open loop1
+close loop1
+open loop2
+close loop2
+time 0
+time 1
+time 2
+0 0
+0 1
+1 0
+1 1
+step one
+step two
+cleanup 3
+steps done
+step one
+step two
+cleanup 2
+300
+open parse
+close parse
+success(3)
+open parse
+close parse
+fail("not a number: x")
+handled click!
+int 1
+string x
+int 2

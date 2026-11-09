@@ -23,10 +23,19 @@
         "2": { "name": "entity.name.function.pp" }
       }
     },
+    {
+      "match": "\\b(scope)\\s+(_[A-Za-z0-9_]+)",
+      "captures": {
+        "1": { "name": "keyword.other.pp" },
+        "2": { "name": "entity.name.function.pp" }
+      }
+    },
+    { "name": "entity.name.function.call.pp", "match": "\\b_[A-Za-z0-9_]+\\b" },
+    { "name": "variable.language.pp", "match": "\\bscope\\b" },
     { "name": "constant.language.pp", "match": "\\b(true|false)\\b" },
-    { "name": "keyword.control.pp", "match": "\\b(if|else|for|in|while|break|continue|return|match)\\b" },
+    { "name": "keyword.control.pp", "match": "\\b(if|else|for|in|while|break|continue|return|match|defer)\\b" },
     { "name": "keyword.other.pp", "match": "\\b(import|export|global|native|function|const|let|enum|type|interface|impl|precedence|over|under|as)\\b" },
-    { "name": "storage.type.pp", "match": "\\b(int|float|string|bool|void|any|range|object|number|tuple)\\b" },
+    { "name": "storage.type.pp", "match": "\\b(int|float|string|bool|void|any|range|object|number|tuple|Block|Callback)\\b" },
     { "name": "entity.name.type.pp", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
     { "name": "entity.name.function.call.pp", "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()" },
     { "name": "entity.name.namespace.pp", "match": "\\b[a-z_][A-Za-z0-9_]*(?=:[A-Za-z_])" },

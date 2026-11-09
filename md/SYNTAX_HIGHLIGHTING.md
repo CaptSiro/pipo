@@ -60,12 +60,13 @@ the IDE. JetBrains caches TextMate bundles.
 | `string.*`, `constant.character.escape` | `"..."` and `'...'` with escapes |
 | `constant.numeric` | `42`, `1_000`, `0xFF`, `0b101`, `3.14`, `1e9` |
 | `constant.language` | `true`, `false` |
-| `keyword.control` | `if else for in while break continue return match` |
-| `keyword.other` | `import export global native function const let enum type interface impl precedence over under as` |
-| `storage.type` | `int float string bool void any range object number` |
+| `keyword.control` | `if else for in while break continue return match defer` |
+| `keyword.other` | `import export global native function const let enum type interface impl precedence over under as`, and `scope` in `scope _name(` |
+| `variable.language` | `scope`, the value inside the block of a scope call |
+| `storage.type` | `int float string bool void any range object number tuple Block Callback` |
 | `entity.name.type` | capitalised names: `Person`, `Error`, `Option` |
-| `entity.name.function` | the name in `function name(` / `function +(` |
-| `entity.name.function.call` | `name(` |
+| `entity.name.function` | the name in `function name(` / `function +(` / `scope _name(` |
+| `entity.name.function.call` | `name(`, and every `_name` (a scope call) |
 | `entity.name.namespace` | the module / object before `:`, as in `io:print` |
 | `punctuation.accessor` | `:` and `.` before a name |
 | `keyword.operator` | operator runs, `->`, `...`, `...=` |

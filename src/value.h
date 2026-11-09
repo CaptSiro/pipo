@@ -98,7 +98,8 @@ typedef enum {
     OBJ_MAP,          /* std:Map<K, V>, an ObjMap */
     OBJ_SET,          /* std:Set<T>, an ObjMap without values */
     OBJ_NATIVE_TYPE,  /* a type implemented in C (std:Map, std:Set, types:Int8Array, ...), bound by `native type` */
-    OBJ_INSTANCE      /* a value of a NativeClass type: ObjInstance followed by the class's own fields */
+    OBJ_INSTANCE,     /* a value of a NativeClass type: ObjInstance followed by the class's own fields */
+    OBJ_BLOCK         /* the body of a scope call (Block<T> / Callback<T>), or a deferred block */
 } ObjKind;
 
 struct Obj {
@@ -285,6 +286,31 @@ typedef struct {
     ObjEnv* closure;
     bool owns_sig; /* a lambda given the parameter types of a callback type; sig is freed with it */
 } ObjFunction;
+
+/*
+ * The `{ ... }` of a scope call `_name args { ... }`. The scope function gets it as its
+ * Block<T> / Callback<T> parameter and runs it with code() / code(value); `scope` in the
+ * body is that value. A Block may leave the enclosing function or loop (return, break,
+ * continue, lift) and can only run while its scope call runs (call != NULL). A Callback
+ * outlives the call, so it cannot leave anything. A `defer { ... }` is an ObjBlock too
+ * (is_defer), run when the scope function ends.
+ */
+struct ScopeCall;
+typedef struct {
+    Obj obj;
+    Node* body;
+    ObjEnv* env;            /* variables bound by the call (`const f = ...`): parent of the scope of each run */
+    struct ScopeCall* call; /* the running scope call, NULL once it ended */
+    ObjString* scope_name;  /* _name, for messages */
+    const char* file;
+    int line;
+    Type* param;            /* T of Block<T> once bound to the parameter, NULL = not checked */
+    ObjEnv* param_env;      /* where param resolves */
+    bool bound;             /* got its kind (Block or Callback) from the first parameter it was passed to */
+    bool callback;
+    bool uses_lift;
+    bool is_defer;
+} ObjBlock;
 
 typedef Value (*NativeFn)(VM* vm, int argc, Value* args);
 

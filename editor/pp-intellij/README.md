@@ -15,7 +15,7 @@ A native IntelliJ Platform plugin for `.pp` files. Unlike the TextMate bundle in
 | Documentation | *Ctrl+Q* and *Ctrl+hover* show the signature and the `//` lines written directly above a declaration. Every overload of a call is listed. |
 | Parameter info | *Ctrl+P* lists every overload. In `recv.f(...)` the receiver counts as the first parameter. |
 | Structure | Structure view, breadcrumbs, *Navigate, Symbol*, folding of blocks, literals, comments and imports, and TODO comments. |
-| Editing | Brace matching, auto-closing quotes, *Ctrl+/* comments, and live templates (`fn`, `fnr`, `gfn`, `for`, `fori`, `while`, `if`, `ife`, `iflet`, `match`, `enum`, `rec`, `cb`, `iface`, `pr`). |
+| Editing | Brace matching, auto-closing quotes, *Ctrl+/* comments, and live templates (`fn`, `fnr`, `gfn`, `for`, `fori`, `while`, `if`, `ife`, `iflet`, `match`, `enum`, `rec`, `cb`, `iface`, `pr`, `scope`). |
 | Formatter | Re-indents code and puts spaces around `,` `=` `->` and before a block's `{`. It never joins or splits lines and never touches the spaces that change meaning (`f[x]` vs `f [x]`). The tests check this on every file of the repository. |
 | Running | A *PiPo* run configuration (right-click a file, *Run*, or use the gutter icon of a script). It uses the project's `pp`: the newest `build/pp.exe` or `cmake-build-*/pp.exe`, or `pp` on the PATH, or the one set in *Settings, Languages & Frameworks, PiPo*. Error locations (`file.pp:12:5:`) in any console are clickable. |
 

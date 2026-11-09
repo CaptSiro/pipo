@@ -523,6 +523,7 @@ bool is_callable(Value v) {
         case OBJ_OVERLOAD:
         case OBJ_VARIANT_CTOR:
         case OBJ_TYPEDEF: return true;
+        case OBJ_BLOCK: return !((ObjBlock*)v.as.o)->is_defer;
         default: return false; /* a native type (std:Map, ...) is not callable: its module has a constructor function */
     }
 }
@@ -559,6 +560,7 @@ const char* value_type_name(Value v) {
         case OBJ_SET: return "Set";
         case OBJ_NATIVE_TYPE: return "type";
         case OBJ_INSTANCE: return AS_INSTANCE(v)->type->name->chars;
+        case OBJ_BLOCK: return ((ObjBlock*)v.as.o)->callback ? "Callback" : "Block";
     }
 
     return "?";
@@ -768,6 +770,11 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         case OBJ_INTERFACE: sb_printf(sb, "<interface %s>", ((ObjInterface*)o)->name->chars); break;
         case OBJ_MODULE: sb_printf(sb, "<module %s>", ((ObjModule*)o)->name->chars); break;
         case OBJ_ENV: sb_puts(sb, "<scope>"); break;
+        case OBJ_BLOCK: {
+            const ObjBlock* bl = (ObjBlock*)o;
+            sb_printf(sb, "<%s of %s>", bl->is_defer ? "defer" : bl->callback ? "Callback" : "Block", bl->scope_name->chars);
+            break;
+        }
         case OBJ_NATIVE_TYPE: {
             const ObjNativeType* t = (ObjNativeType*)o;
             if (t->which == NT_CLASS) {

@@ -62,6 +62,65 @@ public class PipoFeaturesTest extends BasePlatformTestCase {
         assertInstanceOf(single(), PipoParam.class);
     }
 
+    public void testScopes() {
+        myFixture.configureByText("a.pp", """
+                scope _with(Block<string> code, string value) {
+                    defer { code }
+                    code(value)
+                }
+                <caret>_with "x" { }
+                """);
+        PipoFunctionDecl decl = (PipoFunctionDecl) single();
+        assertTrue(decl.isScope());
+        assertEquals("scope", decl.kindName());
+
+        // a variable bound by the call is visible in its block only
+        myFixture.configureByText("b.pp", """
+                scope _with(Block<void> code, string value) {
+                    code()
+                }
+                _with const v = "x" {
+                    const w = <caret>v
+                }
+                """);
+        assertEquals("v", ((PipoVarDecl) single()).getName());
+
+        myFixture.configureByText("c.pp", """
+                const v = 1
+                scope _with(Block<void> code, int value) {
+                    code()
+                }
+                _with const v = 2 { }
+                const w = <caret>v
+                """);
+        assertTrue("resolves to the outer v", ((PipoVarDecl) single()).isTopLevel());
+
+        // Block and Callback are built-in types
+        myFixture.configureByText("d.pp", "scope _on(<caret>Callback<string> code) { }\n");
+        assertInstanceOf(single(), PipoTypeDecl.class);
+    }
+
+    public void testScopeSyntaxErrors() {
+        myFixture.configureByText("a.pp", """
+                function _f() { }
+                scope g(Block<void> code) { }
+                scope _h(int n, Block<void> code) { }
+                function k() {
+                    defer { }
+                }
+                const s = scope
+                const _x = 1
+                """);
+        String errors = myFixture.doHighlighting().stream()
+                .filter(i -> i.getSeverity() == com.intellij.lang.annotation.HighlightSeverity.ERROR)
+                .map(i -> i.getDescription()).reduce("", (a, b) -> a + "\n" + b);
+        for (String want : List.of("function names cannot start with '_'", "scope names must start with '_'",
+                "the first parameter of scope '_h' must be its block", "'defer' can only be used directly in the body of a scope",
+                "'scope' can only be used inside the block of a scope call", "variable '_x' cannot start with '_'")) {
+            assertTrue("missing: " + want + "\nin:" + errors, errors.contains(want));
+        }
+    }
+
     public void testVariableIsNotVisibleBeforeItsDeclarationButFunctionsAre() {
         myFixture.configureByText("a.pp", """
                 const x = 1

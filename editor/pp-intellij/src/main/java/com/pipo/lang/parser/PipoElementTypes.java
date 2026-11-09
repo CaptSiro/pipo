@@ -47,6 +47,8 @@ public interface PipoElementTypes {
     IElementType CONTINUE_STMT = new PipoTokenType("CONTINUE_STMT");
     IElementType ASSIGN_STMT = new PipoTokenType("ASSIGN_STMT");
     IElementType EXPR_STMT = new PipoTokenType("EXPR_STMT");
+    /** defer { ... } in the body of a scope */
+    IElementType DEFER_STMT = new PipoTokenType("DEFER_STMT");
 
     // types
     IElementType TYPE_REF = new PipoTokenType("TYPE_REF");
@@ -83,12 +85,18 @@ public interface PipoElementTypes {
     IElementType METHOD_CALL_EXPR = new PipoTokenType("METHOD_CALL_EXPR");
     IElementType PREFIX_EXPR = new PipoTokenType("PREFIX_EXPR");
     IElementType CHAIN_EXPR = new PipoTokenType("CHAIN_EXPR");
+    /** _name args { ... }: REF_EXPR (the scope), SCOPE_ARGS, BLOCK */
+    IElementType SCOPE_CALL_EXPR = new PipoTokenType("SCOPE_CALL_EXPR");
+    /** the arguments of a scope call: expressions, and VAR_DECLs visible only in its block */
+    IElementType SCOPE_ARGS = new PipoTokenType("SCOPE_ARGS");
+    /** `scope`: the value the block of a scope call was called with */
+    IElementType SCOPE_EXPR = new PipoTokenType("SCOPE_EXPR");
 
     TokenSet TYPES = TokenSet.create(TYPE_REF, ARRAY_TYPE, OPTION_TYPE, UNION_TYPE, RECORD_TYPE, FUNCTION_TYPE,
             PAREN_TYPE, CALLBACK_TYPE);
     TokenSet EXPRESSIONS = TokenSet.create(REF_EXPR, LITERAL, PAREN_EXPR, ARRAY_EXPR, OBJECT_EXPR, FUNCTION_EXPR,
             LAMBDA_EXPR, IF_EXPR, MATCH_EXPR, CALL_EXPR, INDEX_EXPR, FIELD_EXPR, METHOD_CALL_EXPR, PREFIX_EXPR,
-            CHAIN_EXPR, PATTERN_BINDING, WILDCARD);
+            CHAIN_EXPR, PATTERN_BINDING, WILDCARD, SCOPE_CALL_EXPR, SCOPE_EXPR);
     /** nodes whose `{ ... }` contents are indented and folded */
     TokenSet BRACED = TokenSet.create(BLOCK, OBJECT_EXPR, RECORD_TYPE, ENUM_DECL, INTERFACE_DECL, MATCH_EXPR,
             IMPORT_LIST);

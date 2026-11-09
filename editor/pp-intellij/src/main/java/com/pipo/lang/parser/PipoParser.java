@@ -66,6 +66,8 @@ public final class PipoParser implements PsiParser {
         private boolean inPattern;
         private boolean inNative;
         private boolean sawLoneParamName;
+        private int scopeBlocks;        // nesting inside the blocks of scope calls: `scope` is their value
+        private boolean inScopeBody;    // directly in the body of a scope declaration, where `defer` is allowed
 
         private int cachedOffset = -1;
         private int cachedPos;
@@ -247,6 +249,20 @@ public final class PipoParser implements PsiParser {
             PsiBuilder.Marker m = mark();
             adv();
             m.error(msg);
+        }
+
+        /* `_name`: the name of a scope (a lone `_` is the wildcard pattern) */
+        private boolean isScopeName(int n) {
+            return at(n) == IDENT && text(n).length() > 1 && text(n).charAt(0) == '_';
+        }
+
+        /* names starting with '_' belong to scopes, and `scope` is the value inside the block of a scope call */
+        private void checkVarName(int n, String what) {
+            if (isScopeName(n)) {
+                error(what + " '" + text(n) + "' cannot start with '_': names starting with '_' are scopes");
+            } else if (word(n, "scope")) {
+                error("'scope' is reserved: it is the value the block of a scope call was called with");
+            }
         }
 
         private boolean isTerminator(int n) {
@@ -572,7 +588,8 @@ public final class PipoParser implements PsiParser {
                     return false;
                 }
                 IElementType after = at(i + 2);
-                return after == FUNCTION || word(i + 2, "type") || word(i + 2, "interface") || word(i + 2, "impl");
+                return after == FUNCTION || word(i + 2, "type") || word(i + 2, "interface") || word(i + 2, "impl")
+                        || word(i + 2, "scope");
             }
         }
 
@@ -594,11 +611,15 @@ public final class PipoParser implements PsiParser {
                     if (mode == ParamMode.DECL) {
                         sawLoneParamName = true;
                     }
+                    checkVarName(0, "parameter");
                     name("parameter name");
                 } else {
                     parseType();
                     noInlineFnType();
                     if (isIdent(0)) {
+                        if (mode != ParamMode.TYPES) {
+                            checkVarName(0, "parameter");
+                        }
                         name("parameter name");
                     } else if (mode == ParamMode.STRICT) {
                         error("expected parameter name but found " + desc(0));
@@ -645,6 +666,10 @@ public final class PipoParser implements PsiParser {
             expect(FUNCTION, "'function'");
             boolean named = atFnName(0);
             if (named) {
+                if (isScopeName(0)) {
+                    error("function names cannot start with '_': names starting with '_' are scopes (scope " + text(0)
+                            + "(Block<T> code, ...) { ... })");
+                }
                 fnName();
             }
 
@@ -679,7 +704,10 @@ public final class PipoParser implements PsiParser {
             }
 
             paramsStart.drop();
+            boolean savedBody = inScopeBody;
+            inScopeBody = false;
             parseBlock();
+            inScopeBody = savedBody;
             IElementType kind = statement && named ? FUNCTION_DECL : FUNCTION_EXPR;
             m.done(kind);
             return kind;
@@ -697,8 +725,10 @@ public final class PipoParser implements PsiParser {
             expect(ARROW, "'->'");
             boolean savedNl = noLambda;
             boolean savedPattern = inPattern;
+            boolean savedBody = inScopeBody;
             noLambda = false;
             inPattern = false;
+            inScopeBody = false;
             if (is(LBRACE)) {
                 parseBlock();
             } else {
@@ -708,6 +738,7 @@ public final class PipoParser implements PsiParser {
             }
             noLambda = savedNl;
             inPattern = savedPattern;
+            inScopeBody = savedBody;
             m.done(LAMBDA_EXPR);
             return new Res(m, LAMBDA_EXPR);
         }
@@ -841,9 +872,21 @@ public final class PipoParser implements PsiParser {
                 m.done(LITERAL);
                 return new Res(m, LITERAL);
             }
+            if (isScopeName(0)) {
+                return parseScopeCall();
+            }
+            if (word(0, "scope")) {
+                if (scopeBlocks == 0) {
+                    error("'scope' can only be used inside the block of a scope call (_name { ... scope ... })");
+                }
+                PsiBuilder.Marker m = mark();
+                advAs(SCOPE_KW);
+                m.done(SCOPE_EXPR);
+                return new Res(m, SCOPE_EXPR);
+            }
             if (t == IDENT) {
                 PsiBuilder.Marker m = mark();
-                if (inPattern && !(at(1) == LPAREN && !nl(1)) && !(at(1) == COLON && !nl(1))) {
+                if (inPattern &&!(at(1) == LPAREN && !nl(1)) && !(at(1) == COLON && !nl(1))) {
                     if (text(0).equals("_")) {
                         adv();
                         m.done(WILDCARD);
@@ -952,7 +995,7 @@ public final class PipoParser implements PsiParser {
         }
 
         private Res parsePostfix(Res e) {
-            if (e == null || e.kind == IF_EXPR || e.kind == MATCH_EXPR) {
+            if (e == null || e.kind == IF_EXPR || e.kind == MATCH_EXPR || e.kind == SCOPE_CALL_EXPR) {
                 return e;
             }
             PsiBuilder.Marker left = e.m;
@@ -1202,19 +1245,144 @@ public final class PipoParser implements PsiParser {
             skipToLineEnd("expected the end of the statement (a newline or ';') before " + desc(0));
         }
 
-        private void parseLet(PsiBuilder.Marker m) {
+        /** let / const; true when it has a value */
+        private boolean parseLet(PsiBuilder.Marker m) {
             adv(); // let / const
             if (isIdent(0) && (at(1) == ASSIGN || isTerminator(1))) {
+                checkVarName(0, "variable");
                 name("variable name");
             } else {
                 parseType();
                 noInlineFnType();
+                if (isIdent(0)) {
+                    checkVarName(0, "variable");
+                }
                 name("variable name");
             }
-            if (accept(ASSIGN)) {
+            boolean init = accept(ASSIGN);
+            if (init) {
                 parseExpression();
             }
             m.done(VAR_DECL);
+            return init;
+        }
+
+        /* an argument of a scope call: an expression, or `const f = ...` / `let x = ...`, a variable of the block */
+        private void parseScopeArg() {
+            if (!is(CONST) && !is(LET)) {
+                parseExpression();
+                return;
+            }
+            PsiBuilder.Marker d = mark();
+            if (!parseLet(d)) {
+                error("a variable declared in the arguments of a scope call needs a value");
+            }
+        }
+
+        /*
+         * _name { ... }, _name a, b { ... }, _name(a, b) { ... }, _name const f = open(...) { ... }:
+         * SCOPE_CALL_EXPR(REF_EXPR, SCOPE_ARGS?, BLOCK). The current token is the name.
+         */
+        private Res parseScopeCall() {
+            PsiBuilder.Marker m = mark();
+            String name = text(0);
+            PsiBuilder.Marker r = mark();
+            adv();
+            r.done(REF_EXPR);
+            if (is(LPAREN) && !space(0) && !nl(0)) {
+                PsiBuilder.Marker list = mark();
+                adv();
+                depth++;
+                while (!is(RPAREN) && !eof()) {
+                    int before = b.getCurrentOffset();
+                    parseScopeArg();
+                    if (b.getCurrentOffset() == before || !accept(COMMA)) {
+                        break;
+                    }
+                }
+                expect(RPAREN, "')' to close the arguments of the scope call");
+                depth--;
+                list.done(SCOPE_ARGS);
+            } else if (!is(LBRACE)) {
+                PsiBuilder.Marker list = mark();
+                do {
+                    int before = b.getCurrentOffset();
+                    parseScopeArg();
+                    if (b.getCurrentOffset() == before) {
+                        break;
+                    }
+                } while (accept(COMMA));
+                list.done(SCOPE_ARGS);
+            }
+
+            if (!is(LBRACE)) {
+                error("expected '{' to open the block of scope '" + name + "' but found " + desc(0));
+                m.done(SCOPE_CALL_EXPR);
+                return new Res(m, SCOPE_CALL_EXPR);
+            }
+            boolean savedBody = inScopeBody;
+            inScopeBody = false;
+            scopeBlocks++;
+            parseBlock();
+            scopeBlocks--;
+            inScopeBody = savedBody;
+            m.done(SCOPE_CALL_EXPR);
+            return new Res(m, SCOPE_CALL_EXPR);
+        }
+
+        /* Block<T> / Callback<T> as the type of the parameter starting at offset n */
+        private boolean atBlockType(int n) {
+            return (word(n, "Block") || word(n, "Callback")) && at(n + 1) != COLON;
+        }
+
+        /**
+         * scope _name(Block<T> code, ...) -> R { body }: a FUNCTION_DECL with the `scope` keyword.
+         * m starts the node (before the generic parameters); the current token is `scope`.
+         */
+        private void parseScopeDecl(PsiBuilder.Marker m) {
+            advAs(SCOPE_KW);
+            if (!isIdent(0)) {
+                error("expected the name of the scope after 'scope' but found " + desc(0));
+            } else if (!isScopeName(0)) {
+                error("scope names must start with '_' (scope _" + text(0) + ")");
+            }
+            String name = text(0);
+            if (isIdent(0)) {
+                name("scope name");
+            }
+
+            // the first parameter is the block, and no other parameter is
+            boolean firstIsBlock = is(LPAREN) && atBlockType(1);
+            int blocks = 0;
+            int close = is(LPAREN) ? matchingParen(0) : -1;
+            for (int i = 1, d = 0; close > 0 && i < close; i++) {
+                IElementType k = at(i);
+                if (k == LPAREN || k == LBRACKET || k == LBRACE) {
+                    d++;
+                } else if (k == RPAREN || k == RBRACKET || k == RBRACE) {
+                    d--;
+                } else if (d == 0 && (at(i - 1) == LPAREN || at(i - 1) == COMMA) && atBlockType(i)) {
+                    blocks++;
+                }
+            }
+            if (!firstIsBlock) {
+                error("the first parameter of scope '" + name + "' must be its block: Block<T> or Callback<T>");
+            } else if (blocks > 1) {
+                error("scope '" + name + "' can take only one block (its first parameter)");
+            }
+
+            parseParams(ParamMode.STRICT);
+            if (accept(ARROW)) {
+                parseType();
+            }
+            boolean savedBody = inScopeBody;
+            int savedBlocks = scopeBlocks;
+            inScopeBody = true;
+            scopeBlocks = 0;
+            parseBlock();
+            inScopeBody = savedBody;
+            scopeBlocks = savedBlocks;
+            m.done(FUNCTION_DECL);
         }
 
         private void parseImport(PsiBuilder.Marker m) {
@@ -1280,7 +1448,7 @@ public final class PipoParser implements PsiParser {
                 if (atNative()) {
                     return true;
                 }
-                return (word(0, "type") || word(0, "interface")) && at(1) == IDENT && !nl(1);
+                return (word(0, "type") || word(0, "interface") || word(0, "scope")) && at(1) == IDENT && !nl(1);
             }
             return false;
         }
@@ -1595,6 +1763,10 @@ public final class PipoParser implements PsiParser {
                     parseInterface(m);
                     return;
                 }
+                if (word(0, "scope")) {
+                    parseScopeDecl(m);
+                    return;
+                }
                 if (word(0, "impl")) {
                     if (!atImpl()) {
                         error("expected 'impl Interface for Type' after the generic parameter list");
@@ -1648,6 +1820,27 @@ public final class PipoParser implements PsiParser {
             }
             if (t == IDENT) {
                 IElementType a = at(1);
+                if (isScopeName(0)) {
+                    parseScopeCall();
+                    m.done(EXPR_STMT);
+                    endStatement();
+                    return;
+                }
+                if (word(0, "scope") && a == IDENT && !nl(1) && at(2) == LPAREN) {
+                    parseScopeDecl(m);
+                    return;
+                }
+                if (word(0, "defer") && a == LBRACE && !nl(1)) {
+                    if (!inScopeBody) {
+                        error("'defer' can only be used directly in the body of a scope (scope _name(...) { defer { ... } })");
+                    }
+                    advAs(DEFER_KW);
+                    inScopeBody = false; // no defer inside a defer
+                    parseBlock();
+                    inScopeBody = true;
+                    m.done(DEFER_STMT);
+                    return;
+                }
                 if (word(0, "type") && a == IDENT && !nl(1) && (at(2) == ASSIGN || op(2, "<"))) {
                     parseTypeDecl(m);
                     endStatement();

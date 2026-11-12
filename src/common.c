@@ -1,5 +1,7 @@
 #include "common.h"
 
+
+
 static void out_of_memory(void) {
     fprintf(stderr, "fatal: out of memory\n");
     exit(70);
@@ -52,12 +54,14 @@ char* pp_read_file(const char* path, size_t* out_len) {
 
     if (fseek(f, 0, SEEK_END) != 0) {
         fclose(f);
+
         return NULL;
     }
 
     long n = ftell(f);
     if (n < 0) {
         fclose(f);
+
         return NULL;
     }
 

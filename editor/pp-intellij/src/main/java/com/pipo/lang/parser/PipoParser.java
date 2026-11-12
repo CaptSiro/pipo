@@ -851,6 +851,9 @@ public final class PipoParser implements PsiParser {
                 return false;
             }
             IElementType t = at(0);
+            if (t == IDENT && text(0).equals("as")) {
+                return false; // `x as int` is a cast, not x(as int)
+            }
             if (t == IDENT || t == INT || t == FLOAT || t == STRING || t == TRUE || t == FALSE || t == FUNCTION) {
                 return true;
             }
@@ -1153,7 +1156,20 @@ public final class PipoParser implements PsiParser {
             return (t == OP || t == IN) && (!nl(0) || depth > 0);
         }
 
+        /* expr as Type binds loosest: `a + b as int` is `(a + b) as int` */
         private Res parseExpression() {
+            Res e = parseChain();
+            while (e != null && isIdent(0) && text(0).equals("as") && !nl(0)) {
+                PsiBuilder.Marker m = e.m().precede();
+                adv();
+                parseType();
+                m.done(AS_EXPR);
+                e = new Res(m, AS_EXPR);
+            }
+            return e;
+        }
+
+        private Res parseChain() {
             PsiBuilder.Marker chain = mark();
             Res first = parseUnary();
             if (!atInfix()) {

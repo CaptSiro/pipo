@@ -63,6 +63,12 @@ if (PP_BUILD_EDITOR_PLUGIN)
 endif ()
 
 enable_testing()
+
+# md/CODING_STYLE.md: the rules a script can check
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND)
+    add_test(NAME style COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/style_check.py)
+endif ()
 file(GLOB PP_TESTS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.pp)
 foreach (test_file ${PP_TESTS})
     get_filename_component(test_name ${test_file} NAME_WE)
@@ -74,3 +80,37 @@ foreach (test_file ${PP_TESTS})
             -DEXPECTED=${test_dir}/${test_name}.out
             -P ${CMAKE_SOURCE_DIR}/tests/run_test.cmake)
 endforeach ()
+
+# the same scripts on the bytecode VM (--target=bytecode)
+foreach (test_file ${PP_TESTS})
+    get_filename_component(test_name ${test_file} NAME_WE)
+    get_filename_component(test_dir ${test_file} DIRECTORY)
+    add_test(NAME bytecode_${test_name}
+            COMMAND ${CMAKE_COMMAND}
+            -DPP=$<TARGET_FILE:pp>
+            -DTARGET=bytecode
+            -DSCRIPT=${test_file}
+            -DEXPECTED=${test_dir}/${test_name}.out
+            -P ${CMAKE_SOURCE_DIR}/tests/run_test.cmake)
+endforeach ()
+
+# tests/wasm/*.pp with a .out: compiled with --target=wasm and run with node, when node is installed
+find_program(PP_NODE node)
+if (PP_NODE)
+    file(GLOB PP_WASM_TESTS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/wasm/*.pp)
+    foreach (test_file ${PP_WASM_TESTS})
+        get_filename_component(test_name ${test_file} NAME_WE)
+        get_filename_component(test_dir ${test_file} DIRECTORY)
+        if (NOT EXISTS ${test_dir}/${test_name}.out)
+            continue() # a module the tests import
+        endif ()
+        add_test(NAME wasm_${test_name}
+                COMMAND ${CMAKE_COMMAND}
+                -DPP=$<TARGET_FILE:pp>
+                -DNODE=${PP_NODE}
+                -DSCRIPT=${test_file}
+                -DEXPECTED=${test_dir}/${test_name}.out
+                -DOUT_DIR=${CMAKE_BINARY_DIR}
+                -P ${CMAKE_SOURCE_DIR}/tests/run_wasm_test.cmake)
+    endforeach ()
+endif ()

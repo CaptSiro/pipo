@@ -2,6 +2,7 @@
 #define PP_COMMON_H
 
 #include <inttypes.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -9,6 +10,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Runtime errors leave deep calls with longjmp. On 64-bit MinGW, setjmp records its frame and
+// longjmp then unwinds the stack through SEH, which can hang when a frame ends in a call of a
+// noreturn function; a NULL frame makes longjmp only restore the registers, as everywhere else.
+#if defined(__MINGW64__) && defined(__x86_64__)
+#undef setjmp
+#define setjmp(BUF) _setjmp((BUF), NULL)
+#endif
 
 #define PP_VERSION "0.1.0"
 
@@ -27,12 +36,12 @@ char* pp_strndup(const char* s, size_t len);
 char* pp_strdup(const char* s);
 char* pp_read_file(const char* path, size_t* out_len);
 
-/* grows a dynamic array so that one more element fits */
-#define GROW(arr, count, cap)                                                  \
+// grows a dynamic array so that one more element fits
+#define GROW(ARR, COUNT, CAP)                                                  \
     do {                                                                       \
-        if ((count) >= (cap)) {                                                \
-            (cap) = (cap) < 8 ? 8 : (cap) * 2;                                 \
-            (arr) = pp_realloc((arr), sizeof(*(arr)) * (size_t)(cap));         \
+        if ((COUNT) >= (CAP)) {                                                \
+            (CAP) = (CAP) < 8 ? 8 : (CAP) * 2;                                 \
+            (ARR) = pp_realloc((ARR), sizeof(*(ARR)) * (size_t)(CAP));         \
         }                                                                      \
     } while (0)
 
@@ -49,4 +58,6 @@ void sb_putc(StrBuf* sb, char c);
 void sb_printf(StrBuf* sb, const char* fmt, ...);
 void sb_free(StrBuf* sb);
 
-#endif
+
+
+#endif // PP_COMMON_H

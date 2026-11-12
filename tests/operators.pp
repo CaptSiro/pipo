@@ -12,7 +12,7 @@ io:print_nl(7 / 2, -7 / 2, 7 / -2, 6 / 3, 7.0 / 2, 7 / 2.0, 1 / 4.0)
 // ---- % : (number, number); the result takes the sign of the divisor
 io:print_nl(7 % 3, -7 % 3, 7 % -3, -7 % -3, 6 % 3, 7.5 % 2, -7.5 % 2, 5 % -1)
 // ---- ** : (number, number); a negative or float exponent gives a float
-io:print_nl(2 ** 10, 3 ** 0, 0 ** 0, (-2) ** 3, 2 ** -1, 4 ** 0.5, 2.0 ** 3)
+io:print_nl(2 ** 10, 3 ** 0, 0 ** 0, (-2) ** 3, 2.0 ** -1, 4 ** 0.5, 2.0 ** 3)
 
 // int arithmetic wraps on overflow
 const int max = 9223372036854775807

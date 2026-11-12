@@ -109,6 +109,7 @@ function find_even(int[] xs) -> int? {
             return some(x)
         }
     }
+
     return none()
 }
 
@@ -128,8 +129,10 @@ function parse_age(string s) -> Error<int> {
         if age < 0 {
             return fail "age cannot be negative"   // unary syntax
         }
+
         return success(age)
     }
+
     return fail("not a number: " + s)
 }
 

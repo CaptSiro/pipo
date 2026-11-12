@@ -3,7 +3,9 @@
 #include <ctype.h>
 #include <errno.h>
 
-/* ------------------------------------------------------------ known ops */
+
+
+// ------------------------------------------------------------ known ops
 
 static char** known_ops;
 static int nknown, capknown;
@@ -20,14 +22,14 @@ static void ensure_known_init(void) {
     }
 
     known_init = true;
-    for (int i = 0; BUILTIN_OPS[i]; i++) {
+    for (int i = 0; BUILTIN_OPS[i]; ++i) {
         lexer_add_known_op(BUILTIN_OPS[i], (int)strlen(BUILTIN_OPS[i]));
     }
 }
 
 bool lexer_is_known_op(const char* s, int len) {
     ensure_known_init();
-    for (int i = 0; i < nknown; i++) {
+    for (int i = 0; i < nknown; ++i) {
         if ((int)strlen(known_ops[i]) == len && memcmp(known_ops[i], s, (size_t)len) == 0) {
             return true;
         }
@@ -50,7 +52,7 @@ static bool is_reserved_op(const char* s, int len) {
     return (len == 1 && s[0] == '=') || (len == 2 && s[0] == '-' && s[1] == '>');
 }
 
-/* ---------------------------------------------------------------- lexer */
+// ---------------------------------------------------------------- lexer
 
 typedef struct {
     const char* file;
@@ -145,6 +147,7 @@ static bool lex_string(Lexer* L, Token* t) {
         const char c = *L->p;
         if (c == '\0') {
             sb_free(&sb);
+
             return lex_error(L, t->start, "unterminated string literal");
         }
 
@@ -183,6 +186,7 @@ static bool lex_string(Lexer* L, Token* t) {
                 const int h2 = h1 < 0 ? -1 : hex_val(L->p[1]);
                 if (h2 < 0) {
                     sb_free(&sb);
+
                     return lex_error(L, esc, "invalid \\x escape (expected two hex digits)");
                 }
 
@@ -193,6 +197,7 @@ static bool lex_string(Lexer* L, Token* t) {
             case 'u': {
                 if (*L->p != '{') {
                     sb_free(&sb);
+
                     return lex_error(L, esc, "invalid \\u escape (expected \\u{XXXX})");
                 }
 
@@ -206,6 +211,7 @@ static bool lex_string(Lexer* L, Token* t) {
 
                 if (*L->p != '}' || digits == 0 || cp > 0x10FFFF) {
                     sb_free(&sb);
+
                     return lex_error(L, esc, "invalid \\u escape (expected \\u{XXXX})");
                 }
 
@@ -215,6 +221,7 @@ static bool lex_string(Lexer* L, Token* t) {
             }
             default:
                 sb_free(&sb);
+
                 return lex_error(L, esc, "unknown escape sequence '\\%c'", e ? e : '0');
         }
     }
@@ -305,7 +312,7 @@ static bool lex_number(Lexer* L, Token* t) {
     } else {
         errno = 0;
         const unsigned long long v = strtoull(buf, NULL, base);
-        /* hex / binary literals may use all 64 bits (two's complement) */
+        // hex / binary literals may use all 64 bits (two's complement)
         if (errno == ERANGE || (base == 10 && v > (unsigned long long)INT64_MAX)) {
             return lex_error(L, L->p, "integer literal '%s' is too large", buf);
         }
@@ -341,9 +348,10 @@ static void split_op(TokenList* out, Token t) {
             piece.kind = T_COMPOUND;
             piece.len = n - 1;
             push_tok(out, piece);
+
             return;
         } else {
-            for (int len = rem - 1; len >= 1; len--) {
+            for (int len = rem - 1; len >= 1; --len) {
                 if (is_reserved_op(s + pos, len) || lexer_is_known_op(s + pos, len)) {
                     take = len;
                     break;
@@ -455,7 +463,7 @@ bool lex(const char* src, const char* file, TokenList* out) {
 
             t.kind = T_IDENT;
             const int len = (int)(L.p - t.start);
-            for (int i = 0; KEYWORDS[i].s; i++) {
+            for (int i = 0; KEYWORDS[i].s; ++i) {
                 if ((int)strlen(KEYWORDS[i].s) == len && memcmp(KEYWORDS[i].s, t.start, (size_t)len) == 0) {
                     t.kind = KEYWORDS[i].k;
                     break;
@@ -509,8 +517,8 @@ bool lex(const char* src, const char* file, TokenList* out) {
         push_tok(&raw, t);
     }
 
-    /* operators declared in this file (function <op>, precedence <op> over <op>) */
-    for (int i = 0; i + 1 < raw.count; i++) {
+    // operators declared in this file (function <op>, precedence <op> over <op>)
+    for (int i = 0; i + 1 < raw.count; ++i) {
         const Token* t = &raw.toks[i];
         if (t->kind == T_FUNCTION && raw.toks[i + 1].kind == T_OP) {
             lexer_add_known_op(raw.toks[i + 1].start, raw.toks[i + 1].len);
@@ -527,7 +535,7 @@ bool lex(const char* src, const char* file, TokenList* out) {
         }
     }
 
-    for (int i = 0; i < raw.count; i++) {
+    for (int i = 0; i < raw.count; ++i) {
         if (raw.toks[i].kind == T_OP) {
             split_op(out, raw.toks[i]);
         } else {

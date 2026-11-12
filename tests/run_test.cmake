@@ -1,7 +1,13 @@
 # Runs one test script and compares its stdout with <name>.out.
+# Pass -DTARGET=bytecode to run it on the bytecode VM instead of the interpreter.
 # If <name>.err exists the script must fail and stderr must contain its text.
+# TARGET (optional): run with --target=TARGET (bytecode); default: the interpreter
+if (DEFINED TARGET)
+    set(target_args --target=${TARGET})
+endif ()
+
 execute_process(
-        COMMAND ${PP} ${SCRIPT}
+        COMMAND ${PP} ${target_args} ${SCRIPT}
         OUTPUT_VARIABLE actual
         ERROR_VARIABLE errors
         RESULT_VARIABLE code)

@@ -18,7 +18,7 @@ mx[1, 0] = 30.0
 mx[0, 1] += 0.5
 io:print_nl(mx[0, 0], mx[0, 1], mx[1, 0], mx:cells)
 
-<T>function [](T[] items, range r) -> T[] { return items.slice(r:start, r:end) }
+<T>function [](T[] items, range<int> r) -> T[] { return items.slice(r:start, r:end) }
 io:print_nl(xs[0...2], xs[1...3], xs[2])
 
 // ---- a type implementing std:Index, from another module: only get and put written there

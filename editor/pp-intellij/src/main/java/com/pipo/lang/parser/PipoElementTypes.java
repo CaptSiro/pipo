@@ -91,12 +91,14 @@ public interface PipoElementTypes {
     IElementType SCOPE_ARGS = new PipoTokenType("SCOPE_ARGS");
     /** `scope`: the value the block of a scope call was called with */
     IElementType SCOPE_EXPR = new PipoTokenType("SCOPE_EXPR");
+    /** expr as Type: a checked downcast, some(value) or none() */
+    IElementType AS_EXPR = new PipoTokenType("AS_EXPR");
 
     TokenSet TYPES = TokenSet.create(TYPE_REF, ARRAY_TYPE, OPTION_TYPE, UNION_TYPE, RECORD_TYPE, FUNCTION_TYPE,
             PAREN_TYPE, CALLBACK_TYPE);
     TokenSet EXPRESSIONS = TokenSet.create(REF_EXPR, LITERAL, PAREN_EXPR, ARRAY_EXPR, OBJECT_EXPR, FUNCTION_EXPR,
             LAMBDA_EXPR, IF_EXPR, MATCH_EXPR, CALL_EXPR, INDEX_EXPR, FIELD_EXPR, METHOD_CALL_EXPR, PREFIX_EXPR,
-            CHAIN_EXPR, PATTERN_BINDING, WILDCARD, SCOPE_CALL_EXPR, SCOPE_EXPR);
+            CHAIN_EXPR, PATTERN_BINDING, WILDCARD, SCOPE_CALL_EXPR, SCOPE_EXPR, AS_EXPR);
     /** nodes whose `{ ... }` contents are indented and folded */
     TokenSet BRACED = TokenSet.create(BLOCK, OBJECT_EXPR, RECORD_TYPE, ENUM_DECL, INTERFACE_DECL, MATCH_EXPR,
             IMPORT_LIST);

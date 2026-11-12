@@ -1,13 +1,11 @@
-/*
- * Internal (native) functions. Every native is registered with a signature
- * written in the language's own syntax, so natives take part in overload
- * resolution exactly like user functions do:
- *
- *     def(vm, "+", "(number a, number b)", n_add);
- *
- * User code can add overloads to any of these names, e.g.
- *     function +(Vec a, Vec b) -> Vec { ... }
- */
+// Internal (native) functions. Every native is registered with a signature
+// written in the language's own syntax, so natives take part in overload
+// resolution exactly like user functions do:
+//
+//     def(vm, "+", "(number a, number b)", n_add);
+//
+// User code can add overloads to any of these names, e.g.
+//     function +(Vec a, Vec b) -> Vec { ... }
 #include <errno.h>
 #include <math.h>
 #include <time.h>
@@ -20,22 +18,22 @@
 #include <windows.h>
 #endif
 
+
+
 void def_native(VM* vm, ObjEnv* env, const char* name, const char* sig, NativeFn fn) {
     Signature* s = parse_native_signature(vm, name, sig);
     ObjNative* nf = native_new(vm, s, fn);
     env_add_function(vm, env, s->name, (Obj*)nf);
 }
 
-/*
- * Constants exposed by native modules (or the builtins scope):
- *
- *     def_const_str(vm, m->env, "nl", "\n");      // io:nl
- *     def_const(vm, m->env, "max_int", int_val(INT64_MAX));
- *
- * They are read-only bindings, so `io:nl = "x"` is rejected like any const.
- * The value is kept on the VM stack while the name is interned so a GC
- * triggered by that allocation cannot collect it.
- */
+// Constants exposed by native modules (or the builtins scope):
+//
+//     def_const_str(vm, m->env, "nl", "\n");      // io:nl
+//     def_const(vm, m->env, "max_int", int_val(INT64_MAX));
+//
+// They are read-only bindings, so `io:nl = "x"` is rejected like any const.
+// The value is kept on the VM stack while the name is interned so a GC
+// triggered by that allocation cannot collect it.
 void def_const(VM* vm, ObjEnv* env, const char* name, Value v) {
     vm_push(vm, v);
     ObjString* s = str_cintern(vm, name);
@@ -47,20 +45,18 @@ void def_const_str(VM* vm, ObjEnv* env, const char* name, const char* value) {
     def_const(vm, env, name, obj_val(str_cnew(vm, value)));
 }
 
-/* a native module exports everything it defines */
+// a native module exports everything it defines
 void module_export_all(ObjModule* m) {
-    for (int i = 0; i < m->env->vars.count; i++) {
+    for (int i = 0; i < m->env->vars.count; ++i) {
         module_export(m, m->env->vars.entries[i].key, m->env->vars.entries[i].key);
     }
 }
 
-/*
- * A native module inside a native module, reached as parent:name and
- * importable as `import parent:name`. Call it from the parent's init while the
- * parent is on the VM stack:
- *
- *     def_submodule(vm, m, "fs", fs_init);      // os:fs
- */
+// A native module inside a native module, reached as parent:name and
+// importable as `import parent:name`. Call it from the parent's init while the
+// parent is on the VM stack:
+//
+//     def_submodule(vm, m, "fs", fs_init);      // os:fs
 void def_submodule(VM* vm, ObjModule* parent, const char* name, NativeModuleInit init) {
     ObjModule* child = init(vm);
     def_const(vm, parent->env, name, obj_val(child));
@@ -92,7 +88,7 @@ static ObjString* to_string(VM* vm, Value v) {
     return s;
 }
 
-/* ------------------------------------------------------------- arithmetic */
+// ------------------------------------------------------------- arithmetic
 
 static Value n_add(VM* vm, int argc, Value* a) {
     if (a[0].kind == VAL_INT && a[1].kind == VAL_INT) {
@@ -163,7 +159,13 @@ static Value n_mod(VM* vm, int argc, Value* a) {
 }
 
 static Value n_pow(VM* vm, int argc, Value* a) {
-    if (a[0].kind == VAL_INT && a[1].kind == VAL_INT && a[1].as.i >= 0) {
+    // int ** int is an int (its static type), so a negative exponent has no int result
+    if (a[0].kind == VAL_INT && a[1].kind == VAL_INT && a[1].as.i < 0) {
+        rt_error(vm, 0, "int ** int needs an exponent >= 0, got %" PRId64 "; use a float base: %" PRId64 ".0 ** %" PRId64,
+                 a[1].as.i, a[0].as.i, a[1].as.i);
+    }
+
+    if (a[0].kind == VAL_INT && a[1].kind == VAL_INT) {
         uint64_t base = (uint64_t)a[0].as.i, result = 1;
         int64_t e = a[1].as.i;
         while (e > 0) {
@@ -216,6 +218,7 @@ static int cmp_values(VM* vm, Value x, Value y) {
 
     if ((x.kind == VAL_INT || x.kind == VAL_FLOAT) && (y.kind == VAL_INT || y.kind == VAL_FLOAT)) {
         double p = math_num(x), q = math_num(y);
+
         return p < q ? -1 : p > q;
     }
 
@@ -315,14 +318,14 @@ static Value n_range_incl(VM* vm, int argc, Value* a) {
     return make_range(vm, a[0].as.i, a[1].as.i, true);
 }
 
-/* range(start, end, step) with numbers: all ints give an int range, any float makes it a float range */
+// range(start, end, step) with numbers: all ints give an int range, any float makes it a float range
 static Value n_range_step(VM* vm, int argc, Value* a) {
     const double step = num_as_double(a[2]);
     if (step == 0) {
         rt_error(vm, 0, "range step cannot be 0");
     }
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; ++i) {
         if (a[i].kind == VAL_FLOAT && !isfinite(a[i].as.f)) {
             rt_error(vm, 0, "range start, end and step must be finite");
         }
@@ -331,29 +334,27 @@ static Value n_range_step(VM* vm, int argc, Value* a) {
     return obj_val(range_new(vm, a[0], a[1], a[2]));
 }
 
-/* ------------------------------------------------------------ conversions */
+// ------------------------------------------------------------ conversions
 
 static Value n_str(VM* vm, int argc, Value* a) {
     return obj_val(to_string(vm, a[0]));
 }
 
-/*
- * format("%d + %.2f = %s", 1, 2.5, "x"): C printf-style formatting, checked.
- *
- *   %[flags][width][.precision][length]conversion
- *   flags      - + space 0 #
- *   width      digits or * (taken from the next argument, an int)
- *   precision  .digits or .*
- *   length     h hh l ll z j t L are accepted and ignored (ints are 64-bit)
- *   d i        int                      u o x X   int, printed as unsigned 64-bit
- *   f F e E g G a A   float or int      c         int code point or 1-character string
- *   s          any value, printed like str(); precision cuts it to that many bytes
- *   %%         a literal %
- *
- * Each spec is parsed and checked against its argument here, then rebuilt and
- * handed to the C library with the matching C type, so the script's string is
- * never used as a C format (no %n, no type confusion).
- */
+// format("%d + %.2f = %s", 1, 2.5, "x"): C printf-style formatting, checked.
+//
+//   %[flags][width][.precision][length]conversion
+//   flags      - + space 0 #
+//   width      digits or * (taken from the next argument, an int)
+//   precision  .digits or .*
+//   length     h hh l ll z j t L are accepted and ignored (ints are 64-bit)
+//   d i        int                      u o x X   int, printed as unsigned 64-bit
+//   f F e E g G a A   float or int      c         int code point or 1-character string
+//   s          any value, printed like str(); precision cuts it to that many bytes
+//   %%         a literal %
+//
+// Each spec is parsed and checked against its argument here, then rebuilt and
+// handed to the C library with the matching C type, so the script's string is
+// never used as a C format (no %n, no type confusion).
 #define FMT_MAX_WIDTH 1000000
 
 typedef struct {
@@ -383,7 +384,7 @@ static Value fmt_arg(FmtState* st, char conv) {
     return st->args[st->next++];
 }
 
-/* digits or * */
+// digits or *
 static int fmt_number(FmtState* st, int* i, const char* what) {
     const char* s = st->fmt->chars;
     if (s[*i] == '*') {
@@ -413,7 +414,7 @@ static int fmt_number(FmtState* st, int* i, const char* what) {
     return n;
 }
 
-/* UTF-8 bytes of code point cp into out (at least 5 bytes), or 0 if it is not a valid code point */
+// UTF-8 bytes of code point cp into out (at least 5 bytes), or 0 if it is not a valid code point
 static int utf8_encode(int64_t cp, char* out) {
     if (cp < 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
         return 0;
@@ -421,12 +422,14 @@ static int utf8_encode(int64_t cp, char* out) {
 
     if (cp < 0x80) {
         out[0] = (char)cp;
+
         return 1;
     }
 
     if (cp < 0x800) {
         out[0] = (char)(0xC0 | (cp >> 6));
         out[1] = (char)(0x80 | (cp & 0x3F));
+
         return 2;
     }
 
@@ -434,6 +437,7 @@ static int utf8_encode(int64_t cp, char* out) {
         out[0] = (char)(0xE0 | (cp >> 12));
         out[1] = (char)(0x80 | ((cp >> 6) & 0x3F));
         out[2] = (char)(0x80 | (cp & 0x3F));
+
         return 3;
     }
 
@@ -451,7 +455,7 @@ static Value n_format(VM* vm, int argc, Value* a) {
     FmtState st = {vm, &sb, AS_STR(a[0]), argc, a, 1};
     const char* s = st.fmt->chars;
     const int len = st.fmt->len;
-    for (int i = 0; i < len; i++) {
+    for (int i = 0; i < len; ++i) {
         if (s[i] != '%') {
             int j = i;
             while (j < len && s[j] != '%') {
@@ -469,7 +473,7 @@ static Value n_format(VM* vm, int argc, Value* a) {
             continue;
         }
 
-        /* the spec we hand to C: '%', flags, width, precision, then our own length + conversion */
+        // the spec we hand to C: '%', flags, width, precision, then our own length + conversion
         char spec[32];
         int n = 0;
         spec[n++] = '%';
@@ -487,7 +491,7 @@ static Value n_format(VM* vm, int argc, Value* a) {
         }
 
         int width = fmt_number(&st, &i, "width");
-        if (width < 0) { /* a negative * width means left-aligned, like C */
+        if (width < 0) { // a negative * width means left-aligned, like C
             left = true;
             width = -width;
             spec[n++] = '-';
@@ -498,7 +502,7 @@ static Value n_format(VM* vm, int argc, Value* a) {
             i++;
             prec = fmt_number(&st, &i, "precision");
             if (prec < 0) {
-                prec = -1; /* a negative * precision means none, like C */
+                prec = -1; // a negative * precision means none, like C
             }
         }
         while (i < len && s[i] && strchr("hlzjtL", s[i])) {
@@ -588,16 +592,16 @@ static Value n_format(VM* vm, int argc, Value* a) {
                     fmt_error(&st, "'%%c' does not take a precision");
                 }
 
-                /* pad by characters, not bytes */
+                // pad by characters, not bytes
                 if (!left) {
-                    for (int k = 1; k < width; k++) {
+                    for (int k = 1; k < width; ++k) {
                         sb_putc(&sb, ' ');
                     }
                 }
 
                 sb_append(&sb, buf, (size_t)blen);
                 if (left) {
-                    for (int k = 1; k < width; k++) {
+                    for (int k = 1; k < width; ++k) {
                         sb_putc(&sb, ' ');
                     }
                 }
@@ -664,6 +668,7 @@ static bool parse_int_str(ObjString* s, int64_t* out) {
     }
 
     *out = v;
+
     return true;
 }
 
@@ -688,6 +693,7 @@ static bool parse_float_str(ObjString* s, double* out) {
     }
 
     *out = v;
+
     return true;
 }
 
@@ -779,7 +785,7 @@ static Value n_enum_value(VM* vm, int argc, Value* a) {
     return ev->en->variants[ev->variant].value;
 }
 
-/* ----------------------------------------------------------------- arrays */
+// ----------------------------------------------------------------- arrays
 
 static Value n_push(VM* vm, int argc, Value* a) {
     if (a[1].kind == VAL_VOID) {
@@ -841,11 +847,11 @@ static Value n_concat(VM* vm, int argc, Value* a) {
     ObjArray* x = AS_ARRAY(a[0]);
     ObjArray* y = AS_ARRAY(a[1]);
     ObjArray* r = array_new(vm, x->count + y->count);
-    for (int i = 0; i < x->count; i++) {
+    for (int i = 0; i < x->count; ++i) {
         r->items[r->count++] = x->items[i];
     }
 
-    for (int i = 0; i < y->count; i++) {
+    for (int i = 0; i < y->count; ++i) {
         r->items[r->count++] = y->items[i];
     }
 
@@ -864,8 +870,8 @@ static Value n_multiply(VM* vm, int argc, Value* a) {
     }
 
     ObjArray* r = array_new(vm, (int)(x->count * n));
-    for (int64_t k = 0; k < n; k++) {
-        for (int i = 0; i < x->count; i++) {
+    for (int64_t k = 0; k < n; ++k) {
+        for (int i = 0; i < x->count; ++i) {
             r->items[r->count++] = x->items[i];
         }
     }
@@ -886,7 +892,7 @@ static Value n_repeat_str(VM* vm, int argc, Value* a) {
 
     StrBuf sb;
     sb_init(&sb);
-    for (int64_t i = 0; i < n; i++) {
+    for (int64_t i = 0; i < n; ++i) {
         sb_append(&sb, s->chars, (size_t)s->len);
     }
 
@@ -924,6 +930,7 @@ static Value n_slice(VM* vm, int argc, Value* a) {
         ObjString* s = AS_STR(a[0]);
         int64_t end = argc > 2 ? a[2].as.i : s->len;
         clamp_slice(s->len, &start, &end);
+
         return new_string(vm, s->chars + start, (int)(end - start));
     }
 
@@ -931,7 +938,7 @@ static Value n_slice(VM* vm, int argc, Value* a) {
     int64_t end = argc > 2 ? a[2].as.i : arr->count;
     clamp_slice(arr->count, &start, &end);
     ObjArray* r = array_new(vm, (int)(end - start));
-    for (int64_t i = start; i < end; i++) {
+    for (int64_t i = start; i < end; ++i) {
         r->items[r->count++] = arr->items[i];
     }
 
@@ -940,7 +947,7 @@ static Value n_slice(VM* vm, int argc, Value* a) {
 
 static Value n_contains(VM* vm, int argc, Value* a) {
     const ObjArray* arr = AS_ARRAY(a[0]);
-    for (int i = 0; i < arr->count; i++) {
+    for (int i = 0; i < arr->count; ++i) {
         if (values_equal(arr->items[i], a[1])) {
             return bool_val(true);
         }
@@ -954,7 +961,7 @@ static const char* find_sub(ObjString* s, ObjString* sub, int from) {
         return s->chars + from;
     }
 
-    for (int i = from; i + sub->len <= s->len; i++) {
+    for (int i = from; i + sub->len <= s->len; ++i) {
         if (memcmp(s->chars + i, sub->chars, (size_t)sub->len) == 0) {
             return s->chars + i;
         }
@@ -969,7 +976,7 @@ static Value n_contains_str(VM* vm, int argc, Value* a) {
 
 static Value n_index_of(VM* vm, int argc, Value* a) {
     const ObjArray* arr = AS_ARRAY(a[0]);
-    for (int i = 0; i < arr->count; i++) {
+    for (int i = 0; i < arr->count; ++i) {
         if (values_equal(arr->items[i], a[1])) {
             return make_some(vm, int_val(i));
         }
@@ -991,7 +998,7 @@ static Value n_index_of_str(VM* vm, int argc, Value* a) {
 static Value n_reverse(VM* vm, int argc, Value* a) {
     ObjArray* arr = AS_ARRAY(a[0]);
     ObjArray* r = array_new(vm, arr->count);
-    for (int i = arr->count - 1; i >= 0; i--) {
+    for (int i = arr->count - 1; i >= 0; --i) {
         r->items[r->count++] = arr->items[i];
     }
 
@@ -1001,7 +1008,7 @@ static Value n_reverse(VM* vm, int argc, Value* a) {
 static Value n_reverse_str(VM* vm, int argc, Value* a) {
     ObjString* s = AS_STR(a[0]);
     char* buf = pp_malloc((size_t)s->len + 1);
-    for (int i = 0; i < s->len; i++) {
+    for (int i = 0; i < s->len; ++i) {
         buf[i] = s->chars[s->len - 1 - i];
     }
 
@@ -1016,7 +1023,7 @@ static Value n_copy(VM* vm, int argc, Value* a) {
     if (IS_KIND(v, OBJ_ARRAY)) {
         ObjArray* x = AS_ARRAY(v);
         ObjArray* r = array_new(vm, x->count);
-        for (int i = 0; i < x->count; i++) {
+        for (int i = 0; i < x->count; ++i) {
             r->items[r->count++] = x->items[i];
         }
 
@@ -1026,18 +1033,19 @@ static Value n_copy(VM* vm, int argc, Value* a) {
     if (IS_KIND(v, OBJ_OBJECT)) {
         ObjObject* x = AS_OBJECT(v);
         ObjObject* r = object_new(vm);
-        for (int i = 0; i < x->fields.count; i++) {
+        for (int i = 0; i < x->fields.count; ++i) {
             table_set(&r->fields, x->fields.entries[i].key, x->fields.entries[i].value);
         }
 
         r->tag = x->tag;
+
         return obj_val(r);
     }
 
     if (IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET)) {
         ObjMap* x = AS_MAP(v);
         ObjMap* r = map_new(vm, v.as.o->kind);
-        for (int i = 0; i < x->count; i++) {
+        for (int i = 0; i < x->count; ++i) {
             if (x->entries[i].live) {
                 map_put(r, x->entries[i].key, x->entries[i].hash, x->entries[i].value);
             }
@@ -1050,20 +1058,20 @@ static Value n_copy(VM* vm, int argc, Value* a) {
         return obj_val(AS_INSTANCE(v)->type->cls->copy(vm, AS_INSTANCE(v)));
     }
 
-    return v; /* tuples cannot change, so they need no copy */
+    return v; // tuples cannot change, so they need no copy
 }
 
-/* tuple(1, "a"): a fixed-size, immutable group of values, typed tuple<int, string> */
+// tuple(1, "a"): a fixed-size, immutable group of values, typed tuple<int, string>
 static Value n_tuple(VM* vm, int argc, Value* a) {
     ObjTuple* t = tuple_new(vm, argc);
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; ++i) {
         t->items[i] = a[i];
     }
 
     return obj_val(t);
 }
 
-/* --- sorting (merge sort; GC is paused because a comparator may run code) */
+// --- sorting (merge sort; GC is paused because a comparator may run code)
 
 static Value sort_cmp_fn;
 static bool sort_has_cmp;
@@ -1115,7 +1123,7 @@ static void merge_sort(VM* vm, Value* items, Value* tmp, int n) {
 static Value do_sort(VM* vm, Value arrv, bool has_cmp, Value cmp) {
     ObjArray* src = AS_ARRAY(arrv);
     ObjArray* r = array_new(vm, src->count);
-    for (int i = 0; i < src->count; i++) {
+    for (int i = 0; i < src->count; ++i) {
         r->items[r->count++] = src->items[i];
     }
 
@@ -1147,7 +1155,7 @@ static Value n_join(VM* vm, int argc, Value* a) {
     const ObjString* sep = AS_STR(a[1]);
     StrBuf sb;
     sb_init(&sb);
-    for (int i = 0; i < arr->count; i++) {
+    for (int i = 0; i < arr->count; ++i) {
         if (i) {
             sb_append(&sb, sep->chars, (size_t)sep->len);
         }
@@ -1166,7 +1174,7 @@ static Value n_map(VM* vm, int argc, Value* a) {
     ObjArray* out = array_new(vm, src->count);
     const int base = vm->sp;
     vm_push(vm, obj_val(out));
-    for (int i = 0; i < src->count; i++) {
+    for (int i = 0; i < src->count; ++i) {
         vm_push(vm, src->items[i]);
         const Value r = vm_call(vm, a[1], 1, &vm->stack[vm->sp - 1]);
         vm->sp--;
@@ -1187,7 +1195,7 @@ static Value n_filter(VM* vm, int argc, Value* a) {
     ObjArray* out = array_new(vm, 0);
     const int base = vm->sp;
     vm_push(vm, obj_val(out));
-    for (int i = 0; i < src->count; i++) {
+    for (int i = 0; i < src->count; ++i) {
         const Value item = src->items[i];
         vm_push(vm, item);
         const Value r = vm_call(vm, a[1], 1, &vm->stack[vm->sp - 1]);
@@ -1209,8 +1217,8 @@ static Value n_filter(VM* vm, int argc, Value* a) {
 static Value n_reduce(VM* vm, int argc, Value* a) {
     const ObjArray* src = AS_ARRAY(a[0]);
     const int base = vm->sp;
-    vm_push(vm, a[2]); /* accumulator */
-    for (int i = 0; i < src->count; i++) {
+    vm_push(vm, a[2]); // accumulator
+    for (int i = 0; i < src->count; ++i) {
         vm_push(vm, src->items[i]);
         const Value r = vm_call(vm, a[1], 2, &vm->stack[base]);
         vm->sp = base + 1;
@@ -1223,12 +1231,12 @@ static Value n_reduce(VM* vm, int argc, Value* a) {
     return r;
 }
 
-/* ---------------------------------------------------------------- objects */
+// ---------------------------------------------------------------- objects
 
 static Value n_keys(VM* vm, int argc, Value* a) {
     ObjObject* o = AS_OBJECT(a[0]);
     ObjArray* r = array_new(vm, o->fields.count);
-    for (int i = 0; i < o->fields.count; i++) {
+    for (int i = 0; i < o->fields.count; ++i) {
         r->items[r->count++] = obj_val(o->fields.entries[i].key);
     }
 
@@ -1238,7 +1246,7 @@ static Value n_keys(VM* vm, int argc, Value* a) {
 static Value n_values(VM* vm, int argc, Value* a) {
     ObjObject* o = AS_OBJECT(a[0]);
     ObjArray* r = array_new(vm, o->fields.count);
-    for (int i = 0; i < o->fields.count; i++) {
+    for (int i = 0; i < o->fields.count; ++i) {
         r->items[r->count++] = o->fields.entries[i].value;
     }
 
@@ -1258,14 +1266,14 @@ static Value n_remove_key(VM* vm, int argc, Value* a) {
     return bool_val(table_remove(&o->fields, AS_STR(a[1])));
 }
 
-/* ---------------------------------------------------------------- strings */
+// ---------------------------------------------------------------- strings
 
 static Value n_split(VM* vm, int argc, Value* a) {
     ObjString* s = AS_STR(a[0]);
     ObjString* sep = AS_STR(a[1]);
     ObjArray* r = array_new(vm, 0);
     if (sep->len == 0) {
-        for (int i = 0; i < s->len; i++) {
+        for (int i = 0; i < s->len; ++i) {
             array_push(r, new_string(vm, s->chars + i, 1));
         }
 
@@ -1292,7 +1300,7 @@ static Value n_split(VM* vm, int argc, Value* a) {
 static Value n_upper(VM* vm, int argc, Value* a) {
     const ObjString* s = AS_STR(a[0]);
     ObjString* r = str_new(vm, s->chars, s->len);
-    for (int i = 0; i < r->len; i++) {
+    for (int i = 0; i < r->len; ++i) {
         if (r->chars[i] >= 'a' && r->chars[i] <= 'z') {
             r->chars[i] = (char)(r->chars[i] - 32);
         }
@@ -1306,7 +1314,7 @@ static Value n_upper(VM* vm, int argc, Value* a) {
 static Value n_lower(VM* vm, int argc, Value* a) {
     const ObjString* s = AS_STR(a[0]);
     ObjString* r = str_new(vm, s->chars, s->len);
-    for (int i = 0; i < r->len; i++) {
+    for (int i = 0; i < r->len; ++i) {
         if (r->chars[i] >= 'A' && r->chars[i] <= 'Z') {
             r->chars[i] = (char)(r->chars[i] + 32);
         }
@@ -1441,7 +1449,7 @@ static Value n_chr(VM* vm, int argc, Value* a) {
     return new_string(vm, buf, n);
 }
 
-/* ------------------------------------------------------------------- math */
+// ------------------------------------------------------------------- math
 
 static Value n_min(VM* vm, int argc, Value* a) {
     return cmp_values(vm, a[1], a[0]) < 0
@@ -1474,13 +1482,13 @@ static Value n_clamp(VM* vm, int argc, Value* a) {
     return x;
 }
 
-/* ------------------------------------------------------------------- misc */
+// ------------------------------------------------------------------- misc
 
 static Value n_panic(VM* vm, int argc, Value* a) {
     rt_error(vm, 0, "panic: %s", to_string(vm, a[0])->chars);
 }
 
-/* call(f, args...) == f(args...), so callbacks can also be called as cb.call(x) */
+// call(f, args...) == f(args...), so callbacks can also be called as cb.call(x)
 static Value n_call(VM* vm, int argc, Value* a) {
     return vm_call(vm, a[0], argc - 1, a + 1);
 }
@@ -1506,6 +1514,7 @@ static Value n_clock(VM* vm, int argc, Value* a) {
     }
 
     QueryPerformanceCounter(&now);
+
     return float_val((double)now.QuadPart / (double)freq.QuadPart);
 #else
     struct timespec ts;
@@ -1519,10 +1528,10 @@ static Value n_defined(VM* vm, int argc, Value* a) {
     return bool_val(env_find(vm_current_env(vm), AS_STR(a[0]), NULL) != NULL);
 }
 
-/* ------------------------------------------------------------ registration */
+// ------------------------------------------------------------ registration
 
 void builtins_register(VM* vm) {
-    /* operators */
+    // operators
     def(vm, "+", "(number a, number b)", n_add);
     def(vm, "+", "(string a, string b)", n_concat_str);
     def(vm, "-", "(number a, number b)", n_sub);
@@ -1546,9 +1555,9 @@ void builtins_register(VM* vm) {
     def(vm, "...=", "(int start, int end) -> range", n_range_incl);
     def(vm, "range", "(number start, number end, number step) -> range", n_range_step);
 
-    /* printing & input live in the `io` module (src/modules/io.c) */
+    // printing & input live in the `io` module (src/modules/io.c)
 
-    /* conversions & reflection */
+    // conversions & reflection
     def(vm, "str", "(any value) -> string", n_str);
     def(vm, "call", "(function f, ...)", n_call);
     def(vm, "int", "(any value) -> int", n_int);
@@ -1557,9 +1566,10 @@ void builtins_register(VM* vm) {
     def(vm, "parse_float", "(string s)", n_parse_float);
     def(vm, "lift", "(any o)", n_lift);
     def(vm, "type_of", "(any value) -> string", n_type_of);
+    def(vm, "get_type", "(any value) -> string", n_type_of);
     def(vm, "enum_value", "(any variant)", n_enum_value);
 
-    /* arrays */
+    // arrays
     def(vm, "push", "(any[] array, any item)", n_push);
     def(vm, "pop", "(any[] array)", n_pop);
     def(vm, "insert", "(any[] array, int index, any item)", n_insert);
@@ -1593,13 +1603,13 @@ void builtins_register(VM* vm) {
         vm->tuple_ctor = set->items[0];
     }
 
-    /* objects */
+    // objects
     def(vm, "keys", "(object o) -> string[]", n_keys);
     def(vm, "values", "(object o)", n_values);
     def(vm, "has", "(object o, string key) -> bool", n_has);
     def(vm, "remove_key", "(object o, string key) -> bool", n_remove_key);
 
-    /* strings */
+    // strings
     def(vm, "format", "(string format, ...) -> string", n_format);
     def(vm, "split", "(string s, string separator) -> string[]", n_split);
     def(vm, "upper", "(string s) -> string", n_upper);
@@ -1612,12 +1622,12 @@ void builtins_register(VM* vm) {
     def(vm, "ord", "(string s) -> int", n_ord);
     def(vm, "chr", "(int code) -> string", n_chr);
 
-    /* math */
+    // math
     def(vm, "min", "(any a, any b)", n_min);
     def(vm, "max", "(any a, any b)", n_max);
     def(vm, "clamp", "(number x, any a, any b)", n_clamp);
 
-    /* misc */
+    // misc
     def(vm, "panic", "(any message)", n_panic);
     def(vm, "assert", "(bool condition)", n_assert);
     def(vm, "assert", "(bool condition, any message)", n_assert);

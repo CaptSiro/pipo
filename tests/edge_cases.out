@@ -23,7 +23,7 @@ line2	tab 😀
 big
 none
 some(3)
-1 one Pair
+1 one Pair<int, string>
 1 2.5 3 2 4.0 1.4142135623730951
 1.5! 43 2.5 3
 some(2) none() true ell

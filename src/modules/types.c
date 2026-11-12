@@ -1,31 +1,31 @@
-/*
- * The C half of lib/types.pp: typed arrays.
- *
- *     import types
- *     const buf = types:int8array(1024)       // 1024 zeros; the length never changes
- *     buf[0] = 65
- *     buf[1] = 300                            // error: 300 does not fit in Int8Array
- *
- * Int8Array ... Int64Array hold ints of that many bits, Float32Array and
- * Float64Array hold floats. Elements are stored as raw C numbers, so the
- * arrays are compact and are what fs reads file contents into. Unlike T[],
- * a typed array checks every value written to it: an Int*Array only takes
- * ints that fit its element type, a Float*Array takes ints and floats.
- *
- * The types (PascalCase) are not callable; values come from the constructor
- * functions int8array ... float64array (flatcase).
- */
+// The C half of lib/types.pp: typed arrays.
+//
+//     import types
+//     const buf = types:int8array(1024)       // 1024 zeros; the length never changes
+//     buf[0] = 65
+//     buf[1] = 300                            // error: 300 does not fit in Int8Array
+//
+// Int8Array ... Int64Array hold ints of that many bits, Float32Array and
+// Float64Array hold floats. Elements are stored as raw C numbers, so the
+// arrays are compact and are what fs reads file contents into. Unlike T[],
+// a typed array checks every value written to it: an Int*Array only takes
+// ints that fit its element type, a Float*Array takes ints and floats.
+//
+// The types (PascalCase) are not callable; values come from the constructor
+// functions int8array ... float64array (flatcase).
 #include <float.h>
 #include <math.h>
 
 #include "vm.h"
 
+
+
 typedef struct {
     const char* name;
-    const char* ctor; /* its constructor function in types.pp */
-    size_t size;      /* bytes per element */
+    const char* ctor; // its constructor function in types.pp
+    size_t size;      // bytes per element
     bool is_float;
-    int64_t min, max; /* int kinds: the values that fit */
+    int64_t min, max; // int kinds: the values that fit
 } KindInfo;
 
 static const KindInfo KINDS[] = {
@@ -37,9 +37,9 @@ static const KindInfo KINDS[] = {
     [TA_F64] = {"Float64Array", "float64array", 8, true, 0, 0},
 };
 
-#define TA(o) ((ObjTypedArray*)(o))
+#define TA(O) ((ObjTypedArray*)(O))
 
-/* ---------------------------------------------------------- element access */
+// ---------------------------------------------------------- element access
 
 static Value elem_get(ObjTypedArray* a, int64_t i) {
     switch (a->kind) {
@@ -54,11 +54,9 @@ static Value elem_get(ObjTypedArray* a, int64_t i) {
     return void_val();
 }
 
-/*
- * The value v converted for an element of kind k: a runtime error when it is
- * not a number of the right kind or does not fit. `what` names the target in
- * the message ("Int8Array", "Int8Array element 3").
- */
+// The value v converted for an element of kind k: a runtime error when it is
+// not a number of the right kind or does not fit. `what` names the target in
+// the message ("Int8Array", "Int8Array element 3").
 static Value check_elem(VM* vm, TypedArrayKind k, Value v, const char* what, int line) {
     const KindInfo* info = &KINDS[k];
     if (info->is_float) {
@@ -85,7 +83,7 @@ static Value check_elem(VM* vm, TypedArrayKind k, Value v, const char* what, int
     return v;
 }
 
-/* stores a value already checked by check_elem */
+// stores a value already checked by check_elem
 static void elem_put(ObjTypedArray* a, int64_t i, Value v) {
     switch (a->kind) {
         case TA_I8: ((int8_t*)a->data)[i] = (int8_t)v.as.i; break;
@@ -119,7 +117,7 @@ static int64_t index_of(VM* vm, ObjTypedArray* a, Value idx, int line) {
     return i;
 }
 
-/* ------------------------------------------------------------ the class */
+// ------------------------------------------------------------ the class
 
 static void ta_free(ObjInstance* self);
 
@@ -150,11 +148,9 @@ ObjTypedArray* typed_array_new(VM* vm, TypedArrayKind kind, int64_t length) {
     return a;
 }
 
-/*
- * int8array(16): 16 zeros. int8array([1, 2, 3]) and int8array(other) copy the
- * values, each checked like an element assignment. types.pp only lets an int,
- * a number[] or a typed array through.
- */
+// int8array(16): 16 zeros. int8array([1, 2, 3]) and int8array(other) copy the
+// values, each checked like an element assignment. types.pp only lets an int,
+// a number[] or a typed array through.
 static Value ta_make(VM* vm, TypedArrayKind kind, Value from) {
     const char* name = KINDS[kind].name;
     const int line = 0;
@@ -166,7 +162,7 @@ static Value ta_make(VM* vm, TypedArrayKind kind, Value from) {
     if (IS_KIND(from, OBJ_ARRAY)) {
         ObjArray* src = AS_ARRAY(from);
         ObjTypedArray* a = typed_array_new(vm, kind, src->count);
-        for (int i = 0; i < src->count; i++) {
+        for (int i = 0; i < src->count; ++i) {
             snprintf(what, sizeof what, "%s element %d", name, i);
             elem_put(a, i, check_elem(vm, kind, src->items[i], what, line));
         }
@@ -179,6 +175,7 @@ static Value ta_make(VM* vm, TypedArrayKind kind, Value from) {
         ObjTypedArray* a = typed_array_new(vm, kind, src->length);
         if (src->kind == kind) {
             memcpy(a->data, src->data, (size_t)src->length * KINDS[kind].size);
+
             return obj_val(a);
         }
 
@@ -186,7 +183,7 @@ static Value ta_make(VM* vm, TypedArrayKind kind, Value from) {
             rt_error(vm, line, "%s holds ints, so it cannot be made from a %s", name, KINDS[src->kind].name);
         }
 
-        for (int64_t i = 0; i < src->length; i++) {
+        for (int64_t i = 0; i < src->length; ++i) {
             snprintf(what, sizeof what, "%s element %" PRId64, name, i);
             elem_put(a, i, check_elem(vm, kind, elem_get(src, i), what, line));
         }
@@ -226,22 +223,23 @@ static void ta_free(ObjInstance* self) {
     free(TA(self)->data);
 }
 
-/* a float as short as possible while still reading back as the same float32: 0.1, not 0.10000000149011612 */
+// a float as short as possible while still reading back as the same float32: 0.1, not 0.10000000149011612
 static void format_f32(StrBuf* sb, float f) {
     if (isnan(f) || isinf(f)) {
         format_float(sb, f);
+
         return;
     }
 
     char buf[48];
-    for (int prec = 1; prec <= 9; prec++) {
+    for (int prec = 1; prec <= 9; ++prec) {
         snprintf(buf, sizeof buf, "%.*g", prec, (double)f);
         if ((float)strtod(buf, NULL) == f) {
             break;
         }
     }
 
-    /* keep floats looking like floats, as format_float does: 1.0, not 1 */
+    // keep floats looking like floats, as format_float does: 1.0, not 1
     if (!strpbrk(buf, ".eE")) {
         strcat(buf, ".0");
     }
@@ -249,12 +247,12 @@ static void format_f32(StrBuf* sb, float f) {
     sb_puts(sb, buf);
 }
 
-/* Int8Array[1, 2, 3] */
+// Int8Array[1, 2, 3]
 static void ta_format(StrBuf* sb, ObjInstance* self) {
     ObjTypedArray* a = TA(self);
     sb_puts(sb, KINDS[a->kind].name);
     sb_putc(sb, '[');
-    for (int64_t i = 0; i < a->length; i++) {
+    for (int64_t i = 0; i < a->length; ++i) {
         if (i) {
             sb_puts(sb, ", ");
         }
@@ -271,7 +269,7 @@ static void ta_format(StrBuf* sb, ObjInstance* self) {
     sb_putc(sb, ']');
 }
 
-/* the same kind (the caller checked the type), length and elements */
+// the same kind (the caller checked the type), length and elements
 static bool ta_equals(ObjInstance* x, ObjInstance* y) {
     ObjTypedArray* a = TA(x);
     ObjTypedArray* b = TA(y);
@@ -283,7 +281,7 @@ static bool ta_equals(ObjInstance* x, ObjInstance* y) {
         return memcmp(a->data, b->data, (size_t)a->length * KINDS[a->kind].size) == 0;
     }
 
-    for (int64_t i = 0; i < a->length; i++) {
+    for (int64_t i = 0; i < a->length; ++i) {
         if (elem_get(a, i).as.f != elem_get(b, i).as.f) {
             return false;
         }
@@ -306,6 +304,7 @@ static int64_t ta_length(ObjInstance* self) {
 
 static Value ta_get(VM* vm, ObjInstance* self, Value idx, int line) {
     ObjTypedArray* a = TA(self);
+
     return elem_get(a, index_of(vm, a, idx, line));
 }
 
@@ -314,23 +313,24 @@ static void ta_set(VM* vm, ObjInstance* self, Value idx, Value v, int line) {
     elem_set(vm, a, index_of(vm, a, idx, line), v, line);
 }
 
-#define TA_CLASS(type_name, ctor_name)                                                                             \
-    {.name = type_name, .size = sizeof(ObjTypedArray), .constructor = "types:" ctor_name, .free = ta_free,           \
-     .format = ta_format, .equals = ta_equals, .copy = ta_copy, .length = ta_length, .get = ta_get, .set = ta_set}
+#define TA_CLASS(TYPE_NAME, CTOR_NAME, ELEMENT)                                                                             \
+    {.name = TYPE_NAME, .size = sizeof(ObjTypedArray), .constructor = "types:" CTOR_NAME, .free = ta_free,           \
+     .format = ta_format, .equals = ta_equals, .copy = ta_copy, .length = ta_length, .get = ta_get, .set = ta_set, \
+     .element = ELEMENT}
 
 static const NativeClass TYPES[] = {
-    TA_CLASS("Int8Array", "int8array"),
-    TA_CLASS("Int16Array", "int16array"),
-    TA_CLASS("Int32Array", "int32array"),
-    TA_CLASS("Int64Array", "int64array"),
-    TA_CLASS("Float32Array", "float32array"),
-    TA_CLASS("Float64Array", "float64array"),
+    TA_CLASS("Int8Array", "int8array", "int"),
+    TA_CLASS("Int16Array", "int16array", "int"),
+    TA_CLASS("Int32Array", "int32array", "int"),
+    TA_CLASS("Int64Array", "int64array", "int"),
+    TA_CLASS("Float32Array", "float32array", "float"),
+    TA_CLASS("Float64Array", "float64array", "float"),
     {.name = NULL},
 };
 
-/* ------------------------------------------------- functions of types.pp */
+// ------------------------------------------------- functions of types.pp
 
-/* start / end like slice: negative counts from the end, then clamped to 0...=length */
+// start / end like slice: negative counts from the end, then clamped to 0...=length
 static void clamp_range(int64_t len, int64_t* start, int64_t* end) {
     if (*start < 0) {
         *start += len;
@@ -353,7 +353,7 @@ static void clamp_range(int64_t len, int64_t* start, int64_t* end) {
     }
 }
 
-/* fill(a, value), fill(a, value, start, end) */
+// fill(a, value), fill(a, value, start, end)
 static Value ta_fill(VM* vm, int argc, Value* a) {
     ObjTypedArray* arr = TA(a[0].as.o);
     const Value v = check_elem(vm, arr->kind, a[1], KINDS[arr->kind].name, 0);
@@ -364,14 +364,14 @@ static Value ta_fill(VM* vm, int argc, Value* a) {
         clamp_range(arr->length, &start, &end);
     }
 
-    for (int64_t i = start; i < end; i++) {
+    for (int64_t i = start; i < end; ++i) {
         elem_put(arr, i, v);
     }
 
     return void_val();
 }
 
-/* slice(a, start), slice(a, start, end): a new typed array of the same kind */
+// slice(a, start), slice(a, start, end): a new typed array of the same kind
 static Value ta_slice(VM* vm, int argc, Value* a) {
     const ObjTypedArray* arr = TA(a[0].as.o);
     int64_t start = a[1].as.i, end = argc > 2 ? a[2].as.i : arr->length;
@@ -383,7 +383,7 @@ static Value ta_slice(VM* vm, int argc, Value* a) {
     return obj_val(r);
 }
 
-/* to_array(a) -> int[] / float[] */
+// to_array(a) -> int[] / float[]
 static Value ta_to_array(VM* vm, int argc, Value* a) {
     ObjTypedArray* arr = TA(a[0].as.o);
     if (arr->length > INT32_MAX) {
@@ -391,17 +391,15 @@ static Value ta_to_array(VM* vm, int argc, Value* a) {
     }
 
     ObjArray* r = array_new(vm, (int)arr->length);
-    for (int64_t i = 0; i < arr->length; i++) {
+    for (int64_t i = 0; i < arr->length; ++i) {
         r->items[r->count++] = elem_get(arr, i);
     }
 
     return obj_val(r);
 }
 
-/*
- * copy_into(src, src_pos, dst, dst_pos, length): like Java's System.arraycopy.
- * Both arrays must be of the same kind; the ranges may overlap.
- */
+// copy_into(src, src_pos, dst, dst_pos, length): like Java's System.arraycopy.
+// Both arrays must be of the same kind; the ranges may overlap.
 static Value ta_copy_into(VM* vm, int argc, Value* a) {
     const ObjTypedArray* src = TA(a[0].as.o);
     const int64_t sp = a[1].as.i;
@@ -425,7 +423,7 @@ static Value ta_copy_into(VM* vm, int argc, Value* a) {
     return void_val();
 }
 
-/* bytes(text) -> Int8Array: the UTF-8 bytes of a string */
+// bytes(text) -> Int8Array: the UTF-8 bytes of a string
 static Value ta_bytes(VM* vm, int argc, Value* a) {
     const ObjString* s = AS_STR(a[0]);
     ObjTypedArray* r = typed_array_new(vm, TA_I8, s->len);
@@ -434,7 +432,7 @@ static Value ta_bytes(VM* vm, int argc, Value* a) {
     return obj_val(r);
 }
 
-/* text(bytes), text(bytes, start, end) -> string: bytes read as UTF-8 text */
+// text(bytes), text(bytes, start, end) -> string: bytes read as UTF-8 text
 static Value ta_text(VM* vm, int argc, Value* a) {
     const ObjTypedArray* arr = TA(a[0].as.o);
     int64_t start = 0, end = arr->length;
@@ -451,7 +449,7 @@ static Value ta_text(VM* vm, int argc, Value* a) {
     return obj_val(str_new(vm, (char*)arr->data + start, (int)(end - start)));
 }
 
-/* element_size(a) -> int: bytes per element (1 for Int8Array, 8 for Float64Array) */
+// element_size(a) -> int: bytes per element (1 for Int8Array, 8 for Float64Array)
 static Value ta_element_size(VM* vm, int argc, Value* a) {
     return int_val((int64_t)KINDS[TA(a[0].as.o)->kind].size);
 }

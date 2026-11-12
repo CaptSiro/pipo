@@ -1,6 +1,7 @@
 # Implementation Notes
 
-A tree-walking interpreter in C11 with no dependencies.
+A static type checker, a tree-walking interpreter, a bytecode compiler and VM,
+and a WebAssembly compiler, in C11 with no dependencies.
 
 ## Building on Windows
 
@@ -26,6 +27,10 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 
 | file | role |
 |------|------|
+| `src/check.c`, `src/check_expr.c`, `src/stype.c` | the static checker: static types, instances, overload resolution ([STATIC_TYPING.md](STATIC_TYPING.md)) |
+| `src/bytecode.c`, `src/bcvm.c` | the bytecode target: compiler and VM ([TARGETS.md](TARGETS.md)) |
+| `src/wasm.c` | the WebAssembly target: `.wasm` writer and the JavaScript host ([TARGETS.md](TARGETS.md)) |
+| `src/backend.c` | what both compiling targets share: which variables nested functions capture |
 | `src/lexer.c` | tokens, newline/space flags, operator-run splitting |
 | `src/parser.c` | recursive descent parser to AST (`src/ast.h`), types, patterns, native signature parser |
 | `src/interp.c` | evaluator: scopes, calls, overload resolution, match, modules, entry points |
@@ -75,85 +80,16 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 
 ## Code style
 
-These rules apply to the C sources and, where they make sense, to `.pp` code
-too (`lib/`, `examples/`, the prelude in `src/prelude.c`): braces at the end
-of the line, no one-line `if` / `for` / `while` bodies, no one-line function
-bodies, and statements grouped with blank lines. In `.pp`, short `match` arms
-(`some(x) -> { return x }`) and lambdas (`x -> { total += x }`) are
-expressions and may stay on one line, like `case X: return y;` in a C
-`switch`. The test scripts in `tests/` may stay compact, since some of them
-test exactly that syntax, and the `.err` files depend on their line numbers.
-
-### C
-
-* Use `const` if possible: for local variables that are never reassigned
-  (`const int n = ...`), and for pointers whose target is not modified through
-  them (`const ObjString* s = ...`)
-* Curly brackets at the end of a line and not on the next line:
-```
-// wrong
-int f() 
-{
-    return 0;
-}
-
-// right
-int f() {
-    return 0;
-}
-```
-* The same bracket rule applies to all statements that use brackets
-* Do not use one-line if statements. For example, this is wrong: `if (condition) statement;`, correct:
-```
-if (condition) {
-    statement;
-}
-```
-* Do not use one-line function statements. For example, this is wrong: `int f() { return 0; }`, correct:
-```
-int f() {
-    return 0;
-}
-```
-* Group statements with the use of new lines
-```
-// wrong
-static Value io_write_file(VM* vm, int argc, Value* a) {
-    const char* path = AS_STR(a[0])->chars;
-    ObjString* content = AS_STR(a[1]);
-    FILE* f = fopen(path, "wb");
-    if (!f) return fail_errno(vm, "open for writing", path);
-    size_t n = fwrite(content->chars, 1, (size_t)content->len, f);
-    bool ok = n == (size_t)content->len && fclose(f) == 0;
-    if (!ok) return fail_errno(vm, "write", path);
-    return make_success(vm, int_val((int64_t)n));
-}
-
-// correct
-static Value io_write_file(VM* vm, int argc, Value* a) {
-    const char* path = AS_STR(a[0])->chars;
-    const ObjString* content = AS_STR(a[1]);
-    
-    FILE* f = fopen(path, "wb");
-    if (!f) {
-        return fail_errno(vm, "open for writing", path);
-    }
-    
-    size_t n = fwrite(content->chars, 1, (size_t)content->len, f);
-    bool ok = n == (size_t)content->len && fclose(f) == 0;
-    if (!ok) {
-        return fail_errno(vm, "write", path);
-    }
-    
-    return make_success(vm, int_val((int64_t)n));
-}
-```
+See [CODING_STYLE.md](CODING_STYLE.md). `python tools/style_check.py` checks
+the mechanical rules (it also runs as the `style` test).
 
 ## Known limitations / next steps
 
-* Performance is roughly CPython-class for calls (`fib(27)` ~0.3 s). A
-  bytecode compiler with resolved variable slots would be the next big step,
-  and would also help a future compile-to-web target.
+* The interpreter is roughly CPython-class for calls (`fib(27)` ~0.3 s); the
+  bytecode target is about 20 times faster and runs the whole language.
+* The WebAssembly target covers a growing subset (see [TARGETS.md](TARGETS.md)):
+  no maps / sets, open `object`s, float ranges, natives as values or most native
+  modules yet. Its collector frees memory only between calls from JavaScript.
 * No `try`/catch. No string interpolation. No destructuring `let`.
 * Interfaces have no generic bounds yet; see
   [DATATYPES_AND_FUNCTIONS.md](DATATYPES_AND_FUNCTIONS.md#interfaces).

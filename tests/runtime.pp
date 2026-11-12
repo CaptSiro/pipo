@@ -29,7 +29,7 @@ function depth(int n) -> int { if n == 0 { return 0 } return 1 + depth(n - 1) }
 io:print_nl(depth(3000))
 // strings
 io:print_nl(split("a,b,c", ","), join([1, 2, 3], "-"), upper("abc"), "héllo".chars(), 'x' * 3)
-let obj = { a: 1 }
+let object obj = { a: 1 }    // an object can take new fields; a record ({ a: 1 } alone) cannot
 obj:b = 2
 obj["c"] = 3
 io:print_nl(keys(obj), obj)

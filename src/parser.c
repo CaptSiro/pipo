@@ -2,6 +2,8 @@
 
 #include "lexer.h"
 
+
+
 typedef struct {
     VM* vm;
     Token* toks;
@@ -9,16 +11,16 @@ typedef struct {
     int pos;
     const char* file;
     jmp_buf jb;
-    int depth; /* nesting inside (), [] and {} literals: newlines do not end expressions there */
-    int block_depth; /* 0 = top level of the file */
-    bool no_lambda;  /* parsing a match pattern / guard, where `x -> ...` starts the arm body */
-    bool in_native;  /* parsing the declaration after `native` (it must not have a body) */
-    int lift_uses;   /* `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift */
-    int scope_blocks;   /* nesting inside the blocks of scope calls: `scope` names the value of the innermost one */
-    bool in_scope_body; /* directly in the body of a scope declaration, where `defer` is allowed */
+    int depth; // nesting inside (), [] and {} literals: newlines do not end expressions there
+    int block_depth; // 0 = top level of the file
+    bool no_lambda;  // parsing a match pattern / guard, where `x -> ...` starts the arm body
+    bool in_native;  // parsing the declaration after `native` (it must not have a body)
+    int lift_uses;   // `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift
+    int scope_blocks;   // nesting inside the blocks of scope calls: `scope` names the value of the innermost one
+    bool in_scope_body; // directly in the body of a scope declaration, where `defer` is allowed
 } Parser;
 
-/* ---------------------------------------------------------------- helpers */
+// ---------------------------------------------------------------- helpers
 
 static const char* tok_desc(Token* t) {
     static char buf[128];
@@ -102,6 +104,7 @@ static Token* expect(Parser* p, TokKind k, const char* what) {
 
 static bool tok_is(Token* t, TokKind k, const char* s) {
     const int n = (int)strlen(s);
+
     return t->kind == k && t->len == n && memcmp(t->start, s, (size_t)n) == 0;
 }
 
@@ -109,12 +112,12 @@ static ObjString* intern_tok(Parser* p, Token* t) {
     return str_intern(p->vm, t->start, t->len);
 }
 
-/* `_name`: the name of a scope (a lone `_` is the wildcard pattern) */
+// `_name`: the name of a scope (a lone `_` is the wildcard pattern)
 static bool is_scope_name(const Token* t) {
     return t->kind == T_IDENT && t->len > 1 && t->start[0] == '_';
 }
 
-/* names starting with '_' belong to scopes, and `scope` is the value inside the block of a scope call */
+// names starting with '_' belong to scopes, and `scope` is the value inside the block of a scope call
 static void check_var_name(Parser* p, Token* t, const char* what) {
     if (is_scope_name(t)) {
         perr(p, t, "%s '%.*s' cannot start with '_': names starting with '_' are scopes", what, t->len, t->start);
@@ -129,20 +132,16 @@ static bool is_terminator(Token* t) {
     return t->kind == T_SEMI || t->kind == T_RBRACE || t->kind == T_EOF || t->nl_before;
 }
 
-/*
- * A token that can name a function: an identifier, an operator, or the
- * keyword `in`, which is also an infix operator (`x in xs` calls in(x, xs)).
- */
+// A token that can name a function: an identifier, an operator, or the
+// keyword `in`, which is also an infix operator (`x in xs` calls in(x, xs)).
 static bool is_fn_name(TokKind k) {
     return k == T_IDENT || k == T_OP || k == T_IN;
 }
 
-/*
- * A function name at offset `at`: an identifier, an operator, `in`, or a bracket
- * pair `[]` / `[]=` (written without spaces). Bracket names only appear in name
- * positions (after `function`, `.`, `:`, in import / export lists); in an
- * expression `[]` stays an empty array.
- */
+// A function name at offset `at`: an identifier, an operator, `in`, or a bracket
+// pair `[]` / `[]=` (written without spaces). Bracket names only appear in name
+// positions (after `function`, `.`, `:`, in import / export lists); in an
+// expression `[]` stays an empty array.
 static bool at_fn_name(Parser* p, int at) {
     const Token* t = peek_at(p, at);
     if (is_fn_name(t->kind)) {
@@ -154,17 +153,18 @@ static bool at_fn_name(Parser* p, int at) {
     return t->kind == T_LBRACKET && c->kind == T_RBRACKET && !c->space_before && !c->nl_before;
 }
 
-/* consumes the name at_fn_name accepted */
+// consumes the name at_fn_name accepted
 static ObjString* take_fn_name(Parser* p) {
     Token* t = advance(p);
     if (t->kind != T_LBRACKET) {
         return intern_tok(p, t);
     }
 
-    advance(p); /* ] */
+    advance(p); // ]
     const Token* eq = peek(p);
     if (eq->kind == T_ASSIGN && !eq->space_before && !eq->nl_before) {
         advance(p);
+
         return str_cintern(p->vm, "[]=");
     }
 
@@ -175,7 +175,7 @@ static bool is_assignable(Node* e) {
     return e->kind == N_IDENT || e->kind == N_FIELD || e->kind == N_INDEX;
 }
 
-/* consumes a prefix of an operator token, e.g. one '>' out of '>>' */
+// consumes a prefix of an operator token, e.g. one '>' out of '>>'
 static bool eat_op_prefix(Parser* p, const char* s) {
     Token* t = peek(p);
     int n = (int)strlen(s);
@@ -185,6 +185,7 @@ static bool eat_op_prefix(Parser* p, const char* s) {
 
     if (t->len == n) {
         advance(p);
+
         return true;
     }
 
@@ -240,11 +241,12 @@ static bool prim_from_name(const char* s, int len, Prim* out) {
     } prims[] = {
         {"int", PRIM_INT},   {"float", PRIM_FLOAT},   {"string", PRIM_STRING}, {"bool", PRIM_BOOL},
         {"void", PRIM_VOID}, {"range", PRIM_RANGE},   {"object", PRIM_OBJECT}, {"any", PRIM_ANY},
-        {"type", PRIM_TYPE}, {NULL, PRIM_ANY},
+        {"type", PRIM_TYPE}, {"unknown", PRIM_ANY}, {NULL, PRIM_ANY},
     };
-    for (int i = 0; prims[i].name; i++) {
+    for (int i = 0; prims[i].name; ++i) {
         if ((int)strlen(prims[i].name) == len && memcmp(prims[i].name, s, (size_t)len) == 0) {
             *out = prims[i].prim;
+
             return true;
         }
     }
@@ -259,7 +261,7 @@ static void end_statement(Parser* p);
 static Node* parse_unary(Parser* p);
 static Type* parse_type(Parser* p);
 
-/* ------------------------------------------------------------------ types */
+// ------------------------------------------------------------------ types
 
 static Type* parse_type_primary(Parser* p) {
     Token* t = peek(p);
@@ -269,11 +271,26 @@ static Type* parse_type_primary(Parser* p) {
         if (prim_from_name(t->start, t->len, &pr)) {
             Type* ty = new_type(TY_PRIM, t->line);
             ty->prim = pr;
+            Token* n = peek(p);
+            if (pr == PRIM_RANGE && n->kind == T_OP && !n->nl_before && n->start[0] == '<') {
+                // range<int>, range<float>: the kind of number the range counts in
+                eat_op_prefix(p, "<");
+                ty->inner = parse_type(p);
+                const Type* in = ty->inner;
+                if (in->kind != TY_PRIM || (in->prim != PRIM_INT && in->prim != PRIM_FLOAT)) {
+                    perr(p, t, "a range counts in int or float: range<int> or range<float>");
+                }
+
+                if (!eat_op_prefix(p, ">")) {
+                    perr(p, peek(p), "expected '>' to close 'range<'");
+                }
+            }
+
             return ty;
         }
 
         if (t->len == 5 && memcmp(t->start, "tuple", 5) == 0) {
-            /* tuple<int>, tuple<string, float>: the type arguments are the elements, so they are required */
+            // tuple<int>, tuple<string, float>: the type arguments are the elements, so they are required
             Token* n = peek(p);
             if (!(n->kind == T_OP && !n->nl_before && n->start[0] == '<')) {
                 perr(p, t, "'tuple' needs its element types as type arguments, e.g. tuple<int, string>");
@@ -298,7 +315,7 @@ static Type* parse_type_primary(Parser* p) {
         ty->name = intern_tok(p, t);
         int qcap = 0;
         while (check(p, T_COLON) && !peek(p)->nl_before) {
-            /* module:Type, package:module:Type */
+            // module:Type, package:module:Type
             advance(p);
             GROW(ty->quals, ty->nquals, qcap);
             ty->quals[ty->nquals++] = ty->name;
@@ -326,6 +343,7 @@ static Type* parse_type_primary(Parser* p) {
         advance(p);
         Type* ty = new_type(TY_PRIM, t->line);
         ty->prim = PRIM_FUNCTION;
+
         return ty;
     }
 
@@ -347,6 +365,7 @@ static Type* parse_type_primary(Parser* p) {
         }
 
         expect(p, T_RBRACE, "'}'");
+
         return ty;
     }
 
@@ -354,6 +373,7 @@ static Type* parse_type_primary(Parser* p) {
         advance(p);
         Type* ty = parse_type(p);
         expect(p, T_RPAREN, "')'");
+
         return ty;
     }
 
@@ -375,7 +395,7 @@ static Type* parse_type_postfix(Parser* p) {
 
         if (n->kind == T_OP && !n->nl_before && n->start[0] == '?') {
             eat_op_prefix(p, "?");
-            /* T? is sugar for Option<T> */
+            // T? is sugar for Option<T>
             Type* o = new_type(TY_NAME, n->line);
             o->name = str_cintern(p->vm, "Option");
             o->args = pp_malloc(sizeof(Type*));
@@ -404,10 +424,10 @@ static Type* parse_type(Parser* p) {
     return t;
 }
 
-/* offset (from the current token) of the ')' matching the '(' at offset `at`, or -1 */
+// offset (from the current token) of the ')' matching the '(' at offset `at`, or -1
 static int matching_paren(Parser* p, int at) {
     int depth = 0;
-    for (int i = at; p->pos + i < p->count; i++) {
+    for (int i = at; p->pos + i < p->count; ++i) {
         const TokKind k = peek_at(p, i)->kind;
         if (k == T_EOF) {
             return -1;
@@ -425,11 +445,9 @@ static int matching_paren(Parser* p, int at) {
     return -1;
 }
 
-/*
- * The right-hand side of `type Name = ...`, which may be a callback type:
- *     float -> int      (A, B) -> R      () -> void      (...) -> R
- * Callback types only exist as named types; `const float -> int f` is an error.
- */
+// The right-hand side of `type Name = ...`, which may be a callback type:
+//     float -> int      (A, B) -> R      () -> void      (...) -> R
+// Callback types only exist as named types; `const float -> int f` is an error.
 static Type* parse_type_def(Parser* p) {
     Token* t = peek(p);
     Type* fn = NULL;
@@ -482,7 +500,7 @@ static void no_inline_fn_type(Parser* p) {
     }
 }
 
-/* <T, U = string> -- the opening '<' must be the current token */
+// <T, U = string> -- the opening '<' must be the current token
 static void parse_generic_params(Parser* p, ObjString*** names, Type*** defaults, int* count, bool allow_defaults) {
     if (!eat_op_prefix(p, "<")) {
         perr(p, peek(p), "expected '<'");
@@ -513,10 +531,8 @@ static void parse_generic_params(Parser* p, ObjString*** names, Type*** defaults
     }
 }
 
-/*
- * unnamed: NULL when every typed parameter needs a name; otherwise a missing
- * name is allowed (a declaration) and *unnamed gets the first place one is missing
- */
+// unnamed: NULL when every typed parameter needs a name; otherwise a missing
+// name is allowed (a declaration) and *unnamed gets the first place one is missing
 static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
     expect(p, T_LPAREN, "'('");
     int cap = 0;
@@ -535,7 +551,7 @@ static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
             advance(p);
             check_var_name(p, t, "parameter");
             prm.name = intern_tok(p, t);
-            /* (int) is a type without a name: fine in a declaration, an error anywhere else */
+            // (int) is a type without a name: fine in a declaration, an error anywhere else
             Prim pr;
             if (prim_from_name(t->start, t->len, &pr)) {
                 if (!unnamed) {
@@ -572,7 +588,7 @@ static void parse_params(Parser* p, Signature* sig, Token** unnamed) {
     expect(p, T_RPAREN, "')'");
 }
 
-/* --------------------------------------------------------------- patterns */
+// --------------------------------------------------------------- patterns
 
 static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
     Pattern* pt = pp_calloc(1, sizeof(Pattern));
@@ -584,6 +600,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
         case N_BOOL:
             pt->kind = P_LITERAL;
             pt->lit = e;
+
             return pt;
         case N_IDENT:
             if (str_equals(e->as.str, "_")) {
@@ -597,6 +614,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
         case N_FIELD:
             pt->kind = P_VARIANT;
             pt->ctor = e;
+
             return pt;
         case N_CALL: {
             Node* c = e->as.call.callee;
@@ -612,6 +630,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
 
                 pt->kind = P_LITERAL;
                 pt->lit = lit;
+
                 return pt;
             }
 
@@ -621,7 +640,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
                 pt->has_parens = true;
                 pt->nsubs = args->count;
                 pt->subs = pp_calloc((size_t)(args->count ? args->count : 1), sizeof(Pattern*));
-                for (int i = 0; i < args->count; i++) {
+                for (int i = 0; i < args->count; ++i) {
                     pt->subs[i] = to_pattern(p, args->items[i], at);
                 }
 
@@ -636,7 +655,7 @@ static Pattern* to_pattern(Parser* p, Node* e, Token* at) {
     perr(p, at, "invalid pattern (expected a literal, a name, '_' or a variant like some(x))");
 }
 
-/* ------------------------------------------------------------ expressions */
+// ------------------------------------------------------------ expressions
 
 static void parse_args(Parser* p, NodeList* out) {
     expect(p, T_LPAREN, "'('");
@@ -652,7 +671,7 @@ static void parse_args(Parser* p, NodeList* out) {
     p->depth--;
 }
 
-/* lift() returns from the function whose body names it: count every mention (lift(x), x.lift(), lift as a value) */
+// lift() returns from the function whose body names it: count every mention (lift(x), x.lift(), lift as a value)
 static void note_lift(Parser* p, ObjString* name) {
     if (str_equals(name, "lift")) {
         p->lift_uses++;
@@ -690,13 +709,11 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     }
 
     if (statement && named && !check(p, T_LBRACE)) {
-        /*
-         * function a(int) -> float: a declaration, written like an interface
-         * requirement (names are optional, so a lone name is a type). The
-         * definition must follow in the same block.
-         */
+        // function a(int) -> float: a declaration, written like an interface
+        // requirement (names are optional, so a lone name is a type). The
+        // definition must follow in the same block.
         ObjString* empty = str_cintern(p->vm, "");
-        for (int i = 0; i < sig->nparams; i++) {
+        for (int i = 0; i < sig->nparams; ++i) {
             Param* prm = &sig->params[i];
             if (prm->type || prm->name == empty) {
                 continue;
@@ -718,6 +735,7 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
         end_statement(p);
         Node* n = new_node(S_FUNCDECL, kw->line);
         n->as.func.sig = sig;
+
         return n;
     }
 
@@ -738,11 +756,9 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     return n;
 }
 
-/*
- * Lambdas: x -> expr, (x, y) -> expr, () -> expr, (int x) -> { block }.
- * The current token is the parameter name or the '('. A block body works like
- * a match arm: its last expression is the result unless `return` is used.
- */
+// Lambdas: x -> expr, (x, y) -> expr, () -> expr, (int x) -> { block }.
+// The current token is the parameter name or the '('. A block body works like
+// a match arm: its last expression is the result unless `return` is used.
 static Node* parse_lambda(Parser* p) {
     Token* start = peek(p);
     Signature* sig = pp_calloc(1, sizeof(Signature));
@@ -797,6 +813,7 @@ static bool at_lambda(Parser* p) {
     const Token* t = peek(p);
     if (t->kind == T_IDENT) {
         const Token* a = peek_at(p, 1);
+
         return a->kind == T_ARROW && !a->nl_before;
     }
 
@@ -807,6 +824,7 @@ static bool at_lambda(Parser* p) {
         }
 
         const Token* a = peek_at(p, close + 1);
+
         return a->kind == T_ARROW && !a->nl_before;
     }
 
@@ -867,7 +885,7 @@ static Node* parse_match(Parser* p) {
         MatchArm arm;
         memset(&arm, 0, sizeof arm);
         Token* pt = peek(p);
-        /* `x -> ...` in an arm is the pattern x and the arm body, not a lambda */
+        // `x -> ...` in an arm is the pattern x and the arm body, not a lambda
         bool saved_nl = p->no_lambda;
         p->no_lambda = true;
         arm.pat = to_pattern(p, parse_expression(p), pt);
@@ -896,7 +914,7 @@ static Node* parse_match(Parser* p) {
 
 static Node* parse_let(Parser* p);
 
-/* an argument of a scope call: an expression, or `const f = ...` / `let x = ...`, a variable of the block */
+// an argument of a scope call: an expression, or `const f = ...` / `let x = ...`, a variable of the block
 static Node* parse_scope_arg(Parser* p) {
     if (!check(p, T_CONST) && !check(p, T_LET)) {
         return parse_expression(p);
@@ -910,10 +928,8 @@ static Node* parse_scope_arg(Parser* p) {
     return d;
 }
 
-/*
- * _name { ... }, _name a, b { ... }, _name(a, b) { ... }, _name const f = open(...) { ... }:
- * calls the scope _name with the block as its first argument. The current token is the name.
- */
+// _name { ... }, _name a, b { ... }, _name(a, b) { ... }, _name const f = open(...) { ... }:
+// calls the scope _name with the block as its first argument. The current token is the name.
 static Node* parse_scope_call(Parser* p) {
     Token* nm = advance(p);
     Node* n = new_node(N_SCOPECALL, nm->line);
@@ -959,7 +975,7 @@ static bool is_block_type(Type* t) {
     return t && t->kind == TY_NAME && !t->nquals && (str_equals(t->name, "Block") || str_equals(t->name, "Callback"));
 }
 
-/* scope _name(Block<T> code, ...) -> R { body }, <T>scope _name(...): the current token is `scope` */
+// scope _name(Block<T> code, ...) -> R { body }, <T>scope _name(...): the current token is `scope`
 static Node* parse_scope_decl(Parser* p, ObjString** generics, int ngenerics) {
     Token* kw = advance(p);
     Token* nm = peek(p);
@@ -987,7 +1003,7 @@ static Node* parse_scope_decl(Parser* p, ObjString** generics, int ngenerics) {
         perr_line(p, kw->line, "the first parameter of scope '%s' must be its block: Block<T> or Callback<T>", sig->name->chars);
     }
 
-    for (int i = 1; i < sig->nparams; i++) {
+    for (int i = 1; i < sig->nparams; ++i) {
         if (is_block_type(sig->params[i].type)) {
             perr_line(p, kw->line, "scope '%s' can take only one block (its first parameter)", sig->name->chars);
         }
@@ -1016,7 +1032,7 @@ static bool starts_juxtaposed_arg(Token* t) {
     }
 
     switch (t->kind) {
-        case T_IDENT:
+        case T_IDENT: return !(t->len == 2 && memcmp(t->start, "as", 2) == 0); // `x as int` is a cast, not x(as int)
         case T_INT:
         case T_FLOAT:
         case T_STRING:
@@ -1039,18 +1055,21 @@ static Node* parse_primary(Parser* p) {
             advance(p);
             Node* n = new_node(N_INT, t->line);
             n->as.ival = t->ival;
+
             return n;
         }
         case T_FLOAT: {
             advance(p);
             Node* n = new_node(N_FLOAT, t->line);
             n->as.fval = t->fval;
+
             return n;
         }
         case T_STRING: {
             advance(p);
             Node* n = new_node(N_STRING, t->line);
             n->as.str = str_intern(p->vm, t->sval, t->slen);
+
             return n;
         }
         case T_TRUE:
@@ -1058,6 +1077,7 @@ static Node* parse_primary(Parser* p) {
             advance(p);
             Node* n = new_node(N_BOOL, t->line);
             n->as.bval = t->kind == T_TRUE;
+
             return n;
         }
         case T_IDENT: {
@@ -1078,9 +1098,10 @@ static Node* parse_primary(Parser* p) {
 
             note_lift(p, id->as.str);
             if (starts_juxtaposed_arg(peek(p))) {
-                /* unary syntax: `success value` == success(value) */
+                // unary syntax: `success value` == success(value)
                 Node* c = new_call(p, id, t->line);
                 nl_push(&c->as.call.args, parse_expression(p));
+
                 return c;
             }
 
@@ -1092,6 +1113,7 @@ static Node* parse_primary(Parser* p) {
             Node* e = parse_expression(p);
             expect(p, T_RPAREN, "')'");
             p->depth--;
+
             return e;
         }
         case T_LBRACKET: {
@@ -1107,6 +1129,7 @@ static Node* parse_primary(Parser* p) {
 
             expect(p, T_RBRACKET, "']' to close the array");
             p->depth--;
+
             return n;
         }
         case T_LBRACE: {
@@ -1130,7 +1153,7 @@ static Node* parse_primary(Parser* p) {
                 if (accept(p, T_COLON)) {
                     value = parse_expression(p);
                 } else if (k->kind == T_IDENT && (check(p, T_COMMA) || check(p, T_RBRACE))) {
-                    value = new_node(N_IDENT, k->line); /* shorthand { name } */
+                    value = new_node(N_IDENT, k->line); // shorthand { name }
                     value->as.str = key;
                 } else {
                     perr(p, peek(p), "expected ':' after object key");
@@ -1146,6 +1169,7 @@ static Node* parse_primary(Parser* p) {
 
             expect(p, T_RBRACE, "'}' to close the object");
             p->depth--;
+
             return n;
         }
         case T_FUNCTION: return parse_function(p, NULL, 0, false);
@@ -1171,7 +1195,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
 
         if (t->kind == T_LBRACE && !t->nl_before && !t->space_before &&
             (e->kind == N_IDENT || e->kind == N_FIELD)) {
-            /* record construction shorthand: Rect{ ... } == Rect({ ... }) */
+            // record construction shorthand: Rect{ ... } == Rect({ ... })
             Node* c = new_call(p, e, t->line);
             nl_push(&c->as.call.args, parse_primary(p));
             e = c;
@@ -1198,7 +1222,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
         }
 
         if (t->kind == T_COLON && !t->nl_before) {
-            /* attribute access: object:field, module:symbol, Enum:VARIANT */
+            // attribute access: object:field, module:symbol, Enum:VARIANT
             advance(p);
             Token* nm = peek(p);
             if (!at_fn_name(p, 0)) {
@@ -1213,7 +1237,7 @@ static Node* parse_postfix(Parser* p, Node* e) {
         }
 
         if (t->kind == T_DOT) {
-            /* dot syntax: a.f(b) == f(a, b), a.mod:f(b) == mod:f(a, b) */
+            // dot syntax: a.f(b) == f(a, b), a.mod:f(b) == mod:f(a, b)
             advance(p);
             Token* nm = peek(p);
             if (!at_fn_name(p, 0)) {
@@ -1264,23 +1288,25 @@ static Node* parse_unary(Parser* p) {
         const Token* nx = peek(p);
         if (nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
             nx->kind == T_EOF || nx->kind == T_SEMI || nx->nl_before) {
-            return id; /* operator used as a value: reduce(xs, +, 0) */
+            return id; // operator used as a value: reduce(xs, +, 0)
         }
 
         if (nx->kind == T_LPAREN && !nx->space_before) {
-            /* classic call of an operator: +(a, b) */
+            // classic call of an operator: +(a, b)
             Node* c = new_call(p, id, t->line);
             parse_args(p, &c->as.call.args);
+
             return parse_postfix(p, c);
         }
 
         Node* c = new_call(p, id, t->line);
         nl_push(&c->as.call.args, parse_unary(p));
+
         return c;
     }
 
     if (t->kind == T_IN) {
-        /* `in` is a keyword but also a function: in(3, 0...3), or a value: any(xs, in) */
+        // `in` is a keyword but also a function: in(3, 0...3), or a value: any(xs, in)
         const Token* nx = peek_at(p, 1);
         bool call = nx->kind == T_LPAREN && !nx->space_before;
         const bool value = nx->kind == T_COMMA || nx->kind == T_RPAREN || nx->kind == T_RBRACKET || nx->kind == T_RBRACE ||
@@ -1295,6 +1321,7 @@ static Node* parse_unary(Parser* p) {
 
             Node* c = new_call(p, id, t->line);
             parse_args(p, &c->as.call.args);
+
             return parse_postfix(p, c);
         }
 
@@ -1304,13 +1331,33 @@ static Node* parse_unary(Parser* p) {
     return parse_postfix(p, parse_primary(p));
 }
 
-/* an infix operator continues the expression: any operator token, or `in` */
+// an infix operator continues the expression: any operator token, or `in`
 static bool at_infix(Parser* p) {
     const Token* t = peek(p);
+
     return (t->kind == T_OP || t->kind == T_IN) && (!t->nl_before || p->depth > 0);
 }
 
+static Node* parse_chain(Parser* p);
+
+// expr as Type: the lowest binding operator, `a + b as int` is `(a + b) as int`
 static Node* parse_expression(Parser* p) {
+    Node* e = parse_chain(p);
+    for (;;) {
+        const Token* t = peek(p);
+        if (t->kind != T_IDENT || t->nl_before || t->len != 2 || memcmp(t->start, "as", 2) != 0) {
+            return e;
+        }
+
+        advance(p);
+        Node* n = new_node(N_AS, e->line);
+        n->as.as_.expr = e;
+        n->as.as_.type = parse_type(p);
+        e = n;
+    }
+}
+
+static Node* parse_chain(Parser* p) {
     Node* first = parse_unary(p);
     if (!at_infix(p)) {
         return first;
@@ -1327,7 +1374,7 @@ static Node* parse_expression(Parser* p) {
     }
 
     n->as.chain.ics = pp_calloc((size_t)n->as.chain.nops, sizeof(InlineCache));
-    for (int i = 0; i < n->as.chain.nops; i++) {
+    for (int i = 0; i < n->as.chain.nops; ++i) {
         vm_register_ic(p->vm, &n->as.chain.ics[i]);
     }
 
@@ -1336,12 +1383,12 @@ static Node* parse_expression(Parser* p) {
     return n;
 }
 
-/* ------------------------------------------------------------- statements */
+// ------------------------------------------------------------- statements
 
 static void sig_types_to_string(Signature* sig, StrBuf* sb) {
     if (sig->ngenerics) {
         sb_putc(sb, '<');
-        for (int i = 0; i < sig->ngenerics; i++) {
+        for (int i = 0; i < sig->ngenerics; ++i) {
             sb_printf(sb, i ? ", %s" : "%s", sig->generics[i]->chars);
         }
 
@@ -1349,7 +1396,7 @@ static void sig_types_to_string(Signature* sig, StrBuf* sb) {
     }
 
     sb_printf(sb, "%s(", sig->name->chars);
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         if (i) {
             sb_puts(sb, ", ");
         }
@@ -1365,28 +1412,26 @@ static void sig_types_to_string(Signature* sig, StrBuf* sb) {
     type_to_string(sig->ret, sb);
 }
 
-/*
- * Every declaration (function without a body) in a block needs a definition
- * later in the same block, written with the same types (parameter names may
- * differ). The definition is linked to the declaration, so at run time it
- * fills in the function object the declaration created.
- */
+// Every declaration (function without a body) in a block needs a definition
+// later in the same block, written with the same types (parameter names may
+// differ). The definition is linked to the declaration, so at run time it
+// fills in the function object the declaration created.
 static Node* unwrap_export(Node* s) {
     return s->kind == S_EXPORT && s->as.export_.decl ? s->as.export_.decl : s;
 }
 
 static void check_declarations(Parser* p, NodeList* stmts) {
-    for (int i = 0; i < stmts->count; i++) {
+    for (int i = 0; i < stmts->count; ++i) {
         Node* d = unwrap_export(stmts->items[i]);
         if (d->kind != S_FUNCDECL || d->as.func.body || d->as.func.native) {
-            continue; /* native: the body is in C */
+            continue; // native: the body is in C
         }
 
         StrBuf want;
         sb_init(&want);
         sig_types_to_string(d->as.func.sig, &want);
         Node* def = NULL;
-        for (int j = i + 1; j < stmts->count && !def; j++) {
+        for (int j = i + 1; j < stmts->count && !def; ++j) {
             Node* s = unwrap_export(stmts->items[j]);
             if (s->kind != S_FUNCDECL || s->as.func.sig->name != d->as.func.sig->name) {
                 continue;
@@ -1464,6 +1509,7 @@ static void end_statement(Parser* p) {
     Token* t = peek(p);
     if (t->kind == T_SEMI) {
         while (accept(p, T_SEMI)) {}
+
         return;
     }
 
@@ -1520,7 +1566,7 @@ static Node* parse_import(Parser* p) {
     sb_init(&path);
     ObjString* last;
     if (check(p, T_STRING)) {
-        /* import "./file" - a file relative to the importing file */
+        // import "./file" - a file relative to the importing file
         Token* s = advance(p);
         if (s->slen == 0) {
             perr(p, s, "empty import path");
@@ -1528,7 +1574,7 @@ static Node* parse_import(Parser* p) {
 
         sb_append(&path, s->sval, (size_t)s->slen);
         const char* base = s->sval;
-        for (const char* c = s->sval; *c; c++) {
+        for (const char* c = s->sval; *c; ++c) {
             if (*c == '/' || *c == '\\') {
                 base = c + 1;
             }
@@ -1546,13 +1592,13 @@ static Node* parse_import(Parser* p) {
         last = str_intern(p->vm, base, len);
         n->as.import.is_file = true;
     } else {
-        /* import name - a library module (native or from the lib directories) */
+        // import name - a library module (native or from the lib directories)
         Token* id = expect(p, T_IDENT, "module name or a \"./path\" string");
         sb_append(&path, id->start, (size_t)id->len);
         last = intern_tok(p, id);
     }
 
-    /* submodules: import os:fs, import "./ui":shapes */
+    // submodules: import os:fs, import "./ui":shapes
     int scap = 0;
     while (check(p, T_COLON) && !peek(p)->nl_before) {
         advance(p);
@@ -1594,7 +1640,7 @@ static Node* parse_import(Parser* p) {
 static bool is_generic_prefix(Parser* p);
 static bool at_native(Parser* p);
 
-/* after `export`: a declaration such as `type A = int` or `function f(...)` */
+// after `export`: a declaration such as `type A = int` or `function f(...)`
 static bool at_exported_decl(Parser* p) {
     Token* t = peek(p);
     switch (t->kind) {
@@ -1617,7 +1663,7 @@ static bool at_exported_decl(Parser* p) {
     }
 }
 
-/* the name an exported declaration binds */
+// the name an exported declaration binds
 static ObjString* declared_name(Node* d) {
     switch (d->kind) {
         case S_FUNCDECL: return d->as.func.sig->name;
@@ -1629,10 +1675,8 @@ static ObjString* declared_name(Node* d) {
     }
 }
 
-/*
- * export name | export name -> alias | export { a, b -> c, + } | export import ...
- * | export <declaration>: export type A = int, export function f(...) { ... }
- */
+// export name | export name -> alias | export { a, b -> c, + } | export import ...
+// | export <declaration>: export type A = int, export function f(...) { ... }
 static Node* parse_export(Parser* p) {
     Token* kw = advance(p);
     if (p->block_depth > 0) {
@@ -1640,9 +1684,10 @@ static Node* parse_export(Parser* p) {
     }
 
     if (check(p, T_IMPORT)) {
-        /* export import "./fs" == import "./fs" + export fs */
+        // export import "./fs" == import "./fs" + export fs
         Node* im = parse_import(p);
         im->as.import.reexport = true;
+
         return im;
     }
 
@@ -1661,6 +1706,7 @@ static Node* parse_export(Parser* p) {
         n->as.export_.names[0] = name;
         n->as.export_.aliases[0] = name;
         n->as.export_.count = 1;
+
         return n;
     }
 
@@ -1794,12 +1840,13 @@ static bool is_generic_prefix(Parser* p) {
         }
 
         Token* after = peek_at(p, i + 2);
+
         return after->kind == T_FUNCTION || tok_is(after, T_IDENT, "type") || tok_is(after, T_IDENT, "interface") ||
                tok_is(after, T_IDENT, "impl") || tok_is(after, T_IDENT, "scope");
     }
 }
 
-/* type Name = ..., type Name<T> = ...; the current token is the name */
+// type Name = ..., type Name<T> = ...; the current token is the name
 static Node* parse_type_decl(Parser* p, int line, ObjString** gens, int ngen) {
     Token* a = advance(p);
     if (a->kind != T_IDENT) {
@@ -1831,16 +1878,14 @@ static Node* parse_type_decl(Parser* p, int line, ObjString** gens, int ngen) {
 
 static bool at_impl(Parser* p);
 
-/*
- * interface Name {
- *     function str(Name) -> string          // Name stands for the implementing type
- *     <F>function convert(Name, F) -> F
- *     function show(Name n) -> string {     // default implementation, used when the type has none
- *         return "<" + n.str() + ">"
- *     }
- *     impl Other for Name                   // extends Other: implementing Name implements Other too
- * }
- */
+// interface Name {
+//     function str(Name) -> string          // Name stands for the implementing type
+//     <F>function convert(Name, F) -> F
+//     function show(Name n) -> string {     // default implementation, used when the type has none
+//         return "<" + n.str() + ">"
+//     }
+//     impl Other for Name                   // extends Other: implementing Name implements Other too
+// }
 static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
     Token* nm = expect(p, T_IDENT, "interface name");
     Node* n = new_node(S_INTERFACE, line);
@@ -1905,7 +1950,7 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
             Param prm;
             prm.type = parse_type(p);
             no_inline_fn_type(p);
-            prm.name = check(p, T_IDENT) ? intern_tok(p, advance(p)) : empty; /* the name is optional */
+            prm.name = check(p, T_IDENT) ? intern_tok(p, advance(p)) : empty; // the name is optional
             GROW(sig->params, sig->nparams, pcap);
             sig->params[sig->nparams++] = prm;
             if (!accept(p, T_COMMA)) {
@@ -1920,7 +1965,7 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
 
         Node* body = NULL;
         if (check(p, T_LBRACE)) {
-            for (int i = 0; i < sig->nparams; i++) {
+            for (int i = 0; i < sig->nparams; ++i) {
                 if (sig->params[i].name == empty) {
                     perr(p, peek(p), "the parameters of a default implementation need names (parameter %d of '%s' has none)", i + 1,
                          sig->name->chars);
@@ -1947,14 +1992,14 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
     return n;
 }
 
-/* impl Iface for Type, impl Container<int> for IntList */
+// impl Iface for Type, impl Container<int> for IntList
 static bool at_impl(Parser* p) {
     Token* t = peek(p);
     if (!tok_is(t, T_IDENT, "impl") || peek_at(p, 1)->kind != T_IDENT || peek_at(p, 1)->nl_before) {
         return false;
     }
 
-    for (int i = 2;; i++) {
+    for (int i = 2;; ++i) {
         const Token* x = peek_at(p, i);
         if (x->nl_before || x->kind == T_EOF) {
             return false;
@@ -1971,7 +2016,7 @@ static bool at_impl(Parser* p) {
     }
 }
 
-/* `native` is contextual: native function f(...), native "impl" function f(...), native <T>function f(...) */
+// `native` is contextual: native function f(...), native "impl" function f(...), native <T>function f(...)
 static bool at_native(Parser* p) {
     Token* t = peek(p);
     if (!tok_is(t, T_IDENT, "native")) {
@@ -1984,20 +2029,18 @@ static bool at_native(Parser* p) {
     }
 
     if (tok_is(a, T_IDENT, "type")) {
-        return peek_at(p, 2)->kind == T_IDENT; /* native type Map<K, V> */
+        return peek_at(p, 2)->kind == T_IDENT; // native type Map<K, V>
     }
 
     return a->kind == T_FUNCTION || a->kind == T_STRING || (a->kind == T_OP && a->start[0] == '<');
 }
 
-/*
- * native type Map<K, V>
- *
- * Binds a type that is implemented in C (std:Map, std:Set). Only the types the
- * interpreter itself provides exist; the generic parameters must match them.
- */
+// native type Map<K, V>
+//
+// Binds a type that is implemented in C (std:Map, std:Set). Only the types the
+// interpreter itself provides exist; the generic parameters must match them.
 static Node* parse_native_type(Parser* p, Token* kw) {
-    advance(p); /* type */
+    advance(p); // type
     Token* name = expect(p, T_IDENT, "type name after 'native type'");
     Node* n = new_node(S_TYPE, kw->line);
     n->as.type_decl.name = intern_tok(p, name);
@@ -2013,15 +2056,13 @@ static Node* parse_native_type(Parser* p, Token* kw) {
     return n;
 }
 
-/*
- * native function sqrt(float) -> float
- * native "vec_add" function +(Vec, Vec) -> Vec
- *
- * A function whose body is written in C. The signature (types are resolved in
- * this file, so they may name its types) is declared here; the implementation
- * comes from the table the module registered with vm_register_native_impls,
- * looked up by the function's name or by the string after `native`.
- */
+// native function sqrt(float) -> float
+// native "vec_add" function +(Vec, Vec) -> Vec
+//
+// A function whose body is written in C. The signature (types are resolved in
+// this file, so they may name its types) is declared here; the implementation
+// comes from the table the module registered with vm_register_native_impls,
+// looked up by the function's name or by the string after `native`.
 static Node* parse_native(Parser* p) {
     Token* kw = advance(p);
     if (p->block_depth > 0) {
@@ -2064,7 +2105,7 @@ static Node* parse_native(Parser* p) {
     return fn;
 }
 
-/* impl Iface for Type, <K, V>impl Index<K, V> for std:Map<K, V>; the current token is `impl` */
+// impl Iface for Type, <K, V>impl Index<K, V> for std:Map<K, V>; the current token is `impl`
 static Node* parse_impl(Parser* p, ObjString** gens, int ngen) {
     Token* kw = advance(p);
     Node* n = new_node(S_IMPL, kw->line);
@@ -2088,7 +2129,7 @@ static Node* parse_statement(Parser* p) {
         case T_IMPORT: n = parse_import(p); break;
         case T_EXPORT: n = parse_export(p); break;
         case T_GLOBAL: {
-            /* global function f(...) / global <T>function f(...): visible everywhere once the file is loaded */
+            // global function f(...) / global <T>function f(...): visible everywhere once the file is loaded
             advance(p);
             if (p->block_depth > 0) {
                 perr(p, t, "'global' is only allowed at the top level of a file");
@@ -2096,7 +2137,7 @@ static Node* parse_statement(Parser* p) {
 
             Node* fn;
             if (at_native(p)) {
-                fn = parse_native(p); /* global native function f(...) */
+                fn = parse_native(p); // global native function f(...)
                 if (fn->kind != S_FUNCDECL) {
                     perr_line(p, fn->line, "'global' only applies to functions, not to a native type");
                 }
@@ -2112,6 +2153,7 @@ static Node* parse_statement(Parser* p) {
             }
 
             fn->as.func.global = true;
+
             return fn;
         }
         case T_CONST:
@@ -2136,6 +2178,7 @@ static Node* parse_statement(Parser* p) {
 
                 if (tok_is(peek(p), T_IDENT, "interface")) {
                     advance(p);
+
                     return parse_interface(p, t->line, gens, ngen);
                 }
 
@@ -2182,6 +2225,7 @@ static Node* parse_statement(Parser* p) {
             n = new_node(S_WHILE, t->line);
             n->as.while_.cond = parse_expression(p);
             n->as.while_.body = parse_block(p);
+
             return n;
         }
         case T_ENUM: return parse_enum(p);
@@ -2190,7 +2234,7 @@ static Node* parse_statement(Parser* p) {
             Token* a = peek_at(p, 1);
             Token* b = peek_at(p, 2);
             if (is_scope_name(t)) {
-                /* parsed once here: the generic path below would parse the whole block twice */
+                // parsed once here: the generic path below would parse the whole block twice
                 Node* e = parse_scope_call(p);
                 n = new_node(S_EXPR, e->line);
                 n->as.expr.expr = e;
@@ -2208,9 +2252,10 @@ static Node* parse_statement(Parser* p) {
 
                 advance(p);
                 n = new_node(S_DEFER, t->line);
-                p->in_scope_body = false; /* no defer inside a defer */
+                p->in_scope_body = false; // no defer inside a defer
                 n->as.defer.body = parse_block(p);
                 p->in_scope_body = true;
+
                 return n;
             }
 
@@ -2224,6 +2269,7 @@ static Node* parse_statement(Parser* p) {
             if (tok_is(t, T_IDENT, "interface") && a->kind == T_IDENT && !a->nl_before &&
                 (b->kind == T_LBRACE || (b->kind == T_OP && b->start[0] == '<'))) {
                 advance(p);
+
                 return parse_interface(p, t->line, NULL, 0);
             }
 
@@ -2255,11 +2301,9 @@ static Node* parse_statement(Parser* p) {
     }
 
     if (!n) {
-        /*
-         * `target op= value` is a statement even when the lexer read `op=` as one operator (because a
-         * function `+=`, or the comparison `<=`, exists). The right side is the whole expression, and the
-         * interpreter chooses between an in-place `op=` and `target = op(target, value)`.
-         */
+        // `target op= value` is a statement even when the lexer read `op=` as one operator (because a
+        // function `+=`, or the comparison `<=`, exists). The right side is the whole expression, and the
+        // interpreter chooses between an in-place `op=` and `target = op(target, value)`.
         int save = p->pos;
         Node* e = parse_unary(p);
         Token* at = peek(p);
@@ -2303,7 +2347,7 @@ static Node* parse_statement(Parser* p) {
     return n;
 }
 
-/* ----------------------------------------------------------------- entry */
+// ----------------------------------------------------------------- entry
 
 Node* parse_program(VM* vm, const char* src, const char* file) {
     TokenList tl = {0};
@@ -2319,12 +2363,13 @@ Node* parse_program(VM* vm, const char* src, const char* file) {
     p.file = file;
     if (setjmp(p.jb)) {
         free(tl.toks);
+
         return NULL;
     }
 
     Node* block = new_node(N_BLOCK, 1);
     block->as.block.scoped = true;
-    /* a file is: imports, then the code, then exports */
+    // a file is: imports, then the code, then exports
     enum { IMPORTS, CODE, EXPORTS } part = IMPORTS;
     int code_line = 0, export_line = 0;
     while (!check(&p, T_EOF)) {

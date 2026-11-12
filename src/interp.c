@@ -1,7 +1,5 @@
-/*
- * Tree-walking evaluator: scopes, calls & overload resolution, pattern
- * matching, modules and the top level entry points.
- */
+// Tree-walking evaluator: scopes, calls & overload resolution, pattern
+// matching, modules and the top level entry points.
 #include <ctype.h>
 
 #include "parser.h"
@@ -15,6 +13,8 @@
 #include <unistd.h>
 #endif
 
+
+
 static Value eval(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec(VM* vm, Node* n, ObjEnv* env);
 static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value* out);
@@ -24,7 +24,7 @@ static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, I
 static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl,
                             ObjOverload* impl);
 
-/* ------------------------------------------------------------------ errors */
+// ------------------------------------------------------------------ errors
 
 void rt_error(VM* vm, int line, const char* fmt, ...) {
     fflush(stdout);
@@ -46,7 +46,7 @@ void rt_error(VM* vm, int line, const char* fmt, ...) {
             fprintf(stderr, "  ... %d more calls\n", start);
         }
 
-        for (int i = start; i < vm->fp; i++) {
+        for (int i = start; i < vm->fp; ++i) {
             const Frame* f = &vm->frames[i];
             fprintf(stderr, "  %s:%d: called '%s'\n", f->file ? f->file : "?", f->line, f->name);
         }
@@ -60,7 +60,7 @@ void rt_error(VM* vm, int line, const char* fmt, ...) {
     exit(1);
 }
 
-/* ------------------------------------------------------------- vm stacks */
+// ------------------------------------------------------------- vm stacks
 
 void vm_push(VM* vm, Value v) {
     if (vm->sp >= PP_STACK_MAX) {
@@ -91,13 +91,11 @@ void vm_register_ic(VM* vm, InlineCache* ic) {
     vm->caches[vm->ncaches++] = ic;
 }
 
-/*
- * The C bodies of a library module's `native function` declarations:
- *
- *     static const NativeImpl GEOMETRY[] = {{"dist", geo_dist}, {NULL, NULL}};
- *     vm_register_native_impls(vm, "geometry", GEOMETRY);   // lib/geometry.pp
- *     vm_register_native_impls(vm, "os:fs", FS);            // lib/os/fs.pp
- */
+// The C bodies of a library module's `native function` declarations:
+//
+//     static const NativeImpl GEOMETRY[] = {{"dist", geo_dist}, {NULL, NULL}};
+//     vm_register_native_impls(vm, "geometry", GEOMETRY);   // lib/geometry.pp
+//     vm_register_native_impls(vm, "os:fs", FS);            // lib/os/fs.pp
 void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impls) {
     vm->native_parts = pp_realloc(vm->native_parts, sizeof(NativePart) * (size_t)(vm->nnative_parts + 1));
     vm->native_parts[vm->nnative_parts].module = module;
@@ -105,17 +103,15 @@ void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impl
     vm->nnative_parts++;
 }
 
-/*
- * Types a library module implements in C, bound in its .pp file by `native type Name`:
- *
- *     static const NativeClass TYPES[] = {{"Int8Array", sizeof(ObjTypedArray), "types:int8array", ...}, {NULL}};
- *     vm_register_native_types(vm, "types", TYPES);              // lib/types.pp
- *
- * The types are permanent (never collected) and exist before the module loads,
- * so C code can make values of them with vm_native_type + instance_new.
- */
+// Types a library module implements in C, bound in its .pp file by `native type Name`:
+//
+//     static const NativeClass TYPES[] = {{"Int8Array", sizeof(ObjTypedArray), "types:int8array", ...}, {NULL}};
+//     vm_register_native_types(vm, "types", TYPES);              // lib/types.pp
+//
+// The types are permanent (never collected) and exist before the module loads,
+// so C code can make values of them with vm_native_type + instance_new.
 void vm_register_native_types(VM* vm, const char* module, const NativeClass* classes) {
-    for (const NativeClass* c = classes; c->name; c++) {
+    for (const NativeClass* c = classes; c->name; ++c) {
         ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
         t->obj.kind = OBJ_NATIVE_TYPE;
         t->obj.permanent = true;
@@ -130,7 +126,7 @@ void vm_register_native_types(VM* vm, const char* module, const NativeClass* cla
 }
 
 ObjNativeType* vm_native_type(VM* vm, const char* module, const char* name) {
-    for (int i = 0; i < vm->nnative_types; i++) {
+    for (int i = 0; i < vm->nnative_types; ++i) {
         ObjNativeType* t = vm->native_types[i];
         if (strcmp(t->lib_module, module) == 0 && strcmp(t->cls->name, name) == 0) {
             return t;
@@ -147,7 +143,7 @@ void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init) 
     vm->nnative_modules++;
 }
 
-/* ------------------------------------------------------------------ scopes */
+// ------------------------------------------------------------------ scopes
 
 Entry* env_find(ObjEnv* env, ObjString* name, ObjEnv** where) {
     for (ObjEnv* e = env; e; e = e->parent) {
@@ -171,12 +167,10 @@ void env_define(VM* vm, ObjEnv* env, ObjString* name, Value v, uint8_t flags, Ty
     e->type = type;
 }
 
-/*
- * Declares a function. Functions with the same name form an overload set; a
- * declaration in an inner scope extends (a copy of) the set visible from the
- * outer scope, so `function +(Vec a, Vec b)` keeps the built-in `+` working.
- */
-/* remembers names like +=, so `x += v` only looks for an in-place += when one was ever declared */
+// Declares a function. Functions with the same name form an overload set; a
+// declaration in an inner scope extends (a copy of) the set visible from the
+// outer scope, so `function +(Vec a, Vec b)` keeps the built-in `+` working.
+// remembers names like +=, so `x += v` only looks for an in-place += when one was ever declared
 static void note_function_name(VM* vm, ObjString* name) {
     if (name->len >= 2 && name->chars[name->len - 1] == '=' && !table_find(&vm->opeq_names, name)) {
         table_set(&vm->opeq_names, name, void_val());
@@ -189,6 +183,7 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
     if (e) {
         if (IS_KIND(e->value, OBJ_OVERLOAD)) {
             overload_add((ObjOverload*)e->value.as.o, fn);
+
             return;
         }
 
@@ -206,7 +201,7 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
     if (outer) {
         if (IS_KIND(outer->value, OBJ_OVERLOAD)) {
             const ObjOverload* os = (ObjOverload*)outer->value.as.o;
-            for (int i = 0; i < os->count; i++) {
+            for (int i = 0; i < os->count; ++i) {
                 overload_add(set, os->items[i]);
             }
         } else if (IS_KIND(outer->value, OBJ_FUNCTION) || IS_KIND(outer->value, OBJ_NATIVE) ||
@@ -218,11 +213,9 @@ void env_add_function(VM* vm, ObjEnv* env, ObjString* name, Obj* fn) {
     overload_add(set, fn);
 }
 
-/*
- * `global function f(...)` adds f to a VM-wide overload set as well as to its
- * module. Every lookup of the name merges that set in, so the function is
- * usable everywhere once the declaring file is loaded.
- */
+// `global function f(...)` adds f to a VM-wide overload set as well as to its
+// module. Every lookup of the name merges that set in, so the function is
+// usable everywhere once the declaring file is loaded.
 static ObjOverload* global_set(VM* vm, ObjString* name) {
     if (vm->globals.count == 0) {
         return NULL;
@@ -248,10 +241,10 @@ static void global_add(VM* vm, ObjString* name, Obj* fn) {
     overload_add(set, fn);
 }
 
-/* the module whose scope (or a scope nested in it) is env */
+// the module whose scope (or a scope nested in it) is env
 static ObjModule* module_of_env(VM* vm, ObjEnv* env) {
     for (; env; env = env->parent) {
-        for (int i = 0; i < vm->modules.count; i++) {
+        for (int i = 0; i < vm->modules.count; ++i) {
             ObjModule* m = (ObjModule*)vm->modules.entries[i].value.as.o;
             if (m->env == env) {
                 return m;
@@ -262,10 +255,8 @@ static ObjModule* module_of_env(VM* vm, ObjEnv* env) {
     return NULL;
 }
 
-/*
- * For recv.name(args): the overload set `name` exported by the module that
- * declared the receiver's type, so `r.area()` works without `r.shapes:area()`.
- */
+// For recv.name(args): the overload set `name` exported by the module that
+// declared the receiver's type, so `r.area()` works without `r.shapes:area()`.
 static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
     ObjModule* m = NULL;
     if (IS_KIND(recv, OBJ_OBJECT)) {
@@ -289,12 +280,13 @@ static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
     return (ObjOverload*)v.as.o;
 }
 
-/* the type a dot call dispatches on: the record's tag or the enum, or NULL */
-static VM* the_vm; /* for receiver_impl_table, which has no VM parameter */
+// the type a dot call dispatches on: the record's tag or the enum, or NULL
+static VM* the_vm; // for receiver_impl_table, which has no VM parameter
 
 static Table* receiver_impl_table(Value recv) {
     if (IS_KIND(recv, OBJ_OBJECT)) {
         ObjTypeDef* td = AS_OBJECT(recv)->tag;
+
         return td ? &td->impl_fns : NULL;
     }
 
@@ -317,11 +309,9 @@ static Table* receiver_impl_table(Value recv) {
     return NULL;
 }
 
-/*
- * For recv.name(args): the functions `impl` recorded for the receiver's type,
- * so a method required by an interface can be called wherever the value goes,
- * even if the function was never exported.
- */
+// For recv.name(args): the functions `impl` recorded for the receiver's type,
+// so a method required by an interface can be called wherever the value goes,
+// even if the function was never exported.
 static ObjOverload* receiver_impl_set(Value recv, ObjString* name) {
     Table* t = receiver_impl_table(recv);
     if (!t) {
@@ -333,10 +323,10 @@ static ObjOverload* receiver_impl_set(Value recv, ObjString* name) {
     return e ? (ObjOverload*)e->value.as.o : NULL;
 }
 
-/* ------------------------------------------------------- option / error */
+// ------------------------------------------------------- option / error
 
 static int variant_index(ObjEnum* en, const char* name) {
-    for (int i = 0; i < en->nvariants; i++) {
+    for (int i = 0; i < en->nvariants; ++i) {
         if (str_equals(en->variants[i].name, name)) {
             return i;
         }
@@ -368,7 +358,7 @@ Value make_fail(VM* vm, Value v) {
     return make_variant1(vm, vm->error_enum, "fail", v);
 }
 
-/* ------------------------------------------------------------------ calls */
+// ------------------------------------------------------------------ calls
 
 static Signature* callable_sig(Obj* o) {
     switch (o->kind) {
@@ -390,13 +380,13 @@ static ObjEnv* callable_env(VM* vm, Obj* o) {
 
 static void init_bindings(Bindings* b, Signature* sig) {
     b->count = sig->ngenerics;
-    for (int i = 0; i < sig->ngenerics; i++) {
+    for (int i = 0; i < sig->ngenerics; ++i) {
         memset(&b->items[i], 0, sizeof(Binding));
         b->items[i].name = sig->generics[i];
     }
 }
 
-/* how well the arguments fit the candidate, 0 = not applicable */
+// how well the arguments fit the candidate, 0 = not applicable
 static int score_candidate(VM* vm, Obj* c, int argc, Value* args, Bindings* b) {
     Signature* sig = callable_sig(c);
     if (!sig) {
@@ -414,7 +404,7 @@ static int score_candidate(VM* vm, Obj* c, int argc, Value* args, Bindings* b) {
     init_bindings(b, sig);
     ObjEnv* env = callable_env(vm, c);
     int total = 1;
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         int s = sig->params[i].type ? type_match(vm, sig->params[i].type, args[i], env, b, false) : 1;
         if (!s) {
             return 0;
@@ -431,7 +421,7 @@ static PP_NORETURN void no_overload_error_sets(VM* vm, ObjString* name, ObjOverl
     StrBuf sb;
     sb_init(&sb);
     sb_printf(&sb, "no overload of '%s' accepts (", name->chars);
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; ++i) {
         if (i) {
             sb_puts(&sb, ", ");
         }
@@ -440,10 +430,10 @@ static PP_NORETURN void no_overload_error_sets(VM* vm, ObjString* name, ObjOverl
     }
 
     sb_puts(&sb, ")\n  candidates:");
-    for (int k = -1; k < nsets; k++) {
+    for (int k = -1; k < nsets; ++k) {
         Obj** items = k < 0 ? cands : sets[k]->items;
         const int count = k < 0 ? ncands : sets[k]->count;
-        for (int i = 0; i < count; i++) {
+        for (int i = 0; i < count; ++i) {
             Signature* sig = callable_sig(items[i]);
             if (!sig) {
                 continue;
@@ -466,7 +456,7 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
         return false;
     }
 
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; ++i) {
         switch (args[i].kind) {
             case VAL_VOID: kinds[i] = 1; break;
             case VAL_BOOL: kinds[i] = 2; break;
@@ -485,13 +475,11 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
     return true;
 }
 
-/*
- * Picks the best candidate from the set in scope, then the receiver's module
- * set and the functions recorded by `impl` for the receiver's type (dot calls
- * only), then the global set. Earlier sets win ties, so a local declaration
- * shadows an equally good global one.
- */
-/* quiet: return NULL instead of failing when no candidate accepts the arguments */
+// Picks the best candidate from the set in scope, then the receiver's module
+// set and the functions recorded by `impl` for the receiver's type (dot calls
+// only), then the global set. Earlier sets win ties, so a local declaration
+// shadows an equally good global one.
+// quiet: return NULL instead of failing when no candidate accepts the arguments
 static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOverload* impl, int argc, Value* args,
                              InlineCache* ic, Bindings* out, int line, bool quiet) {
     ObjOverload* sets[IC_SETS] = {set, NULL, NULL, NULL};
@@ -512,13 +500,13 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOver
     uint8_t kinds[4];
     const bool cacheable = ic && ic_kinds(argc, args, kinds);
     bool hit = cacheable && ic->argc == argc && memcmp(ic->kinds, kinds, (size_t)argc) == 0;
-    for (int k = 0; hit && k < IC_SETS; k++) {
+    for (int k = 0; hit && k < IC_SETS; ++k) {
         hit = ic->sets[k] == (Obj*)sets[k] && ic->counts[k] == (sets[k] ? sets[k]->count : 0);
     }
 
     if (hit) {
         Obj* t = ic->target;
-        /* builtin natives need no bindings; .pp-declared ones check their return type with them */
+        // builtin natives need no bindings; .pp-declared ones check their return type with them
         if (t->kind == OBJ_NATIVE && !((ObjNative*)t)->env) {
             out->count = 0;
         } else {
@@ -531,10 +519,10 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOver
     Obj* best = NULL;
     int best_score = 0;
     Bindings tmp;
-    /* later declarations win ties, so a redefinition replaces an older one */
-    for (int k = 0; k < nsets; k++) {
+    // later declarations win ties, so a redefinition replaces an older one
+    for (int k = 0; k < nsets; ++k) {
         const ObjOverload* cs = sets[k];
-        for (int i = cs->count - 1; i >= 0; i--) {
+        for (int i = cs->count - 1; i >= 0; --i) {
             int s = score_candidate(vm, cs->items[i], argc, args, &tmp);
             if (s > best_score) {
                 best_score = s;
@@ -553,7 +541,7 @@ static Obj* resolve_overload(VM* vm, ObjOverload* set, ObjOverload* adl, ObjOver
     }
 
     if (cacheable) {
-        for (int k = 0; k < IC_SETS; k++) {
+        for (int k = 0; k < IC_SETS; ++k) {
             ic->sets[k] = (Obj*)sets[k];
             ic->counts[k] = sets[k] ? sets[k]->count : 0;
         }
@@ -579,12 +567,10 @@ static void push_frame(VM* vm, const char* name, int line) {
 
 static void adopt_field_callbacks(VM* vm, ObjObject* o);
 
-/*
- * Tags record values with the record type they were checked against, so they
- * match nominally later (interfaces, overloads, dot calls). With deep, the
- * elements of an array were checked too (`const Item[] xs = [{...}]`,
- * `let Order o = ...` with `type Order = Item[]`), so they are tagged as well.
- */
+// Tags record values with the record type they were checked against, so they
+// match nominally later (interfaces, overloads, dot calls). With deep, the
+// elements of an array were checked too (`const Item[] xs = [{...}]`,
+// `let Order o = ...` with `type Order = Item[]`), so they are tagged as well.
 static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
     if (!t) {
         return;
@@ -596,7 +582,7 @@ static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
         }
 
         ObjArray* a = AS_ARRAY(v);
-        for (int i = 0; i < a->count; i++) {
+        for (int i = 0; i < a->count; ++i) {
             maybe_tag(vm, t->inner, a->items[i], env, deep);
             if (IS_KIND(a->items[i], OBJ_OBJECT)) {
                 adopt_field_callbacks(vm, AS_OBJECT(a->items[i]));
@@ -617,7 +603,8 @@ static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
 
     ObjTypeDef* td = (ObjTypeDef*)tv.as.o;
     if (td->def->kind == TY_ARRAY) {
-        maybe_tag(vm, td->def, v, td->env, deep); /* alias of an array type */
+        maybe_tag(vm, td->def, v, td->env, deep); // alias of an array type
+
         return;
     }
 
@@ -631,14 +618,14 @@ static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
     }
 }
 
-/* lambdas stored in fields of a record type take the callback types of those fields */
+// lambdas stored in fields of a record type take the callback types of those fields
 static void adopt_field_callbacks(VM* vm, ObjObject* o) {
     ObjTypeDef* td = o->tag;
-    if (!td || td->def->kind != TY_RECORD) {
+    if (!td || !td->def || td->def->kind != TY_RECORD) {
         return;
     }
 
-    for (int i = 0; i < td->def->nfields; i++) {
+    for (int i = 0; i < td->def->nfields; ++i) {
         Entry* e = table_find(&o->fields, td->def->fnames[i]);
         if (e && IS_KIND(e->value, OBJ_FUNCTION)) {
             e->value = adopt_callback_types(vm, td->def->ftypes[i], e->value, td->env, NULL, td->def->fnames[i]);
@@ -646,7 +633,7 @@ static void adopt_field_callbacks(VM* vm, ObjObject* o) {
     }
 }
 
-/* name: the variable / field that receives the value, names an adopting lambda (may be NULL) */
+// name: the variable / field that receives the value, names an adopting lambda (may be NULL)
 static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep, const char* what, int line,
                        ObjString* name) {
     if (t && t->kind == TY_PRIM && t->prim == PRIM_FLOAT && v.kind == VAL_INT) {
@@ -668,7 +655,7 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
     return adopt_callback_types(vm, t, v, env, b, name);
 }
 
-/* the declared return type of sig applied to result (types resolved in env) */
+// the declared return type of sig applied to result (types resolved in env)
 static Value check_return(VM* vm, Signature* sig, Value result, ObjEnv* env, Bindings* b) {
     if (!sig->ret) {
         return result;
@@ -695,24 +682,22 @@ static Value check_return(VM* vm, Signature* sig, Value result, ObjEnv* env, Bin
     return coerce_to(vm, sig->ret, result, env, b, false, what, 0, NULL);
 }
 
-/*
- * A `native function` declared in a .pp module: the C body gets the arguments
- * like any native, except that ints passed to float parameters arrive as
- * floats, and its result is checked against the declared return type.
- */
+// A `native function` declared in a .pp module: the C body gets the arguments
+// like any native, except that ints passed to float parameters arrive as
+// floats, and its result is checked against the declared return type.
 static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, Bindings* b) {
     Signature* sig = nf->sig;
     Value small[8];
     Value* av = args;
     bool promote = false;
-    for (int i = 0; i < sig->nparams && i < argc && !promote; i++) {
+    for (int i = 0; i < sig->nparams && i < argc && !promote; ++i) {
         Type* pt = sig->params[i].type;
         promote = pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && args[i].kind == VAL_INT;
     }
 
     if (promote) {
         av = argc <= 8 ? small : pp_malloc(sizeof(Value) * (size_t)argc);
-        for (int i = 0; i < argc; i++) {
+        for (int i = 0; i < argc; ++i) {
             av[i] = args[i];
             Type* pt = i < sig->nparams ? sig->params[i].type : NULL;
             if (pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && av[i].kind == VAL_INT) {
@@ -729,11 +714,9 @@ static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, 
     return check_return(vm, sig, r, nf->env, b);
 }
 
-/*
- * Runs the body of a function that calls lift(): a lift() on none() / fail(..) longjmps back
- * here, the stacks are cut back to what this call had, and the function returns that value.
- * Kept out of call_function so the setjmp does not clobber its locals.
- */
+// Runs the body of a function that calls lift(): a lift() on none() / fail(..) longjmps back
+// here, the stacks are cut back to what this call had, and the function returns that value.
+// Kept out of call_function so the setjmp does not clobber its locals.
 static ExecStatus exec_lifting_block(VM* vm, Node* body, const char* file, ObjEnv* env, Value* last) {
     LiftTarget lt;
     lt.prev = vm->lift_top;
@@ -755,6 +738,7 @@ static ExecStatus exec_lifting_block(VM* vm, Node* body, const char* file, ObjEn
         vm->scope_top = lt.scope_top;
         vm->cur_file = file;
         vm->ret = lt.value;
+
         return EX_RETURN;
     }
 
@@ -764,10 +748,8 @@ static ExecStatus exec_lifting_block(VM* vm, Node* body, const char* file, ObjEn
     return st;
 }
 
-/*
- * lift(o): the payload of some(x) / success(x); none() and fail(..) return from the function
- * that called lift(), as if it had written `return o`.
- */
+// lift(o): the payload of some(x) / success(x); none() and fail(..) return from the function
+// that called lift(), as if it had written `return o`.
 Value vm_lift(VM* vm, Value v) {
     if (IS_KIND(v, OBJ_ENUM_VALUE)) {
         ObjEnumValue* ev = (ObjEnumValue*)v.as.o;
@@ -777,7 +759,7 @@ Value vm_lift(VM* vm, Value v) {
                 return ev->payload[0];
             }
 
-            /* lift's own native frame sits right above the frame of the function that called it */
+            // lift's own native frame sits right above the frame of the function that called it
             LiftTarget* lt = vm->lift_top;
             if (!lt || lt->fp != vm->fp - 1) {
                 rt_error(vm, 0, "lift() on %s must be called directly in the body of a function (it returns from that function)",
@@ -792,7 +774,7 @@ Value vm_lift(VM* vm, Value v) {
     rt_error(vm, 0, "lift() expects an Option or an Error, got a value of type %s", value_type_name(v));
 }
 
-/* a block takes its kind (Block / Callback) and the type of its value from the first parameter it is passed to */
+// a block takes its kind (Block / Callback) and the type of its value from the first parameter it is passed to
 static void bind_block(VM* vm, ObjBlock* bl, Type* pt, Signature* sig, ObjEnv* env) {
     if (bl->bound || !pt || pt->kind != TY_NAME || pt->nquals || (pt->name != vm->s_block && pt->name != vm->s_callback)) {
         return;
@@ -806,7 +788,7 @@ static void bind_block(VM* vm, ObjBlock* bl, Type* pt, Signature* sig, ObjEnv* e
     }
 
     bl->param = t;
-    bl->param_env = t && !sig->ngenerics ? env : NULL; /* a generic T is not checked */
+    bl->param_env = t && !sig->ngenerics ? env : NULL; // a generic T is not checked
 }
 
 static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindings* b, int line) {
@@ -823,7 +805,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
     int saved_line = vm->cur_line;
     ObjEnv* env = env_new(vm, fn->closure);
     push_env(vm, env);
-    for (int i = 0; i < sig->nparams && i < argc; i++) {
+    for (int i = 0; i < sig->nparams && i < argc; ++i) {
         Value a = args[i];
         Type* pt = sig->params[i].type;
         if (pt && pt->kind == TY_PRIM && pt->prim == PRIM_FLOAT && a.kind == VAL_INT) {
@@ -862,12 +844,10 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
     return result;
 }
 
-/*
- * code() / code(value) in a scope function: runs the block of the scope call in a fresh scope
- * whose `scope` is the value. Its last expression is the result. When the block leaves early
- * (return, break, continue, a failing lift), the exit is recorded in the scope call and the
- * scope function is unwound by a longjmp to it (exec_scope_call runs its defer block).
- */
+// code() / code(value) in a scope function: runs the block of the scope call in a fresh scope
+// whose `scope` is the value. Its last expression is the result. When the block leaves early
+// (return, break, continue, a failing lift), the exit is recorded in the scope call and the
+// scope function is unwound by a longjmp to it (exec_scope_call runs its defer block).
 static Value call_block(VM* vm, ObjBlock* bl, int argc, Value* args, int line) {
     if (bl->is_defer) {
         rt_error(vm, line, "a defer block cannot be called");
@@ -945,6 +925,7 @@ static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int
             Value r = nf->env ? call_declared_native(vm, nf, argc, args, b) : nf->fn(vm, argc, args);
             vm->cur_line = saved_line;
             vm->fp--;
+
             return r;
         }
         case OBJ_VARIANT_CTOR: {
@@ -955,7 +936,7 @@ static Value invoke(VM* vm, Obj* target, int argc, Value* args, Bindings* b, int
             }
 
             ObjEnumValue* ev = enumv_new(vm, c->en, c->index, argc);
-            for (int i = 0; i < argc; i++) {
+            for (int i = 0; i < argc; ++i) {
                 ev->payload[i] = args[i];
             }
 
@@ -970,10 +951,8 @@ static Value call_value(VM* vm, Value callee, int argc, Value* args, int line, I
     return call_value_adl(vm, callee, argc, args, line, ic, NULL, NULL);
 }
 
-/*
- * adl: extra candidates from the receiver's module for a dot call, or NULL.
- * impl: functions recorded by `impl` for the receiver's type, or NULL.
- */
+// adl: extra candidates from the receiver's module for a dot call, or NULL.
+// impl: functions recorded by `impl` for the receiver's type, or NULL.
 static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int line, InlineCache* ic, ObjOverload* adl,
                             ObjOverload* impl) {
     if (!IS_OBJ(callee)) {
@@ -986,6 +965,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
     switch (o->kind) {
         case OBJ_OVERLOAD: {
             Obj* t = resolve_overload(vm, (ObjOverload*)o, adl, impl, argc, args, ic, &b, line, false);
+
             return invoke(vm, t, argc, args, &b, line);
         }
         case OBJ_FUNCTION:
@@ -997,8 +977,14 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
 
             return invoke(vm, o, argc, args, &b, line);
         case OBJ_BLOCK: return call_block(vm, (ObjBlock*)o, argc, args, line);
+        case OBJ_CLOSURE:
+            if (!vm->closure_call) {
+                rt_error(vm, line, "a compiled function cannot run here");
+            }
+
+            return vm->closure_call(vm, o, argc, args, line);
         case OBJ_TYPEDEF: {
-            /* Person({...}) checks the value against the type and tags it */
+            // Person({...}) checks the value against the type and tags it
             ObjTypeDef* td = (ObjTypeDef*)o;
             if (argc != 1) {
                 rt_error(vm, line, "type '%s' takes exactly one value to convert", td->name->chars);
@@ -1006,7 +992,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
 
             Bindings nb;
             nb.count = td->ngenerics;
-            for (int i = 0; i < td->ngenerics; i++) {
+            for (int i = 0; i < td->ngenerics; ++i) {
                 memset(&nb.items[i], 0, sizeof(Binding));
                 nb.items[i].name = td->generics[i];
             }
@@ -1023,7 +1009,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             return args[0];
         }
         case OBJ_NATIVE_TYPE: {
-            /* std:Map(), types:Int8Array(4), types:Int8Array{}: types are not constructors */
+            // std:Map(), types:Int8Array(4), types:Int8Array{}: types are not constructors
             ObjNativeType* t = (ObjNativeType*)o;
             const char* ctor = t->which == NT_MAP ? "std:map" : t->which == NT_SET ? "std:set" : t->cls->constructor;
             if (ctor) {
@@ -1040,7 +1026,7 @@ Value vm_call(VM* vm, Value callee, int argc, Value* args) {
     return call_value(vm, callee, argc, args, vm->cur_line, NULL);
 }
 
-/* ---------------------------------------------------------- member access */
+// ---------------------------------------------------------- member access
 
 static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
     if (IS_KIND(obj, OBJ_OBJECT)) {
@@ -1064,7 +1050,7 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
 
     if (IS_KIND(obj, OBJ_ENUM)) {
         const ObjEnum* en = (ObjEnum*)obj.as.o;
-        for (int i = 0; i < en->nvariants; i++) {
+        for (int i = 0; i < en->nvariants; ++i) {
             const Variant* v = &en->variants[i];
             if (v->name != name && !str_equals(v->name, name->chars)) {
                 continue;
@@ -1081,10 +1067,8 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
     }
 
     if (IS_KIND(obj, OBJ_RANGE)) {
-        /*
-         * read-only view of a range as { number start, number end, number step, bool inclusive }.
-         * For ...= ranges end is one step past the last element (0...=5 has end 6).
-         */
+        // read-only view of a range as { number start, number end, number step, bool inclusive }.
+        // For ...= ranges end is one step past the last element (0...=5 has end 6).
         const ObjRange* r = AS_RANGE(obj);
         if (str_equals(name, "start")) {
             return r->start;
@@ -1108,6 +1092,52 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
     rt_error(vm, line, "cannot access field '%s' on a value of type %s", name->chars, value_type_name(obj));
 }
 
+Value vm_get_field(VM* vm, Value obj, ObjString* name, int line) {
+    return get_field(vm, obj, name, line);
+}
+
+static void set_object_field(VM* vm, ObjObject* o, ObjString* key, Value v, int line);
+
+void vm_set_field(VM* vm, Value obj, ObjString* name, Value v, int line) {
+    if (!IS_KIND(obj, OBJ_OBJECT)) {
+        rt_error(vm, line, "cannot assign field '%s' on a value of type %s", name->chars, value_type_name(obj));
+    }
+
+    set_object_field(vm, AS_OBJECT(obj), name, v, line);
+}
+
+ObjEnum* vm_enum_new(VM* vm, ObjString* name, int nvariants) {
+    ObjEnum* en = (ObjEnum*)alloc_obj(vm, sizeof(ObjEnum), OBJ_ENUM);
+    en->obj.permanent = true;
+    en->name = name;
+    en->variants = pp_calloc((size_t)(nvariants ? nvariants : 1), sizeof(Variant));
+    en->nvariants = nvariants;
+    en->env = vm->builtins;
+
+    return en;
+}
+
+void vm_enum_variant(VM* vm, ObjEnum* en, int i, ObjString* name, bool is_ctor, int npayload, Value value) {
+    Variant* var = &en->variants[i];
+    var->name = name;
+    var->is_ctor = is_ctor;
+    var->npayload = npayload;
+    var->value = value;
+    if (npayload == 0) {
+        var->singleton = enumv_new(vm, en, i, 0);
+        var->singleton->obj.permanent = true;
+    }
+}
+
+ObjTypeDef* vm_typedef_new(VM* vm, ObjString* name) {
+    ObjTypeDef* td = (ObjTypeDef*)alloc_obj(vm, sizeof(ObjTypeDef), OBJ_TYPEDEF);
+    td->obj.permanent = true;
+    td->name = name;
+    td->env = vm->builtins;
+
+    return td;
+}
+
 static int64_t norm_index(VM* vm, Value idx, int64_t count, int line) {
     if (idx.kind != VAL_INT) {
         rt_error(vm, line, "index must be an int, got %s", value_type_name(idx));
@@ -1128,12 +1158,14 @@ static int64_t norm_index(VM* vm, Value idx, int64_t count, int line) {
 static Value get_index(VM* vm, Value obj, Value idx, int line) {
     if (IS_KIND(obj, OBJ_ARRAY)) {
         const ObjArray* a = AS_ARRAY(obj);
+
         return a->items[norm_index(vm, idx, a->count, line)];
     }
 
     if (IS_KIND(obj, OBJ_STRING)) {
         const ObjString* s = AS_STR(obj);
         const int64_t i = norm_index(vm, idx, s->len, line);
+
         return obj_val(str_new(vm, s->chars + i, 1));
     }
 
@@ -1152,6 +1184,7 @@ static Value get_index(VM* vm, Value obj, Value idx, int line) {
 
     if (IS_KIND(obj, OBJ_TUPLE)) {
         const ObjTuple* t = AS_TUPLE(obj);
+
         return t->items[norm_index(vm, idx, t->count, line)];
     }
 
@@ -1164,13 +1197,15 @@ static Value get_index(VM* vm, Value obj, Value idx, int line) {
 
 static Type* record_field_type(ObjTypeDef* td, ObjString* name, bool* found) {
     *found = false;
-    if (!td || td->def->kind != TY_RECORD) {
+    if (!td || !td->def || td->def->kind != TY_RECORD) { // compiled code tags with definition-less types: checked statically
+
         return NULL;
     }
 
-    for (int i = 0; i < td->def->nfields; i++) {
+    for (int i = 0; i < td->def->nfields; ++i) {
         if (td->def->fnames[i] == name || str_equals(td->def->fnames[i], name->chars)) {
             *found = true;
+
             return td->def->ftypes[i];
         }
     }
@@ -1179,7 +1214,7 @@ static Type* record_field_type(ObjTypeDef* td, ObjString* name, bool* found) {
 }
 
 static void set_object_field(VM* vm, ObjObject* o, ObjString* key, Value v, int line) {
-    if (o->tag) {
+    if (o->tag && o->tag->def) { // a type without a definition comes from compiled code, which was checked statically
         bool found;
         Type* ft = record_field_type(o->tag, key, &found);
         if (!found) {
@@ -1198,6 +1233,7 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
     if (IS_KIND(obj, OBJ_ARRAY)) {
         const ObjArray* a = AS_ARRAY(obj);
         a->items[norm_index(vm, idx, a->count, line)] = v;
+
         return;
     }
 
@@ -1207,6 +1243,7 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
         }
 
         set_object_field(vm, AS_OBJECT(obj), AS_STR(idx), v, line);
+
         return;
     }
 
@@ -1216,6 +1253,7 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
 
     if (IS_KIND(obj, OBJ_INSTANCE) && AS_INSTANCE(obj)->type->cls->set) {
         AS_INSTANCE(obj)->type->cls->set(vm, AS_INSTANCE(obj), idx, v, line);
+
         return;
     }
 
@@ -1223,20 +1261,27 @@ static void set_index(VM* vm, Value obj, Value idx, Value v, int line) {
              value_type_name(v));
 }
 
-/* the built-in overloads of [] and []=: arrays, strings, objects */
+// the built-in overloads of [] and []=: arrays, strings, objects
+Value vm_index_get(VM* vm, Value obj, Value idx, int line) {
+    return get_index(vm, obj, idx, line);
+}
+
+void vm_index_set(VM* vm, Value obj, Value idx, Value v, int line) {
+    set_index(vm, obj, idx, v, line);
+}
+
 static Value n_index_get(VM* vm, int argc, Value* a) {
     return get_index(vm, a[0], a[1], 0);
 }
 
 static Value n_index_set(VM* vm, int argc, Value* a) {
     set_index(vm, a[0], a[1], a[2], 0);
+
     return void_val();
 }
 
-/*
- * [](any, any) / []=(any, any, any): tuples and native class instances (which have no other type to name here),
- * and the error for everything else
- */
+// [](any, any) / []=(any, any, any): tuples and native class instances (which have no other type to name here),
+// and the error for everything else
 static Value n_index_get_any(VM* vm, int argc, Value* a) {
     if (IS_KIND(a[0], OBJ_TUPLE) || IS_KIND(a[0], OBJ_INSTANCE)) {
         return get_index(vm, a[0], a[1], 0);
@@ -1252,6 +1297,7 @@ static Value n_index_set_any(VM* vm, int argc, Value* a) {
 
     if (IS_KIND(a[0], OBJ_INSTANCE)) {
         set_index(vm, a[0], a[1], a[2], 0);
+
         return void_val();
     }
 
@@ -1259,14 +1305,12 @@ static Value n_index_set_any(VM* vm, int argc, Value* a) {
              value_type_name(a[2]));
 }
 
-/*
- * The built-in [] / []= is the only candidate a call could pick: the scope sees
- * the builtins' set unchanged, there is no global overload, and the receiver is
- * a built-in collection (no impl or module functions of its own).
- */
+// The built-in [] / []= is the only candidate a call could pick: the scope sees
+// the builtins' set unchanged, there is no global overload, and the receiver is
+// a built-in collection (no impl or module functions of its own).
 static bool builtin_bracket(VM* vm, ObjEnv* env, ObjString* name, Value recv) {
     if (IS_KIND(recv, OBJ_INSTANCE)) {
-        /* a native class with its own get / set (typed arrays), unless its module or an impl gave it a [] / []= */
+        // a native class with its own get / set (typed arrays), unless its module or an impl gave it a [] / []=
         const NativeClass* cls = AS_INSTANCE(recv)->type->cls;
         if (name == vm->s_index ? !cls->get : !cls->set) {
             return false;
@@ -1281,7 +1325,7 @@ static bool builtin_bracket(VM* vm, ObjEnv* env, ObjString* name, Value recv) {
     }
 
     if (vm->index_overloads == 0) {
-        return true; /* nobody declared a [] or []= anywhere */
+        return true; // nobody declared a [] or []= anywhere
     }
 
     const Entry* e = env_find(env, name, NULL);
@@ -1292,12 +1336,10 @@ static bool builtin_bracket(VM* vm, ObjEnv* env, ObjString* name, Value recv) {
 
 static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line, ObjOverload* adl, ObjOverload* impl);
 
-/*
- * x[a, b] calls [](x, a, b) and x[a, b] = v calls []=(x, a, b, v). Like a binary
- * operator, the call also sees the functions of the receiver's module and the
- * ones `impl` recorded for its type, so a type that implements std:Index can be
- * indexed anywhere. args[0] is the receiver; all of args is on the value stack.
- */
+// x[a, b] calls [](x, a, b) and x[a, b] = v calls []=(x, a, b, v). Like a binary
+// operator, the call also sees the functions of the receiver's module and the
+// ones `impl` recorded for its type, so a type that implements std:Index can be
+// indexed anywhere. args[0] is the receiver; all of args is on the value stack.
 static Value call_bracket(VM* vm, ObjEnv* env, ObjString* name, int argc, Value* args, int line, InlineCache* ic) {
     const Value recv = args[0];
     if (builtin_bracket(vm, env, name, recv)) {
@@ -1307,6 +1349,7 @@ static Value call_bracket(VM* vm, ObjEnv* env, ObjString* name, int argc, Value*
 
         if (name == vm->s_index_set && argc == 3) {
             set_index(vm, recv, args[1], args[2], line);
+
             return void_val();
         }
     }
@@ -1322,10 +1365,11 @@ static Value call_bracket(VM* vm, ObjEnv* env, ObjString* name, int argc, Value*
     return r;
 }
 
-/* --------------------------------------------------------- operator chains */
+// --------------------------------------------------------- operator chains
 
 static double op_prec(VM* vm, ObjString* op) {
     const Entry* e = table_find(&vm->prec, op);
+
     return e ? e->value.as.f : 65.0;
 }
 
@@ -1335,7 +1379,7 @@ static int chain_build(Node* n, int* pos, double minp) {
         int k = *pos;
         const double p = n->as.chain.precs[k];
         (*pos)++;
-        const int right = chain_build(n, pos, p + 1e-9); /* left associative */
+        const int right = chain_build(n, pos, p + 1e-9); // left associative
         n->as.chain.left[k] = left;
         n->as.chain.right[k] = right;
         left = k;
@@ -1352,7 +1396,7 @@ static void chain_rebuild(VM* vm, Node* n) {
         n->as.chain.right = pp_malloc(sizeof(int) * (size_t)nops);
     }
 
-    for (int k = 0; k < nops; k++) {
+    for (int k = 0; k < nops; ++k) {
         n->as.chain.precs[k] = op_prec(vm, n->as.chain.ops[k]);
     }
 
@@ -1369,8 +1413,8 @@ static bool require_bool(VM* vm, Value v, const char* what, int line) {
     return v.as.b;
 }
 
-/* an operator in scope, or a global one */
-/* adl / impl: the left operand's candidates (see eval_chain_at), used when op is not in scope */
+// an operator in scope, or a global one
+// adl / impl: the left operand's candidates (see eval_chain_at), used when op is not in scope
 static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line, ObjOverload* adl, ObjOverload* impl) {
     const Entry* e = env_find(env, op, NULL);
     if (e) {
@@ -1418,7 +1462,7 @@ static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
     const Value lhs = eval_chain_at(vm, n, env, n->as.chain.left[k]);
     vm_push(vm, lhs);
     vm_push(vm, eval_chain_at(vm, n, env, n->as.chain.right[k]));
-    /* a + b works like a.+(b): it also sees the functions of the left operand's module and impls */
+    // a + b works like a.+(b): it also sees the functions of the left operand's module and impls
     ObjOverload* adl = receiver_module_set(vm, lhs, op);
     ObjOverload* impl = receiver_impl_set(lhs, op);
     const Value callee = lookup_operator(vm, env, op, n->line, adl, impl);
@@ -1429,11 +1473,11 @@ static Value eval_chain_at(VM* vm, Node* n, ObjEnv* env, int enc) {
     return r;
 }
 
-/* ------------------------------------------------------------ expressions */
+// ------------------------------------------------------------ expressions
 
 static Value eval_call_args(VM* vm, Node* n, ObjEnv* env, Value callee, NodeList* args, int base, InlineCache* ic) {
     const int args_base = vm->sp;
-    for (int i = 0; i < args->count; i++) {
+    for (int i = 0; i < args->count; ++i) {
         vm_push(vm, eval(vm, args->items[i], env));
     }
 
@@ -1471,7 +1515,7 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             ObjArray* a = array_new(vm, items->count);
             const int base = vm->sp;
             vm_push(vm, obj_val(a));
-            for (int i = 0; i < items->count; i++) {
+            for (int i = 0; i < items->count; ++i) {
                 const Value v = eval(vm, items->items[i], env);
                 if (v.kind == VAL_VOID) {
                     rt_error(vm, items->items[i]->line, "array element has no value (void)");
@@ -1481,13 +1525,14 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             }
 
             vm->sp = base;
+
             return obj_val(a);
         }
         case N_OBJECT: {
             ObjObject* o = object_new(vm);
             const int base = vm->sp;
             vm_push(vm, obj_val(o));
-            for (int i = 0; i < n->as.object.values.count; i++) {
+            for (int i = 0; i < n->as.object.values.count; ++i) {
                 const Value v = eval(vm, n->as.object.values.items[i], env);
                 if (v.kind == VAL_VOID) {
                     rt_error(vm, n->as.object.values.items[i]->line, "object field '%s' has no value (void)", n->as.object.keys[i]->chars);
@@ -1497,23 +1542,23 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             }
 
             vm->sp = base;
+
             return obj_val(o);
         }
         case N_CALL: {
             const int base = vm->sp;
             const Value callee = eval(vm, n->as.call.callee, env);
             vm_push(vm, callee);
+
             return eval_call_args(vm, n, env, callee, &n->as.call.args, base, n->as.call.ic);
         }
         case N_METHOD: {
             const int base = vm->sp;
-            /* dot syntax: recv.f(args) == f(recv, args), recv.mod:f(args) == mod:f(recv, args) */
+            // dot syntax: recv.f(args) == f(recv, args), recv.mod:f(args) == mod:f(recv, args)
             const Value recv = eval(vm, n->as.method.recv, env);
             vm_push(vm, recv);
-            /*
-             * recv.f(args) also sees the functions exported by the module that declared recv's type,
-             * and the functions an `impl` found for recv's type
-             */
+            // recv.f(args) also sees the functions exported by the module that declared recv's type,
+            // and the functions an `impl` found for recv's type
             Node* cn = n->as.method.callee;
             ObjOverload* adl = NULL;
             ObjOverload* impl = NULL;
@@ -1537,24 +1582,26 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             vm_push(vm, callee);
             const int args_base = vm->sp;
             vm_push(vm, recv);
-            for (int i = 0; i < n->as.method.args.count; i++) {
+            for (int i = 0; i < n->as.method.args.count; ++i) {
                 vm_push(vm, eval(vm, n->as.method.args.items[i], env));
             }
 
             const Value r = call_value_adl(vm, callee, vm->sp - args_base, &vm->stack[args_base], n->line, n->as.method.ic, adl, impl);
             vm->sp = base;
+
             return r;
         }
         case N_FIELD: return get_field(vm, eval(vm, n->as.field.obj, env), n->as.field.name, n->line);
         case N_INDEX: {
             const int base = vm->sp;
             vm_push(vm, eval(vm, n->as.index.obj, env));
-            for (int i = 0; i < n->as.index.args.count; i++) {
+            for (int i = 0; i < n->as.index.args.count; ++i) {
                 vm_push(vm, eval(vm, n->as.index.args.items[i], env));
             }
 
             const Value r = call_bracket(vm, env, vm->s_index, vm->sp - base, &vm->stack[base], n->line, n->as.index.ic);
             vm->sp = base;
+
             return r;
         }
         case N_CHAIN:
@@ -1574,6 +1621,25 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
 
             return out;
         }
+        case N_AS: {
+            // a checked downcast: some(value) when the value has the type (an int converts to float), else none()
+            const Value v = eval(vm, n->as.as_.expr, env);
+            vm_push(vm, v);
+            Bindings b = {0};
+            const int score = type_match(vm, n->as.as_.type, v, env, &b, true);
+            Value r;
+            if (score <= 0) {
+                r = make_none(vm);
+            } else if (v.kind == VAL_INT && n->as.as_.type->kind == TY_PRIM && n->as.as_.type->prim == PRIM_FLOAT) {
+                r = make_some(vm, float_val((double)v.as.i));
+            } else {
+                r = make_some(vm, v);
+            }
+
+            vm->sp--;
+
+            return r;
+        }
         case N_SCOPECALL: {
             Value out = void_val();
             if (exec_scope_call(vm, n, env, &out) != EX_NORMAL) {
@@ -1586,16 +1652,18 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
     }
 }
 
-/* --------------------------------------------------------------- patterns */
+// --------------------------------------------------------------- patterns
 
 static bool ctor_matches(Obj* c, ObjEnumValue* ev) {
     if (c->kind == OBJ_VARIANT_CTOR) {
         const ObjVariantCtor* vc = (ObjVariantCtor*)c;
+
         return vc->en == ev->en && vc->index == ev->variant;
     }
 
     if (c->kind == OBJ_ENUM_VALUE) {
         const ObjEnumValue* k = (ObjEnumValue*)c;
+
         return k->en == ev->en && k->variant == ev->variant;
     }
 
@@ -1609,7 +1677,7 @@ static bool is_variantish(Value c) {
 
     if (IS_KIND(c, OBJ_OVERLOAD)) {
         const ObjOverload* s = (ObjOverload*)c.as.o;
-        for (int i = 0; i < s->count; i++) {
+        for (int i = 0; i < s->count; ++i) {
             if (s->items[i]->kind == OBJ_VARIANT_CTOR) {
                 return true;
             }
@@ -1627,7 +1695,7 @@ static bool variant_matches(Value c, Value v) {
     ObjEnumValue* ev = AS_ENUMV(v);
     if (IS_KIND(c, OBJ_OVERLOAD)) {
         const ObjOverload* s = (ObjOverload*)c.as.o;
-        for (int i = 0; i < s->count; i++) {
+        for (int i = 0; i < s->count; ++i) {
             if (ctor_matches(s->items[i], ev)) {
                 return true;
             }
@@ -1639,16 +1707,17 @@ static bool variant_matches(Value c, Value v) {
     return IS_OBJ(c) && ctor_matches(c.as.o, ev);
 }
 
-/* a payload-less constructor such as none() may be written without parens */
+// a payload-less constructor such as none() may be written without parens
 static bool is_unit_ctor(Value c) {
     if (IS_KIND(c, OBJ_VARIANT_CTOR)) {
         const ObjVariantCtor* vc = (ObjVariantCtor*)c.as.o;
+
         return vc->en->variants[vc->index].npayload == 0;
     }
 
     if (IS_KIND(c, OBJ_OVERLOAD)) {
         const ObjOverload* s = (ObjOverload*)c.as.o;
-        for (int i = 0; i < s->count; i++) {
+        for (int i = 0; i < s->count; ++i) {
             Obj* o = s->items[i];
             if (o->kind == OBJ_VARIANT_CTOR && ((ObjVariantCtor*)o)->en->variants[((ObjVariantCtor*)o)->index].npayload == 0) {
                 return true;
@@ -1659,7 +1728,7 @@ static bool is_unit_ctor(Value c) {
     return false;
 }
 
-/* the built-in tuple(...) (or an overload set that extends it) */
+// the built-in tuple(...) (or an overload set that extends it)
 static bool is_tuple_ctor(VM* vm, Value c) {
     if (!IS_OBJ(c)) {
         return false;
@@ -1671,7 +1740,7 @@ static bool is_tuple_ctor(VM* vm, Value c) {
 
     if (IS_KIND(c, OBJ_OVERLOAD)) {
         const ObjOverload* s = (ObjOverload*)c.as.o;
-        for (int i = 0; i < s->count; i++) {
+        for (int i = 0; i < s->count; ++i) {
             if (s->items[i] == vm->tuple_ctor) {
                 return true;
             }
@@ -1692,17 +1761,18 @@ static bool match_pattern(VM* vm, Pattern* p, Value v, ObjEnv* env, uint8_t flag
             }
 
             env_define(vm, env, p->name, v, flags, NULL);
+
             return true;
         }
         case P_VARIANT: {
             const Value c = eval(vm, p->ctor, env);
             if (p->has_parens && is_tuple_ctor(vm, c)) {
-                /* tuple(a, b) matches a tuple of exactly that many elements */
+                // tuple(a, b) matches a tuple of exactly that many elements
                 if (!IS_KIND(v, OBJ_TUPLE) || AS_TUPLE(v)->count != p->nsubs) {
                     return false;
                 }
 
-                for (int i = 0; i < p->nsubs; i++) {
+                for (int i = 0; i < p->nsubs; ++i) {
                     if (!match_pattern(vm, p->subs[i], AS_TUPLE(v)->items[i], env, flags)) {
                         return false;
                     }
@@ -1716,7 +1786,7 @@ static bool match_pattern(VM* vm, Pattern* p, Value v, ObjEnv* env, uint8_t flag
                     rt_error(vm, p->line, "pattern does not name an enum variant");
                 }
 
-                return values_equal(c, v); /* qualified constant, e.g. Config.MAX */
+                return values_equal(c, v); // qualified constant, e.g. Config.MAX
             }
 
             if (!variant_matches(c, v)) {
@@ -1729,7 +1799,7 @@ static bool match_pattern(VM* vm, Pattern* p, Value v, ObjEnv* env, uint8_t flag
                     return false;
                 }
 
-                for (int i = 0; i < p->nsubs; i++) {
+                for (int i = 0; i < p->nsubs; ++i) {
                     if (!match_pattern(vm, p->subs[i], ev->payload[i], env, flags)) {
                         return false;
                     }
@@ -1748,7 +1818,7 @@ static bool pattern_binds(Pattern* p) {
         return true;
     }
 
-    for (int i = 0; i < p->nsubs; i++) {
+    for (int i = 0; i < p->nsubs; ++i) {
         if (pattern_binds(p->subs[i])) {
             return true;
         }
@@ -1757,7 +1827,7 @@ static bool pattern_binds(Pattern* p) {
     return false;
 }
 
-/* ------------------------------------------------------------- statements */
+// ------------------------------------------------------------- statements
 
 static ObjBlock* block_new(VM* vm, Node* body, ObjEnv* env, ObjString* scope_name, int line) {
     ObjBlock* bl = (ObjBlock*)alloc_obj(vm, sizeof(ObjBlock), OBJ_BLOCK);
@@ -1770,7 +1840,7 @@ static ObjBlock* block_new(VM* vm, Node* body, ObjEnv* env, ObjString* scope_nam
     return bl;
 }
 
-/* the current defer block of a scope call, run when its scope function ended; it cannot leave anything */
+// the current defer block of a scope call, run when its scope function ended; it cannot leave anything
 static void run_defer(VM* vm, Value d, int line) {
     if (!IS_KIND(d, OBJ_BLOCK)) {
         return;
@@ -1793,11 +1863,9 @@ static void run_defer(VM* vm, Value d, int line) {
     vm->cur_file = saved_file;
 }
 
-/*
- * Calls the scope function; a block that leaves early longjmps back here with the stacks of the
- * scope function still on top, and they are cut back to the call. Kept out of exec_scope_call so
- * the setjmp does not clobber its locals.
- */
+// Calls the scope function; a block that leaves early longjmps back here with the stacks of the
+// scope function still on top, and they are cut back to the call. Kept out of exec_scope_call so
+// the setjmp does not clobber its locals.
 static Value run_scope(VM* vm, ScopeCall* sc, Value callee, int argc, Value* args, Node* n) {
     if (setjmp(sc->jb)) {
         vm->err_jmp = sc->err_jmp;
@@ -1809,19 +1877,18 @@ static Value run_scope(VM* vm, ScopeCall* sc, Value callee, int argc, Value* arg
         vm->gc_disabled = sc->gc_disabled;
         vm->cur_file = sc->file;
         vm->cur_line = sc->line;
+
         return void_val();
     }
 
     return call_value(vm, callee, argc, args, n->line, n->as.scall.ic);
 }
 
-/*
- * _name args { body }: calls the scope function _name with the body as a Block (its first
- * argument) followed by the args. `const f = x` arguments pass x and bind f for the body only.
- * When the scope function ended, normally or because the body left early, its current defer
- * block runs; then an early exit (return / break / continue / lift) continues from here.
- * The result is what the scope function returned.
- */
+// _name args { body }: calls the scope function _name with the body as a Block (its first
+// argument) followed by the args. `const f = x` arguments pass x and bind f for the body only.
+// When the scope function ended, normally or because the body left early, its current defer
+// block runs; then an early exit (return / break / continue / lift) continues from here.
+// The result is what the scope function returned.
 static ExecStatus exec_scope_call(VM* vm, Node* n, ObjEnv* env, Value* out) {
     *out = void_val();
     const int base = vm->sp;
@@ -1841,15 +1908,15 @@ static ExecStatus exec_scope_call(VM* vm, Node* n, ObjEnv* env, Value* out) {
 
     vm_push(vm, callee);
     const int slot = vm->sp;
-    vm_push(vm, void_val()); /* the value of an early return */
-    vm_push(vm, void_val()); /* the current defer block */
+    vm_push(vm, void_val()); // the value of an early return
+    vm_push(vm, void_val()); // the current defer block
     ObjEnv* be = env_new(vm, env);
     vm_push(vm, obj_val(be));
     ObjBlock* bl = block_new(vm, n->as.scall.body, be, name, n->line);
     bl->uses_lift = n->as.scall.uses_lift;
     const int args_base = vm->sp;
     vm_push(vm, obj_val(bl));
-    for (int i = 0; i < n->as.scall.args.count; i++) {
+    for (int i = 0; i < n->as.scall.args.count; ++i) {
         Node* a = n->as.scall.args.items[i];
         if (a->kind != S_LET) {
             vm_push(vm, eval(vm, a, env));
@@ -1943,11 +2010,11 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
         return exec_block(vm, e, env, true, out);
     }
 
-    /* match */
+    // match
     const int base = vm->sp;
     const Value v = eval(vm, n->as.match.subject, env);
     vm_push(vm, v);
-    for (int i = 0; i < n->as.match.narms; i++) {
+    for (int i = 0; i < n->as.match.narms; ++i) {
         MatchArm* arm = &n->as.match.arms[i];
         ObjEnv* ae = env;
         const bool scoped = pattern_binds(arm->pat);
@@ -1974,6 +2041,7 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
             }
 
             vm->sp = base;
+
             return st;
         }
 
@@ -1988,13 +2056,11 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
     rt_error(vm, n->line, "no match arm matched the value %s", sb.data);
 }
 
-/*
- * function f(...) { ... } runs where it is written: f exists from that line on.
- * A declaration (no body) creates the function object early; its definition
- * fills that same object in, so everything that captured it (an impl, a
- * variable, a call site cache) gets the body.
- */
-/* native function f(...): bind the declaration to the C body its module registered */
+// function f(...) { ... } runs where it is written: f exists from that line on.
+// A declaration (no body) creates the function object early; its definition
+// fills that same object in, so everything that captured it (an impl, a
+// variable, a call site cache) gets the body.
+// native function f(...): bind the declaration to the C body its module registered
 static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
     ObjString* impl = n->as.func.native;
@@ -2007,7 +2073,7 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     }
 
     NativeFn fn = NULL;
-    for (const NativeImpl* it = m->natives; it->name && !fn; it++) {
+    for (const NativeImpl* it = m->natives; it->name && !fn; ++it) {
         if (strcmp(it->name, impl->chars) == 0) {
             fn = it->fn;
         }
@@ -2029,7 +2095,7 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     vm->sp = base;
 }
 
-/* native type Map<K, V>: bind a type the interpreter implements (in a library module only) */
+// native type Map<K, V>: bind a type the interpreter implements (in a library module only)
 static void exec_native_type(VM* vm, Node* n, ObjEnv* env) {
     ObjString* name = n->as.type_decl.name;
     ObjModule* m = vm->cur_module;
@@ -2069,6 +2135,7 @@ static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
     if (n->as.func.native) {
         exec_native_decl(vm, n, env);
+
         return;
     }
 
@@ -2076,7 +2143,7 @@ static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
         Entry* e = table_find(&env->vars, sig->name);
         if (e && IS_KIND(e->value, OBJ_OVERLOAD)) {
             ObjOverload* set = (ObjOverload*)e->value.as.o;
-            for (int i = 0; i < set->count; i++) {
+            for (int i = 0; i < set->count; ++i) {
                 if (set->items[i]->kind != OBJ_FUNCTION) {
                     continue;
                 }
@@ -2086,8 +2153,9 @@ static void exec_funcdecl(VM* vm, Node* n, ObjEnv* env) {
                     continue;
                 }
 
-                f->sig = sig; /* same types, the definition's parameter names */
+                f->sig = sig; // same types, the definition's parameter names
                 f->body = n->as.func.body;
+
                 return;
             }
         }
@@ -2118,10 +2186,10 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
 
     ExecStatus st = EX_NORMAL;
     const NodeList* sl = &b->as.block.stmts;
-    for (int i = 0; i < sl->count; i++) {
+    for (int i = 0; i < sl->count; ++i) {
         Node* s = sl->items[i];
         if (out && i == sl->count - 1 && s->kind == S_EXPR) {
-            /* last expression of a block used as a value */
+            // last expression of a block used as a value
             vm->cur_line = s->line;
             gc_maybe(vm);
             Node* e = s->as.expr.expr;
@@ -2148,7 +2216,7 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
     return st;
 }
 
-/* the candidate set for an operator name like lookup_operator, or NULL when the name does not exist */
+// the candidate set for an operator name like lookup_operator, or NULL when the name does not exist
 static ObjOverload* operator_set(VM* vm, ObjEnv* env, ObjString* name, ObjOverload* adl, ObjOverload* impl) {
     const Entry* e = env_find(env, name, NULL);
     if (e && IS_KIND(e->value, OBJ_OVERLOAD)) {
@@ -2163,15 +2231,13 @@ static ObjOverload* operator_set(VM* vm, ObjEnv* env, ObjString* name, ObjOverlo
     return adl ? adl : impl;
 }
 
-/*
- * The in-place half of `target op= value`: calls an overload of `op=` that
- * accepts (current, value), searched like a binary operator. Returns false when
- * there is none, and the caller writes back target = op(current, value).
- */
+// The in-place half of `target op= value`: calls an overload of `op=` that
+// accepts (current, value), searched like a binary operator. Returns false when
+// there is none, and the caller writes back target = op(current, value).
 static bool try_in_place(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
     ObjString* name = n->as.assign.opeq;
     if (!table_find(&vm->opeq_names, name)) {
-        return false; /* no function by that name exists anywhere */
+        return false; // no function by that name exists anywhere
     }
 
     const int base = vm->sp;
@@ -2182,6 +2248,7 @@ static bool try_in_place(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
     ObjOverload* set = operator_set(vm, env, name, adl, impl);
     if (!set) {
         vm->sp = base;
+
         return false;
     }
 
@@ -2197,7 +2264,7 @@ static bool try_in_place(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
     return t != NULL;
 }
 
-/* the write-back half of `target op= value`: op(cur, rhs), or an error naming both op= and op */
+// the write-back half of `target op= value`: op(cur, rhs), or an error naming both op= and op
 static Value apply_compound(VM* vm, ObjEnv* env, Node* n, Value cur, Value rhs) {
     ObjString* op = n->as.assign.op;
     const int base = vm->sp;
@@ -2245,7 +2312,7 @@ static void exec_assign(VM* vm, Node* n, ObjEnv* env) {
                     rt_error(vm, n->line, "variable '%s' is used before it was assigned", name->chars);
                 }
 
-                /* an in-place op= changes the value, not the binding, so it works on a const too */
+                // an in-place op= changes the value, not the binding, so it works on a const too
                 if (try_in_place(vm, env, n, e->value, rhs)) {
                     break;
                 }
@@ -2293,10 +2360,10 @@ static void exec_assign(VM* vm, Node* n, ObjEnv* env) {
             break;
         }
         case N_INDEX: {
-            /* x[a] op= v: x and a are evaluated once; [](x, a) once; then op=(cur, v) or []=(x, a, op(cur, v)) */
+            // x[a] op= v: x and a are evaluated once; [](x, a) once; then op=(cur, v) or []=(x, a, op(cur, v))
             int args = vm->sp;
             vm_push(vm, eval(vm, target->as.index.obj, env));
-            for (int i = 0; i < target->as.index.args.count; i++) {
+            for (int i = 0; i < target->as.index.args.count; ++i) {
                 vm_push(vm, eval(vm, target->as.index.args.items[i], env));
             }
 
@@ -2337,7 +2404,7 @@ static void exec_let(VM* vm, Node* n, ObjEnv* env) {
             v = coerce_to(vm, type, v, env, NULL, true, what, n->line, n->as.let.name);
         }
     } else if (n->as.let.is_const) {
-        v = bool_val(true); /* `const NAME` - a define flag */
+        v = bool_val(true); // `const NAME` - a define flag
     } else {
         v = void_val();
         flags |= VAR_UNINIT;
@@ -2358,7 +2425,7 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
     int nv = n->as.enum_decl.nvariants;
     en->variants = pp_calloc((size_t)(nv ? nv : 1), sizeof(Variant));
     env_define(vm, env, en->name, obj_val(en), VAR_CONST, NULL);
-    for (int i = 0; i < nv; i++) {
+    for (int i = 0; i < nv; ++i) {
         VariantDecl* d = &n->as.enum_decl.variants[i];
         Variant* var = &en->variants[i];
         Value value = int_val(i);
@@ -2392,7 +2459,7 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
             sig->ngenerics = en->ngenerics;
             sig->nparams = d->npayload;
             sig->params = pp_calloc((size_t)(d->npayload ? d->npayload : 1), sizeof(Param));
-            for (int k = 0; k < d->npayload; k++) {
+            for (int k = 0; k < d->npayload; ++k) {
                 char pname[16];
                 snprintf(pname, sizeof pname, "_%d", k);
                 sig->params[k].name = str_cintern(vm, pname);
@@ -2412,7 +2479,7 @@ static void exec_enum(VM* vm, Node* n, ObjEnv* env) {
     }
 }
 
-/* ------------------------------------------------------------- interfaces */
+// ------------------------------------------------------------- interfaces
 
 static void exec_interface(VM* vm, Node* n, ObjEnv* env) {
     ObjString* name = n->as.iface.name;
@@ -2437,12 +2504,12 @@ static void exec_interface(VM* vm, Node* n, ObjEnv* env) {
     it->nreqs = n->as.iface.nreqs;
     it->env = env;
     it->module = module_of_env(vm, env);
-    /* rooted by env while the parents are resolved */
+    // rooted by env while the parents are resolved
     env_define(vm, env, name, obj_val(it), VAR_CONST, NULL);
     if (n->as.iface.nparents) {
         it->parent_types = n->as.iface.parents;
         it->parents = pp_malloc(sizeof(ObjInterface*) * (size_t)n->as.iface.nparents);
-        for (int i = 0; i < n->as.iface.nparents; i++) {
+        for (int i = 0; i < n->as.iface.nparents; ++i) {
             Type* pt = n->as.iface.parents[i];
             Value pv;
             if (pt->kind != TY_NAME || !resolve_type_value(vm, pt, env, &pv)) {
@@ -2468,10 +2535,10 @@ static void exec_interface(VM* vm, Node* n, ObjEnv* env) {
     }
 }
 
-/* str(Box) -> string: a requirement with the interface name replaced by the implementing type */
+// str(Box) -> string: a requirement with the interface name replaced by the implementing type
 static void requirement_to_string(Signature* sig, ObjString* self, const char* target, StrBuf* sb) {
     sb_printf(sb, "%s(", sig->name->chars);
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         if (i) {
             sb_puts(sb, ", ");
         }
@@ -2507,7 +2574,7 @@ static void add_binding(VM* vm, Bindings* b, ObjString* name, Type* type, ObjEnv
     bd->env = env;
 }
 
-/* the module that declared a named type, for looking up its exported functions */
+// the module that declared a named type, for looking up its exported functions
 static ObjModule* type_module(Value tv) {
     if (IS_KIND(tv, OBJ_TYPEDEF)) {
         return ((ObjTypeDef*)tv.as.o)->module;
@@ -2524,7 +2591,7 @@ static ObjModule* type_module(Value tv) {
     return NULL;
 }
 
-/* the table `impl` records a named type's functions in, NULL for other types */
+// the table `impl` records a named type's functions in, NULL for other types
 static Table* type_impl_table(Value tv) {
     if (IS_KIND(tv, OBJ_TYPEDEF)) {
         return &((ObjTypeDef*)tv.as.o)->impl_fns;
@@ -2555,12 +2622,10 @@ static void record_impl_fn(VM* vm, Table* fns, ObjString* name, Obj* fn) {
     overload_add(set, fn);
 }
 
-/*
- * The default implementation of requirement r for this impl: the requirement's
- * body with the interface name (and the interface's generic parameters)
- * replaced by the types of the impl, closed over the scope the interface was
- * declared in. Generic parameters of the requirement itself become `any`.
- */
+// The default implementation of requirement r for this impl: the requirement's
+// body with the interface name (and the interface's generic parameters)
+// replaced by the types of the impl, closed over the scope the interface was
+// declared in. Generic parameters of the requirement itself become `any`.
 static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
     Signature* req = it->reqs[r];
     Signature* ns = pp_malloc(sizeof(Signature));
@@ -2568,16 +2633,14 @@ static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
     ns->generics = NULL;
     ns->ngenerics = 0;
     ns->params = pp_malloc(sizeof(Param) * (size_t)(req->nparams ? req->nparams : 1));
-    for (int i = 0; i < req->nparams; i++) {
+    for (int i = 0; i < req->nparams; ++i) {
         ns->params[i].name = req->params[i].name;
         ns->params[i].type = concrete_type(vm, req->params[i].type, it->env, b);
     }
 
     ns->ret = concrete_type(vm, req->ret, it->env, b);
-    /*
-     * an unbound generic (V of <K, V>impl) concretizes to NULL = any; keep it as an explicit `any`
-     * so the default must still return a value (a NULL return type skips the check entirely)
-     */
+    // an unbound generic (V of <K, V>impl) concretizes to NULL = any; keep it as an explicit `any`
+    // so the default must still return a value (a NULL return type skips the check entirely)
     if (req->ret && !ns->ret) {
         static Type any_type = {.kind = TY_PRIM, .prim = PRIM_ANY};
         ns->ret = &any_type;
@@ -2589,18 +2652,16 @@ static ObjFunction* default_impl(VM* vm, ObjInterface* it, int r, Bindings* b) {
     return fn;
 }
 
-/*
- * Implements interface `it` (with type arguments args, written in env) for
- * target. Every function the interface lists must exist right now, written
- * for the target (a catch-all such as the built-in str(any) does not count),
- * unless the interface gives a default body. Functions are looked up where
- * the impl is written, among global functions, among the exports of the
- * module that declared the target, and among the functions earlier impls
- * recorded for it. The interfaces `it` extends are implemented first.
- *
- * via: the interface whose extension caused this impl (NULL for a written
- * impl); then a target that already implements `it` is fine.
- */
+// Implements interface `it` (with type arguments args, written in env) for
+// target. Every function the interface lists must exist right now, written
+// for the target (a catch-all such as the built-in str(any) does not count),
+// unless the interface gives a default body. Functions are looked up where
+// the impl is written, among global functions, among the exports of the
+// module that declared the target, and among the functions earlier impls
+// recorded for it. The interfaces `it` extends are implemented first.
+//
+// via: the interface whose extension caused this impl (NULL for a written
+// impl); then a target that already implements `it` is fine.
 static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Type* target, ObjEnv* env, int line,
                            ObjInterface* via, ObjString** gens, int ngens) {
     if (nargs != it->ngenerics) {
@@ -2627,12 +2688,13 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
             rt_error(vm, line, "'%s' is not a type", tname.data);
         }
 
-        for (int i = 0; i < it->nimpls; i++) {
+        for (int i = 0; i < it->nimpls; ++i) {
             Value ov;
             Impl* o = &it->impls[i];
             if (o->target->kind == TY_NAME && resolve_type_value(vm, o->target, o->env, &ov) && ov.as.o == tv.as.o) {
-                if (via) { /* already implemented, e.g. Equals written before Comparator */
+                if (via) { // already implemented, e.g. Equals written before Comparator
                     sb_free(&tname);
+
                     return;
                 }
 
@@ -2644,46 +2706,44 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
     ObjModule* tmod = type_module(tv);
     Table* fns = type_impl_table(tv);
 
-    /*
-     * The interface name means the implementing type, its generics mean the impl's type arguments.
-     * The impl's own generics (<K, V>impl ...) stay unbound: they accept anything, and a default
-     * implementation gets `any` in their place.
-     */
+    // The interface name means the implementing type, its generics mean the impl's type arguments.
+    // The impl's own generics (<K, V>impl ...) stay unbound: they accept anything, and a default
+    // implementation gets `any` in their place.
     Bindings gb;
     gb.count = 0;
-    for (int k = 0; k < ngens; k++) {
+    for (int k = 0; k < ngens; ++k) {
         add_binding(vm, &gb, gens[k], NULL, NULL, line);
     }
 
     Bindings b;
     b.count = 0;
-    for (int k = 0; k < it->ngenerics; k++) {
+    for (int k = 0; k < it->ngenerics; ++k) {
         add_binding(vm, &b, it->generics[k], args[k], env, line);
     }
 
     add_binding(vm, &b, it->name, target, env, line);
-    for (int k = 0; k < b.count; k++) {
+    for (int k = 0; k < b.count; ++k) {
         b.items[k].parent = &gb;
     }
 
-    /* the functions that satisfy the requirements; recorded on the type once every requirement is met */
+    // the functions that satisfy the requirements; recorded on the type once every requirement is met
     struct {
         ObjString* name;
         Obj* fn;
     }* found = NULL;
     int nfound = 0, capfound = 0;
-    int* defaults = NULL; /* requirements that take their default body */
+    int* defaults = NULL; // requirements that take their default body
     int ndefaults = 0, capdefaults = 0;
 
-    for (int r = 0; r < it->nreqs; r++) {
+    for (int r = 0; r < it->nreqs; ++r) {
         Signature* req = it->reqs[r];
         Bindings rb = b;
-        for (int k = 0; k < req->ngenerics; k++) {
+        for (int k = 0; k < req->ngenerics; ++k) {
             add_binding(vm, &rb, req->generics[k], NULL, NULL, line);
         }
 
         Type** ptypes = pp_malloc(sizeof(Type*) * (size_t)(req->nparams ? req->nparams : 1));
-        for (int k = 0; k < req->nparams; k++) {
+        for (int k = 0; k < req->nparams; ++k) {
             ptypes[k] = req->params[k].type;
         }
 
@@ -2710,8 +2770,8 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
         }
 
         bool ok = false;
-        /* stop at the first fit, like overload checks elsewhere: later overloads may name types not declared yet */
-        for (int k = 0; k < ncands && !ok; k++) {
+        // stop at the first fit, like overload checks elsewhere: later overloads may name types not declared yet
+        for (int k = 0; k < ncands && !ok; ++k) {
             if (!is_callable(cands[k])) {
                 continue;
             }
@@ -2724,7 +2784,7 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
                 nitems = ((ObjOverload*)c)->count;
             }
 
-            for (int i = 0; i < nitems && !ok; i++) {
+            for (int i = 0; i < nitems && !ok; ++i) {
                 Bindings tb = rb;
                 if (!callable_fits(vm, items[i], ptypes, req->nparams, req->variadic, req->ret, it->env, &tb, it->name, true)) {
                     continue;
@@ -2755,13 +2815,13 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
         }
     }
 
-    /* `impl Equals for Comparator` inside Comparator: implementing Comparator implements Equals too */
-    for (int i = 0; i < it->nparents; i++) {
+    // `impl Equals for Comparator` inside Comparator: implementing Comparator implements Equals too
+    for (int i = 0; i < it->nparents; ++i) {
         Type* pt = it->parent_types[i];
         Type** pargs = NULL;
         if (pt->nargs) {
             pargs = pp_malloc(sizeof(Type*) * (size_t)pt->nargs);
-            for (int k = 0; k < pt->nargs; k++) {
+            for (int k = 0; k < pt->nargs; ++k) {
                 pargs[k] = concrete_type(vm, pt->args[k], it->env, &b);
             }
         }
@@ -2778,17 +2838,17 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
     im->generics = gens;
     im->ngenerics = ngens;
 
-    /* dot calls and operators on values of the type can now reach these functions from any module */
-    for (int i = 0; fns && i < nfound; i++) {
+    // dot calls and operators on values of the type can now reach these functions from any module
+    for (int i = 0; fns && i < nfound; ++i) {
         record_impl_fn(vm, fns, found[i].name, found[i].fn);
     }
 
-    for (int i = 0; i < ndefaults; i++) {
+    for (int i = 0; i < ndefaults; ++i) {
         int r = defaults[i];
         int base = vm->sp;
         ObjFunction* fn = default_impl(vm, it, r, &b);
         vm_push(vm, obj_val(fn));
-        /* a type without a declaration of its own (int, string[], ...) gets the default where the impl is written */
+        // a type without a declaration of its own (int, string[], ...) gets the default where the impl is written
         if (fns) {
             record_impl_fn(vm, fns, it->reqs[r]->name, (Obj*)fn);
         } else {
@@ -2801,8 +2861,8 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
     free(found);
     free(defaults);
     sb_free(&tname);
-    /* overload choices cached at call sites may change now that values of the type fit the interface */
-    for (int i = 0; i < vm->ncaches; i++) {
+    // overload choices cached at call sites may change now that values of the type fit the interface
+    for (int i = 0; i < vm->ncaches; ++i) {
         vm->caches[i]->sets[0] = NULL;
     }
 }
@@ -2832,7 +2892,7 @@ static void exec_precedence(VM* vm, Node* n) {
     const double cur = op_prec(vm, op);
     double np = other;
     if (rel > 0 && cur > other) {
-        return; /* already binds tighter */
+        return; // already binds tighter
     }
 
     if (rel < 0 && cur < other) {
@@ -2840,10 +2900,10 @@ static void exec_precedence(VM* vm, Node* n) {
     }
 
     if (rel != 0) {
-        /* move between `other` and the next distinct level in that direction */
+        // move between `other` and the next distinct level in that direction
         double best = rel > 0 ? other + 10 : other - 10;
         double cands[1] = {65.0};
-        for (int i = -1; i < vm->prec.count; i++) {
+        for (int i = -1; i < vm->prec.count; ++i) {
             double q;
             if (i < 0) {
                 q = cands[0];
@@ -2876,7 +2936,7 @@ static void exec_export(VM* vm, Node* n);
 static void bind_import(VM* vm, ObjEnv* env, ObjString* name, Value v) {
     if (IS_KIND(v, OBJ_OVERLOAD)) {
         const ObjOverload* s = (ObjOverload*)v.as.o;
-        for (int i = 0; i < s->count; i++) {
+        for (int i = 0; i < s->count; ++i) {
             env_add_function(vm, env, name, s->items[i]);
         }
 
@@ -2902,10 +2962,8 @@ static void export_name(VM* vm, int line, ObjString* name, ObjString* alias) {
     module_export(m, name, alias);
 }
 
-/*
- * import os:fs - the export `fs` of module os, or else the file os/fs.pp next to
- * where os would be. The first segment may be missing (a plain directory).
- */
+// import os:fs - the export `fs` of module os, or else the file os/fs.pp next to
+// where os would be. The first segment may be missing (a plain directory).
 static ObjModule* import_target(VM* vm, Node* n) {
     const int nsubs = n->as.import.nsubs;
     ObjModule* m = load_module_opt(vm, n->as.import.path->chars, n->as.import.is_file, n->line, nsubs == 0);
@@ -2918,7 +2976,7 @@ static ObjModule* import_target(VM* vm, Node* n) {
     sb_init(&shown);
     sb_puts(&path, n->as.import.path->chars);
     sb_printf(&shown, n->as.import.is_file ? "\"%s\"" : "%s", n->as.import.path->chars);
-    for (int i = 0; i < nsubs; i++) {
+    for (int i = 0; i < nsubs; ++i) {
         ObjString* seg = n->as.import.subs[i];
         sb_printf(&path, "/%s", seg->chars);
         Value v;
@@ -2952,7 +3010,7 @@ static void exec_import(VM* vm, Node* n, ObjEnv* env) {
     ObjModule* m = import_target(vm, n);
     vm->cur_line = n->line;
     if (n->as.import.destructure) {
-        for (int i = 0; i < n->as.import.nnames; i++) {
+        for (int i = 0; i < n->as.import.nnames; ++i) {
             ObjString* name = n->as.import.names[i];
             Value v;
             if (!module_member(m, name, &v)) {
@@ -2967,7 +3025,7 @@ static void exec_import(VM* vm, Node* n, ObjEnv* env) {
 
     if (n->as.import.reexport) {
         if (n->as.import.destructure) {
-            for (int i = 0; i < n->as.import.nnames; i++) {
+            for (int i = 0; i < n->as.import.nnames; ++i) {
                 export_name(vm, n->line, n->as.import.names[i], n->as.import.names[i]);
             }
         } else {
@@ -3031,7 +3089,7 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
         ObjRange* r = AS_RANGE(it);
         if (range_is_float(r)) {
             int64_t len = range_length(r);
-            for (int64_t idx = 0; idx < len; idx++) {
+            for (int64_t idx = 0; idx < len; ++idx) {
                 st = run_iteration(vm, n, env, int_val(idx), range_at(r, idx), flags);
                 HANDLE_STATUS()
             }
@@ -3044,14 +3102,14 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
         }
     } else if (IS_KIND(it, OBJ_ARRAY)) {
         const ObjArray* a = AS_ARRAY(it);
-        for (int i = 0; i < a->count; i++) {
+        for (int i = 0; i < a->count; ++i) {
             st = run_iteration(vm, n, env, int_val(i), a->items[i], flags);
             HANDLE_STATUS()
         }
     } else if (IS_KIND(it, OBJ_STRING)) {
         ObjString* s = AS_STR(it);
         int64_t idx = 0;
-        for (int i = 0; i < s->len; idx++) {
+        for (int i = 0; i < s->len; ++idx) {
             int len = utf8_len((unsigned char)s->chars[i]);
             if (i + len > s->len) {
                 len = s->len - i;
@@ -3064,16 +3122,16 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
         }
     } else if (IS_KIND(it, OBJ_TUPLE)) {
         const ObjTuple* t = AS_TUPLE(it);
-        for (int i = 0; i < t->count; i++) {
+        for (int i = 0; i < t->count; ++i) {
             st = run_iteration(vm, n, env, int_val(i), t->items[i], flags);
             HANDLE_STATUS()
         }
     } else if (IS_KIND(it, OBJ_MAP) || IS_KIND(it, OBJ_SET)) {
-        /* map: for key / for key, value; set: for item / for i, item. Re-read each step: the body may grow the table */
+        // map: for key / for key, value; set: for item / for i, item. Re-read each step: the body may grow the table
         const ObjMap* m = AS_MAP(it);
         const bool is_map = IS_KIND(it, OBJ_MAP);
         int64_t idx = 0;
-        for (int i = 0; i < m->count; i++) {
+        for (int i = 0; i < m->count; ++i) {
             if (!m->entries[i].live) {
                 continue;
             }
@@ -3090,16 +3148,16 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
             HANDLE_STATUS()
         }
     } else if (IS_KIND(it, OBJ_INSTANCE) && AS_INSTANCE(it)->type->cls->length && AS_INSTANCE(it)->type->cls->get) {
-        /* for x in arr / for i, x in arr: the class's length and get; the length is re-read each step */
+        // for x in arr / for i, x in arr: the class's length and get; the length is re-read each step
         ObjInstance* inst = AS_INSTANCE(it);
         const NativeClass* cls = inst->type->cls;
-        for (int64_t i = 0; i < cls->length(inst); i++) {
+        for (int64_t i = 0; i < cls->length(inst); ++i) {
             st = run_iteration(vm, n, env, int_val(i), cls->get(vm, inst, int_val(i), n->line), flags);
             HANDLE_STATUS()
         }
     } else if (IS_KIND(it, OBJ_OBJECT)) {
         const ObjObject* o = AS_OBJECT(it);
-        for (int i = 0; i < o->fields.count; i++) {
+        for (int i = 0; i < o->fields.count; ++i) {
             const Entry* e = &o->fields.entries[i];
             if (n->as.for_.var2) {
                 st = run_iteration(vm, n, env, obj_val(e->key), e->value, flags);
@@ -3126,15 +3184,18 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             Node* e = n->as.expr.expr;
             if (e->kind == N_IF || e->kind == N_MATCH) {
                 Value out;
+
                 return exec_branchy(vm, e, env, &out);
             }
 
             if (e->kind == N_SCOPECALL) {
                 Value out;
+
                 return exec_scope_call(vm, e, env, &out);
             }
 
             eval(vm, e, env);
+
             return EX_NORMAL;
         }
         case S_LET: exec_let(vm, n, env); return EX_NORMAL;
@@ -3143,6 +3204,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         case S_TYPE: {
             if (!n->as.type_decl.def) {
                 exec_native_type(vm, n, env);
+
                 return EX_NORMAL;
             }
 
@@ -3154,6 +3216,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             td->env = env;
             td->module = module_of_env(vm, env);
             env_define(vm, env, td->name, obj_val(td), VAR_CONST, NULL);
+
             return EX_NORMAL;
         }
         case S_ENUM: exec_enum(vm, n, env); return EX_NORMAL;
@@ -3168,6 +3231,7 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             }
 
             exec_export(vm, n);
+
             return EX_NORMAL;
         case S_INTERFACE: exec_interface(vm, n, env); return EX_NORMAL;
         case S_IMPL: exec_impl(vm, n, env); return EX_NORMAL;
@@ -3195,10 +3259,11 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
         case S_CONTINUE: return EX_CONTINUE;
         case S_RETURN:
             vm->ret = n->as.ret.value ? eval(vm, n->as.ret.value, env) : void_val();
+
             return EX_RETURN;
         case N_BLOCK: return exec_block(vm, n, env, true, NULL);
         case S_DEFER: {
-            /* replaces the cleanup of the running scope call; it runs in this scope when the scope function ends */
+            // replaces the cleanup of the running scope call; it runs in this scope when the scope function ends
             ScopeCall* sc = vm->scope_top;
             if (!sc) {
                 rt_error(vm, n->line, "'defer' can only run in the body of a scope");
@@ -3207,13 +3272,14 @@ static ExecStatus exec(VM* vm, Node* n, ObjEnv* env) {
             ObjBlock* d = block_new(vm, n->as.defer.body, env, sc->name, n->line);
             d->is_defer = true;
             vm->stack[sc->slot + 1] = obj_val(d);
+
             return EX_NORMAL;
         }
         default: eval(vm, n, env); return EX_NORMAL;
     }
 }
 
-/* ---------------------------------------------------------------- modules */
+// ---------------------------------------------------------------- modules
 
 static bool file_exists(const char* path) {
     FILE* f = fopen(path, "rb");
@@ -3244,7 +3310,7 @@ static char* absolute_path(const char* path) {
 
 static char* dir_of(const char* file) {
     const char* slash = NULL;
-    for (const char* c = file; *c; c++) {
+    for (const char* c = file; *c; ++c) {
         if (*c == '/' || *c == '\\') {
             slash = c;
         }
@@ -3268,7 +3334,7 @@ static bool is_absolute(const char* p) {
 static ObjString* module_key(VM* vm, const char* abs) {
     char* k = pp_strdup(abs);
 #ifdef _WIN32
-    for (char* c = k; *c; c++) {
+    for (char* c = k; *c; ++c) {
         *c = (char)tolower((unsigned char)*c);
         if (*c == '/') {
             *c = '\\';
@@ -3291,8 +3357,8 @@ static ExecStatus run_program(VM* vm, Node* program, ObjModule* m, ObjEnv* env, 
     const ExecStatus st = exec_block(vm, program, env, false, out);
     pop_env(vm);
     if (m) {
-        /* exports may name symbols defined after the export line; check them once the module ran */
-        for (int i = 0; i < m->exports.count; i++) {
+        // exports may name symbols defined after the export line; check them once the module ran
+        for (int i = 0; i < m->exports.count; ++i) {
             ObjString* src = AS_STR(m->exports.entries[i].value);
             if (!table_find(&m->env->vars, src)) {
                 rt_error(vm, 0, "'%s' is exported but never defined at the top level of the module", src->chars);
@@ -3308,16 +3374,14 @@ static ExecStatus run_program(VM* vm, Node* program, ObjModule* m, ObjEnv* env, 
 }
 
 static void exec_export(VM* vm, Node* n) {
-    for (int i = 0; i < n->as.export_.count; i++) {
+    for (int i = 0; i < n->as.export_.count; ++i) {
         export_name(vm, n->line, n->as.export_.names[i], n->as.export_.aliases[i]);
     }
 }
 
-/*
- * import name     - native module `name`, or name.pp in a library directory
- * import "./path" - a file relative to the importing file (.pp is optional)
- */
-/* registered module name `a` ("os:fs") names library module path `b` ("os/fs") */
+// import name     - native module `name`, or name.pp in a library directory
+// import "./path" - a file relative to the importing file (.pp is optional)
+// registered module name `a` ("os:fs") names library module path `b` ("os/fs")
 static bool lib_path_is(const char* a, const char* b) {
     while (*a && *b && (*a == *b || (*a == ':' && (*b == '/' || *b == '\\')))) {
         a++, b++;
@@ -3326,9 +3390,9 @@ static bool lib_path_is(const char* a, const char* b) {
     return !*a && !*b;
 }
 
-/* the C bodies registered for library module `path` ("os/fs" is os:fs), or NULL */
+// the C bodies registered for library module `path` ("os/fs" is os:fs), or NULL
 static const NativeImpl* native_impls_for(VM* vm, const char* path) {
-    for (int i = 0; i < vm->nnative_parts; i++) {
+    for (int i = 0; i < vm->nnative_parts; ++i) {
         if (lib_path_is(vm->native_parts[i].module, path)) {
             return vm->native_parts[i].impls;
         }
@@ -3337,15 +3401,15 @@ static const NativeImpl* native_impls_for(VM* vm, const char* path) {
     return NULL;
 }
 
-/* the name library module `path` registered its C half under (functions or types), or NULL */
+// the name library module `path` registered its C half under (functions or types), or NULL
 static const char* native_lib_path(VM* vm, const char* path) {
-    for (int i = 0; i < vm->nnative_parts; i++) {
+    for (int i = 0; i < vm->nnative_parts; ++i) {
         if (lib_path_is(vm->native_parts[i].module, path)) {
             return vm->native_parts[i].module;
         }
     }
 
-    for (int i = 0; i < vm->nnative_types; i++) {
+    for (int i = 0; i < vm->nnative_types; ++i) {
         if (lib_path_is(vm->native_types[i]->lib_module, path)) {
             return vm->native_types[i]->lib_module;
         }
@@ -3354,10 +3418,94 @@ static const char* native_lib_path(VM* vm, const char* path) {
     return NULL;
 }
 
-/* required = false: returns NULL instead of failing when no such module exists */
+// the file a module path names: next to from_file for a file import, else in the search paths.
+// Returns NULL when there is none; the places tried are appended to `tried` (may be NULL). Caller frees.
+static char* find_module_file(VM* vm, const char* path, bool is_file, const char* from_file, StrBuf* tried) {
+    const size_t plen = strlen(path);
+    const bool has_ext = plen > 3 && strcmp(path + plen - 3, ".pp") == 0;
+    char** dirs = pp_malloc(sizeof(char*) * (size_t)(vm->nsearch + 1));
+    int ndirs = 0;
+    if (is_file) {
+        if (!is_absolute(path)) {
+            dirs[ndirs++] = (from_file && from_file[0] != '<') ? dir_of(from_file) : pp_strdup(".");
+        }
+    } else {
+        for (int i = 0; i < vm->nsearch; ++i) {
+            dirs[ndirs++] = pp_strdup(vm->search_paths[i]);
+        }
+    }
+
+    char* found = NULL;
+    if (is_file && is_absolute(path)) {
+        StrBuf c;
+        sb_init(&c);
+        sb_printf(&c, "%s%s", path, has_ext ? "" : ".pp");
+        if (file_exists(c.data)) {
+            found = pp_strdup(c.data);
+        } else if (tried) {
+            sb_printf(tried, "\n    %s", c.data);
+        }
+
+        sb_free(&c);
+    }
+
+    for (int i = 0; i < ndirs && !found; ++i) {
+        StrBuf c;
+        sb_init(&c);
+        sb_printf(&c, "%s/%s%s", dirs[i], path, has_ext ? "" : ".pp");
+#ifdef _WIN32
+        for (size_t k = 0; k < c.len; ++k) {
+            if (c.data[k] == '/') {
+                c.data[k] = '\\';
+            }
+        }
+#endif
+        if (file_exists(c.data)) {
+            found = pp_strdup(c.data);
+        } else if (tried) {
+            sb_printf(tried, "\n    %s", c.data);
+        }
+
+        sb_free(&c);
+    }
+
+    for (int i = 0; i < ndirs; ++i) {
+        free(dirs[i]);
+    }
+
+    free(dirs);
+    if (!found) {
+        return NULL;
+    }
+
+    char* abs = absolute_path(found);
+    free(found);
+
+    return abs;
+}
+
+char* vm_find_module_file(VM* vm, const char* path, bool is_file, const char* from_file) {
+    return find_module_file(vm, path, is_file, from_file, NULL);
+}
+
+NativeModuleInit vm_native_module(VM* vm, const char* name) {
+    for (int i = 0; i < vm->nnative_modules; ++i) {
+        if (strcmp(vm->native_modules[i].name, name) == 0) {
+            return vm->native_modules[i].init;
+        }
+    }
+
+    return NULL;
+}
+
+const NativeImpl* vm_native_impls(VM* vm, const char* path) {
+    return native_impls_for(vm, path);
+}
+
+// required = false: returns NULL instead of failing when no such module exists
 static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int line, bool required) {
     if (!is_file) {
-        for (int i = 0; i < vm->nnative_modules; i++) {
+        for (int i = 0; i < vm->nnative_modules; ++i) {
             if (strcmp(vm->native_modules[i].name, path) != 0) {
                 continue;
             }
@@ -3368,73 +3516,24 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
             Entry* e = table_find_chars(&vm->modules, key.data, (int)key.len, hash_chars(key.data, (int)key.len));
             if (e) {
                 sb_free(&key);
+
                 return (ObjModule*)e->value.as.o;
             }
 
             ObjModule* m = vm->native_modules[i].init(vm);
             table_set(&vm->modules, str_new(vm, key.data, (int)key.len), obj_val(m));
             sb_free(&key);
+
             return m;
         }
     }
 
-    size_t plen = strlen(path);
-    bool has_ext = plen > 3 && strcmp(path + plen - 3, ".pp") == 0;
-    char** dirs = pp_malloc(sizeof(char*) * (size_t)(vm->nsearch + 1));
-    int ndirs = 0;
-    if (is_file) {
-        if (!is_absolute(path)) {
-            dirs[ndirs++] = (vm->cur_file && vm->cur_file[0] != '<') ? dir_of(vm->cur_file) : pp_strdup(".");
-        }
-    } else {
-        for (int i = 0; i < vm->nsearch; i++) {
-            dirs[ndirs++] = pp_strdup(vm->search_paths[i]);
-        }
-    }
-
-    char* found = NULL;
     StrBuf tried;
     sb_init(&tried);
-    if (is_file && is_absolute(path)) {
-        StrBuf c;
-        sb_init(&c);
-        sb_printf(&c, "%s%s", path, has_ext ? "" : ".pp");
-        if (file_exists(c.data)) {
-            found = pp_strdup(c.data);
-        } else {
-            sb_printf(&tried, "\n    %s", c.data);
-        }
-
-        sb_free(&c);
-    }
-
-    for (int i = 0; i < ndirs && !found; i++) {
-        StrBuf c;
-        sb_init(&c);
-        sb_printf(&c, "%s/%s%s", dirs[i], path, has_ext ? "" : ".pp");
-#ifdef _WIN32
-        for (size_t k = 0; k < c.len; k++) {
-            if (c.data[k] == '/') {
-                c.data[k] = '\\';
-            }
-        }
-#endif
-        if (file_exists(c.data)) {
-            found = pp_strdup(c.data);
-        } else {
-            sb_printf(&tried, "\n    %s", c.data);
-        }
-
-        sb_free(&c);
-    }
-
-    for (int i = 0; i < ndirs; i++) {
-        free(dirs[i]);
-    }
-
-    free(dirs);
+    char* found = find_module_file(vm, path, is_file, vm->cur_file, &tried);
     if (!found && !required) {
         sb_free(&tried);
+
         return NULL;
     }
 
@@ -3443,18 +3542,18 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
             rt_error(vm, line, "cannot find file \"%s\", tried:%s", path, tried.data);
         }
 
-        rt_error(vm, line, "cannot find module '%s'%s%s%s", path, ndirs ? ", tried:" : "", tried.data,
+        rt_error(vm, line, "cannot find module '%s'%s%s%s", path, vm->nsearch ? ", tried:" : "", tried.data,
                  "\n  (files are imported with a path string: import \"./file\")");
     }
 
     sb_free(&tried);
 
-    char* abs = absolute_path(found);
-    free(found);
+    char* abs = found;
     ObjString* key = module_key(vm, abs);
     Entry* cached = table_find(&vm->modules, key);
     if (cached) {
         free(abs);
+
         return (ObjModule*)cached->value.as.o;
     }
 
@@ -3464,13 +3563,18 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
         rt_error(vm, line, "cannot read module '%s'", abs);
     }
 
-    Node* program = parse_program(vm, src, abs);
+    // the checker parsed (and annotated) the module already: run that tree
+    Node* program = vm->preparsed ? vm->preparsed(vm, abs) : NULL;
+    if (!program) {
+        program = parse_program(vm, src, abs);
+    }
+
     if (!program) {
         rt_error(vm, line, "module '%s' failed to parse", path);
     }
 
     const char* base = abs;
-    for (const char* c = abs; *c; c++) {
+    for (const char* c = abs; *c; ++c) {
         if (*c == '/' || *c == '\\') {
             base = c + 1;
         }
@@ -3489,13 +3593,13 @@ static ObjModule* load_module_opt(VM* vm, const char* path, bool is_file, int li
         m->lib_path = native_lib_path(vm, path);
     }
 
-    table_set(&vm->modules, key, obj_val(m)); /* cached before running: cyclic imports see a partial module */
+    table_set(&vm->modules, key, obj_val(m)); // cached before running: cyclic imports see a partial module
     run_program(vm, program, m, m->env, abs, NULL);
 
     return m;
 }
 
-/* ----------------------------------------------------------------- entry */
+// ----------------------------------------------------------------- entry
 
 static void vm_reset(VM* vm) {
     vm->sp = 0;
@@ -3515,22 +3619,53 @@ int vm_run_file(VM* vm, const char* path) {
     if (setjmp(jb)) {
         vm->err_jmp = prev;
         vm_reset(vm);
+
         return 1;
     }
 
+    const char* abs = NULL;
+    int code = 0;
+    Node* program = vm_parse_file(vm, path, &abs, &code);
+    if (!program) {
+        vm->err_jmp = prev;
+
+        return code;
+    }
+
+    vm->err_jmp = prev;
+
+    return vm_run_program(vm, program, abs);
+}
+
+Node* vm_parse_file(VM* vm, const char* path, const char** abs_out, int* code) {
     const char* abs = absolute_path(path);
+    *abs_out = abs;
     size_t len;
     const char* src = pp_read_file(abs, &len);
     if (!src) {
         fprintf(stderr, "error: cannot open file '%s'\n", path);
-        vm->err_jmp = prev;
-        return 66;
+        *code = 66;
+
+        return NULL;
     }
 
     Node* program = parse_program(vm, src, abs);
     if (!program) {
+        *code = 65;
+    }
+
+    return program;
+}
+
+int vm_run_program(VM* vm, Node* program, const char* abs) {
+    jmp_buf jb;
+    jmp_buf* prev = vm->err_jmp;
+    vm->err_jmp = &jb;
+    if (setjmp(jb)) {
         vm->err_jmp = prev;
-        return 65;
+        vm_reset(vm);
+
+        return 1;
     }
 
     ObjModule* m = module_new(vm, "__main__", abs, vm->builtins);
@@ -3549,12 +3684,14 @@ int vm_exec_repl(VM* vm, const char* src, ObjEnv* env) {
     if (setjmp(jb)) {
         vm->err_jmp = prev;
         vm_reset(vm);
+
         return 1;
     }
 
     Node* program = parse_program(vm, pp_strdup(src), "<repl>");
     if (!program) {
         vm->err_jmp = prev;
+
         return 1;
     }
 
@@ -3627,17 +3764,17 @@ VM* vm_new(int argc, char** argv) {
         {"...", 50}, {"...=", 50}, {"+", 60}, {"-", 60}, {"*", 70}, {"/", 70}, {"%", 70}, {"**", 80},
         {NULL, 0},
     };
-    for (int i = 0; precs[i].op; i++) {
+    for (int i = 0; precs[i].op; ++i) {
         table_set(&vm->prec, str_cintern(vm, precs[i].op), float_val(precs[i].prec));
     }
 
-    /* std:Map and std:Set are permanent: outside the object list, never collected */
+    // std:Map and std:Set are permanent: outside the object list, never collected
     static const struct {
         const char* name;
         NativeTypeKind which;
         int ngenerics;
     } ntypes[] = {{"Map", NT_MAP, 2}, {"Set", NT_SET, 1}};
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; ++i) {
         ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
         t->obj.kind = OBJ_NATIVE_TYPE;
         t->obj.permanent = true;
@@ -3654,11 +3791,11 @@ VM* vm_new(int argc, char** argv) {
 
     vm->builtins = env_new(vm, NULL);
     builtins_register(vm);
-    /* x[i] / x[i] = v: overloads like any other, the built-in collections first */
+    // x[i] / x[i] = v: overloads like any other, the built-in collections first
     def_native(vm, vm->builtins, "[]", "(any[] array, int index)", n_index_get);
     def_native(vm, vm->builtins, "[]", "(string s, int index) -> string", n_index_get);
     def_native(vm, vm->builtins, "[]", "(object o, string key)", n_index_get);
-    def_native(vm, vm->builtins, "[]", "(any value, any key)", n_index_get_any); /* tuples, and the error for the rest */
+    def_native(vm, vm->builtins, "[]", "(any value, any key)", n_index_get_any); // tuples, and the error for the rest
     def_native(vm, vm->builtins, "[]=", "(any[] array, int index, any value) -> void", n_index_set);
     def_native(vm, vm->builtins, "[]=", "(object o, string key, any value) -> void", n_index_set);
     def_native(vm, vm->builtins, "[]=", "(any value, any key, any new_value) -> void", n_index_set_any);

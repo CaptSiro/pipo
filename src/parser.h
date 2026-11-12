@@ -3,10 +3,12 @@
 
 #include "vm.h"
 
-/* Parses a whole source file into an N_BLOCK. Prints diagnostics and returns NULL on error. */
+// Parses a whole source file into an N_BLOCK. Prints diagnostics and returns NULL on error.
 Node* parse_program(VM* vm, const char* src, const char* file);
 
-/* Parses a signature such as "<T>(T[] arr, T item) -> int" for an internal function. */
+// Parses a signature such as "<T>(T[] arr, T item) -> int" for an internal function.
 Signature* parse_native_signature(VM* vm, const char* name, const char* sig);
 
-#endif
+
+
+#endif // PP_PARSER_H

@@ -38,7 +38,8 @@ Not global. Printing and reading come from the `io` module
 | `int(x)`                                           | from float (truncates), bool, numeric string or int-valued enum. Errors otherwise |
 | `float(x)`                                         | from int or numeric string                                                        |
 | `parse_int(s) -> int?`, `parse_float(s) -> float?` | `none()` instead of an error                                                      |
-| `type_of(x) -> string`                             | `int`, `string`, `array`, `Person`, `Option`, ...                                 |
+| `type_of(x) -> string`                             | the **static** type: `int`, `int[]`, `Person`, `int?`, `unknown`, ... (known when checked; `x` is not evaluated) |
+| `get_type(x) -> string`                            | the type of the **value**: `int`, `string`, `array`, `Person`, `Option`, `Map`, ... |
 | `enum_value(v)`                                    | value associated with an enum variant                                             |
 
 ## Arrays

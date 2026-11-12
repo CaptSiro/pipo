@@ -1,15 +1,13 @@
-/*
- * The `os` module and its `os:fs` submodule:
- *
- *     import os
- *     io:print(os:platform, os:args())
- *     if os:fs:is_dir("lib") { ... }
- *
- *     import os:fs                // just the submodule, bound as `fs`
- *     import os:fs -> { exists }
- *
- * Kept deliberately small; it is also the example of a native submodule.
- */
+// The `os` module and its `os:fs` submodule:
+//
+//     import os
+//     io:print(os:platform, os:args())
+//     if os:fs:is_dir("lib") { ... }
+//
+//     import os:fs                // just the submodule, bound as `fs`
+//     import os:fs -> { exists }
+//
+// Kept deliberately small; it is also the example of a native submodule.
 #include "vm.h"
 
 #ifdef _WIN32
@@ -20,11 +18,13 @@
 #define PP_PLATFORM "linux"
 #endif
 
-/* args() -> string[]: the script path and everything after it */
+
+
+// args() -> string[]: the script path and everything after it
 static Value os_args(VM* vm, int argc, Value* a) {
     ObjArray* arr = array_new(vm, vm->argc);
     vm_push(vm, obj_val(arr));
-    for (int i = 1; i < vm->argc; i++) {
+    for (int i = 1; i < vm->argc; ++i) {
         array_push(arr, obj_val(str_cnew(vm, vm->argv[i])));
     }
 
@@ -51,10 +51,8 @@ static bool path_is_absolute(const char* p) {
     return ((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z')) && p[1] == ':';
 }
 
-/*
- * Appends one path part: exactly one separator between parts, an absolute
- * part starts over (like Python's os.path.join), an empty part is skipped.
- */
+// Appends one path part: exactly one separator between parts, an absolute
+// part starts over (like Python's os.path.join), an empty part is skipped.
 static void join_part(StrBuf* sb, const char* part) {
     if (!part[0]) {
         return;
@@ -76,7 +74,7 @@ static void join_part(StrBuf* sb, const char* part) {
 }
 
 static Value join_args(VM* vm, const char* fname, StrBuf* sb, int argc, Value* a) {
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; ++i) {
         if (!IS_KIND(a[i], OBJ_STRING)) {
             rt_error(vm, 0, "os:%s expects strings, but argument %d is %s", fname, i + 1, value_type_name(a[i]));
         }
@@ -90,7 +88,7 @@ static Value join_args(VM* vm, const char* fname, StrBuf* sb, int argc, Value* a
     return v;
 }
 
-/* join(parts...) -> string: os:join("data", "order.txt") == "data\order.txt" on Windows */
+// join(parts...) -> string: os:join("data", "order.txt") == "data\order.txt" on Windows
 static Value os_join(VM* vm, int argc, Value* a) {
     StrBuf sb;
     sb_init(&sb);
@@ -98,7 +96,7 @@ static Value os_join(VM* vm, int argc, Value* a) {
     return join_args(vm, "join", &sb, argc, a);
 }
 
-/* join_pp(parts...) -> string: os:join(pp:dir(), parts...), relative to the file the call is written in */
+// join_pp(parts...) -> string: os:join(pp:dir(), parts...), relative to the file the call is written in
 static Value os_join_pp(VM* vm, int argc, Value* a) {
     StrBuf sb;
     sb_init(&sb);

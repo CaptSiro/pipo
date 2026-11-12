@@ -1,4 +1,4 @@
-tuple(1, "a", 2.5) 3 a 2.5 tuple tuple(1, "a", 2.5)
+tuple(1, "a", 2.5) 3 a 2.5 tuple<int, string, float> tuple(1, "a", 2.5)
 tuple(1, "a", 2.5) tuple(7)
 true false true
 true false true

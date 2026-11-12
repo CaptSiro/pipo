@@ -155,8 +155,9 @@ Assigning `int` to a `float` variable or parameter converts it.
 |-------------------------|----------------------------------------------|
 | `int float string bool` | primitives                                   |
 | `void`                  | no value (return type only)                  |
-| `any`                   | anything (same as leaving the type out)      |
-| `object range function type` | any record / range / callable / type    |
+| `unknown` (or `any`)    | any value, boxed with its type; opened with `x as T` ([STATIC_TYPING.md](STATIC_TYPING.md)) |
+| `object range function type` | any record (fields are `unknown`) / range / callable / type |
+| `range<int>`, `range<float>` | a range that counts in ints / floats |
 | `T[]`                   | array of T                                   |
 | `tuple<A, B, ...>`      | tuple: exactly these elements, in this order (at least one) |
 | `std:Map<K, V>`, `std:Set<T>` | hash map / set from `lib/std.pp`; bare `std:Map` is any map; made by `std:map(...)` / `std:set(...)` |
@@ -664,6 +665,7 @@ a | b, a & b, a - b                 // union, intersection, difference (also a.u
 ## Arithmetic
 
 * `int op int` gives an `int`, with 64-bit wrap-around. Mixing in a float gives a float.
+* `int ** int` is an `int`; a negative exponent is an error (`2.0 ** -1` is `0.5`).
 * **Decision:** `/` on two ints truncates (like C). `%` takes the sign of the
   divisor (like Python). Division by zero is an error for ints and gives `inf` for floats.
 * `==` compares structurally (arrays, objects, enum values). `1 == 1.0`.
@@ -732,6 +734,8 @@ See [PACKAGES.md](PACKAGES.md) for lookup rules and the `io` module.
 
 ## Errors
 
-Runtime errors print `file:line: error: message` and a stack traceback, then
-exit with code 1. Syntax errors exit with code 65. There is no `try` yet.
+Type errors are found before the program runs, also in code that never runs
+(see [STATIC_TYPING.md](STATIC_TYPING.md)); they print `file:line: error: message`
+and exit with code 65, like syntax errors. Runtime errors print the same and a
+stack traceback, then exit with code 1. There is no `try` yet.
 Recoverable failures use `Error<S, F>` values.

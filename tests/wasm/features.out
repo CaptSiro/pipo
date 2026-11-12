@@ -1,0 +1,33 @@
+counter 3
+apply 11 81
+sum_to 55
+adders 10 11 12
+value 18
+t0 t1 t2 
+open find
+close find
+found 2
+open find
+close find
+missing
+open loop0
+body 0
+close loop0
+open loop1
+close loop1
+open loop2
+close loop2
+twice 300
+open outer
+close outer
+nested 200
+int 2
+string two!
+other 3.5 float
+other [4] array
+[1, "two", 3.5, [4]] some(2.0)
+area 7.0
+["apple", "fig", "pear"] [4, 5, 3] ["pear", "apple"] pear-apple-fig
+ABC ["a", "b", "c"] e ell some(42) none()
+ 3.14|7   |ok true true
+[13, 1] some(2) [13, 1] 6

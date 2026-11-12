@@ -3,4 +3,4 @@
 printable Box(2.5) something else
 6
 true false
-<interface Str> interface
+<interface Str> type

@@ -1,30 +1,30 @@
-/*
- * Runtime type matching.
- *
- * type_match() answers "does value v fit type t?" and, at the same time, how
- * well it fits. The score drives overload resolution: the candidate whose
- * parameters fit the arguments best (highest summed score) wins.
- *
- *   0   no match
- *   1   any / untyped
- *   2   generic parameter, int widened to float, plain `object`
- *   3   structural record match, function, callback type, empty typed array
- *   4   exact primitive / enum match, interface implemented by the value's type
- *   5   nominal record match (object declared as that type)
- *
- * Callback types and interfaces also need to compare a type with a type
- * ("does a function taking `float` fit `int -> void`?"). That is
- * type_accepts() further down. It is permissive where nothing is known
- * (untyped, `any`, unbound generics): calls are checked at runtime anyway.
- */
+// Runtime type matching.
+//
+// type_match() answers "does value v fit type t?" and, at the same time, how
+// well it fits. The score drives overload resolution: the candidate whose
+// parameters fit the arguments best (highest summed score) wins.
+//
+//   0   no match
+//   1   any / untyped
+//   2   generic parameter, int widened to float, plain `object`
+//   3   structural record match, function, callback type, empty typed array
+//   4   exact primitive / enum match, interface implemented by the value's type
+//   5   nominal record match (object declared as that type)
+//
+// Callback types and interfaces also need to compare a type with a type
+// ("does a function taking `float` fit `int -> void`?"). That is
+// type_accepts() further down. It is permissive where nothing is known
+// (untyped, `any`, unbound generics): calls are checked at runtime anyway.
 #include "vm.h"
+
+
 
 static Binding* find_binding(Bindings* b, ObjString* name) {
     if (!b) {
         return NULL;
     }
 
-    for (int i = 0; i < b->count; i++) {
+    for (int i = 0; i < b->count; ++i) {
         if (b->items[i].name == name) {
             return &b->items[i];
         }
@@ -35,7 +35,7 @@ static Binding* find_binding(Bindings* b, ObjString* name) {
 
 static bool is_callable_obj(Obj* o) {
     return o->kind == OBJ_FUNCTION || o->kind == OBJ_NATIVE || o->kind == OBJ_OVERLOAD ||
-           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF || o->kind == OBJ_BLOCK;
+           o->kind == OBJ_VARIANT_CTOR || o->kind == OBJ_TYPEDEF || o->kind == OBJ_BLOCK || o->kind == OBJ_CLOSURE;
 }
 
 bool same_kind(Value a, Value b) {
@@ -101,7 +101,7 @@ static void make_bindings(VM* vm, Bindings* nb, ObjString** names, Type** defaul
     }
 
     nb->count = n;
-    for (int i = 0; i < n; i++) {
+    for (int i = 0; i < n; ++i) {
         Binding* bd = &nb->items[i];
         memset(bd, 0, sizeof *bd);
         bd->name = names[i];
@@ -117,17 +117,18 @@ static void make_bindings(VM* vm, Bindings* nb, ObjString** names, Type** defaul
 }
 
 static void qualified_name(Type* t, StrBuf* sb) {
-    for (int i = 0; i < t->nquals; i++) {
+    for (int i = 0; i < t->nquals; ++i) {
         sb_printf(sb, "%s:", t->quals[i]->chars);
     }
 
     sb_puts(sb, t->name->chars);
 }
 
-/* finds the value (typedef / enum / interface) a named type refers to; a:b:Name goes through module exports */
+// finds the value (typedef / enum / interface) a named type refers to; a:b:Name goes through module exports
 bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out) {
     if (t->direct) {
         *out = obj_val(t->direct);
+
         return true;
     }
 
@@ -141,7 +142,7 @@ bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out) {
         }
 
         Value cur = m->value;
-        for (int i = 0; i < t->nquals; i++) {
+        for (int i = 0; i < t->nquals; ++i) {
             if (!IS_KIND(cur, OBJ_MODULE)) {
                 rt_error(vm, t->line, "'%s' is not a module", t->quals[i]->chars);
             }
@@ -159,6 +160,7 @@ bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out) {
         }
 
         *out = cur;
+
         return true;
     }
 
@@ -168,6 +170,7 @@ bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out) {
     }
 
     *out = e->value;
+
     return true;
 }
 
@@ -198,11 +201,9 @@ static int min_score(int a, int b) {
     return a < b ? a : b;
 }
 
-/*
- * std:Map<K, V> / std:Set<T> (or bare std:Map, any keys and values). Like an
- * array, dispatch looks at the first entry only and a declaration (deep)
- * checks them all: 2 + the weakest element score, 3 when empty.
- */
+// std:Map<K, V> / std:Set<T> (or bare std:Map, any keys and values). Like an
+// array, dispatch looks at the first entry only and a declaration (deep)
+// checks them all: 2 + the weakest element score, 3 when empty.
 static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
     if (nt->which == NT_CLASS) {
         if (t->nargs) {
@@ -231,7 +232,7 @@ static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env
     }
 
     int best = 5;
-    for (int i = 0; i < m->count; i++) {
+    for (int i = 0; i < m->count; ++i) {
         const MapEntry* e = &m->entries[i];
         if (!e->live) {
             continue;
@@ -262,7 +263,7 @@ static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env
 
 static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
     if (!t->nquals && !t->direct && (t->name == vm->s_block || t->name == vm->s_callback)) {
-        /* Block<T> / Callback<T>: the body of a scope call; it takes its kind from the first parameter it is passed to */
+        // Block<T> / Callback<T>: the body of a scope call; it takes its kind from the first parameter it is passed to
         if (t->nargs > 1) {
             rt_error(vm, t->line, "type '%s' takes at most one type argument", t->name->chars);
         }
@@ -272,6 +273,7 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
         }
 
         const ObjBlock* bl = (ObjBlock*)v.as.o;
+
         return !bl->bound || bl->callback == (t->name == vm->s_callback) ? 5 : 0;
     }
 
@@ -287,6 +289,7 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
 
         bd->sample = v;
         bd->bound = true;
+
         return 2;
     }
 
@@ -299,6 +302,7 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
 
         Bindings nb;
         make_bindings(vm, &nb, td->generics, NULL, td->ngenerics, td->env, t, env, b);
+
         return type_match(vm, td->def, v, td->env, &nb, deep);
     }
 
@@ -313,7 +317,7 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
             make_bindings(vm, &nb, en->generics, en->defaults, en->ngenerics, en->env, t, env, b);
             ObjEnumValue* ev = AS_ENUMV(v);
             Variant* var = &en->variants[ev->variant];
-            for (int i = 0; i < ev->count && i < var->npayload; i++) {
+            for (int i = 0; i < ev->count && i < var->npayload; ++i) {
                 if (!type_match(vm, var->payload[i], ev->payload[i], en->env, &nb, deep)) {
                     return 0;
                 }
@@ -340,7 +344,13 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
     }
 
     switch (t->kind) {
-        case TY_PRIM: return prim_match(t->prim, v);
+        case TY_PRIM:
+            if (t->prim == PRIM_RANGE && t->inner && IS_KIND(v, OBJ_RANGE)) {
+                // range<int> / range<float>
+                return range_is_float(AS_RANGE(v)) == (t->inner->prim == PRIM_FLOAT) ? 4 : 0;
+            }
+
+            return prim_match(t->prim, v);
         case TY_ARRAY: {
             if (!IS_KIND(v, OBJ_ARRAY)) {
                 return 0;
@@ -351,14 +361,14 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
                 return 3;
             }
 
-            /* dispatch only inspects the first element; declarations (deep) check all */
+            // dispatch only inspects the first element; declarations (deep) check all
             const int s = type_match(vm, t->inner, a->items[0], env, b, deep);
             if (!s) {
                 return 0;
             }
 
             if (deep) {
-                for (int i = 1; i < a->count; i++) {
+                for (int i = 1; i < a->count; ++i) {
                     if (!type_match(vm, t->inner, a->items[i], env, b, deep)) {
                         return 0;
                     }
@@ -371,6 +381,7 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
             int x = type_match(vm, t->a, v, env, b, deep);
             const int y = type_match(vm, t->b, v, env, b, deep);
             const int m = x > y ? x : y;
+
             return m > 1 ? m - 1 : m;
         }
         case TY_RECORD: {
@@ -379,7 +390,7 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
             }
 
             ObjObject* o = AS_OBJECT(v);
-            for (int i = 0; i < t->nfields; i++) {
+            for (int i = 0; i < t->nfields; ++i) {
                 const Entry* e = table_find(&o->fields, t->fnames[i]);
                 if (!e || !type_match(vm, t->ftypes[i], e->value, env, b, deep)) {
                     return 0;
@@ -396,7 +407,7 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
             return callable_fits(vm, v.as.o, t->args, t->nargs, t->variadic, t->inner, env, b, NULL, false) ? 3 : 0;
         case TY_NAME: return match_named(vm, t, v, env, b, deep);
         case TY_TUPLE: {
-            /* exactly as many elements as type arguments, each one fitting: 2 + the weakest */
+            // exactly as many elements as type arguments, each one fitting: 2 + the weakest
             if (!IS_KIND(v, OBJ_TUPLE)) {
                 return 0;
             }
@@ -407,7 +418,7 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
             }
 
             int best = 5;
-            for (int i = 0; i < tp->count; i++) {
+            for (int i = 0; i < tp->count; ++i) {
                 int x = type_match(vm, t->args[i], tp->items[i], env, b, deep);
                 if (!x) {
                     return 0;
@@ -427,7 +438,7 @@ static bool is_void_type(Type* t) {
     return t && t->kind == TY_PRIM && t->prim == PRIM_VOID;
 }
 
-/* ------------------------------------------------- type against type */
+// ------------------------------------------------- type against type
 
 typedef struct {
     Type* t;
@@ -446,9 +457,9 @@ static TRef tref(Type* t, ObjEnv* env, Bindings* b) {
 
 enum { RES_TYPE, RES_SAMPLE, RES_ANY };
 
-/* follows generic parameters to what they are bound to */
+// follows generic parameters to what they are bound to
 static int follow(TRef* r, Value* sample) {
-    for (int guard = 0; guard < 64; guard++) {
+    for (int guard = 0; guard < 64; ++guard) {
         const Type* t = r->t;
         if (!t || (t->kind == TY_PRIM && t->prim == PRIM_ANY)) {
             return RES_ANY;
@@ -470,6 +481,7 @@ static int follow(TRef* r, Value* sample) {
 
         if (bd->bound) {
             *sample = bd->sample;
+
             return RES_SAMPLE;
         }
 
@@ -481,13 +493,13 @@ static int follow(TRef* r, Value* sample) {
 
 static bool type_accepts(VM* vm, TRef p, TRef a, bool strict);
 
-/* child is parent or extends it, directly or through other interfaces */
+// child is parent or extends it, directly or through other interfaces
 bool interface_extends(ObjInterface* child, ObjInterface* parent) {
     if (child == parent) {
         return true;
     }
 
-    for (int i = 0; i < child->nparents; i++) {
+    for (int i = 0; i < child->nparents; ++i) {
         if (interface_extends(child->parents[i], parent)) {
             return true;
         }
@@ -496,17 +508,17 @@ bool interface_extends(ObjInterface* child, ObjInterface* parent) {
     return false;
 }
 
-/* the generic parameters of a generic impl, unbound: they accept anything until a value binds them */
+// the generic parameters of a generic impl, unbound: they accept anything until a value binds them
 static void impl_bindings(Impl* im, Bindings* b) {
     b->count = im->ngenerics < PP_MAX_BINDINGS ? im->ngenerics : PP_MAX_BINDINGS;
-    for (int i = 0; i < b->count; i++) {
+    for (int i = 0; i < b->count; ++i) {
         memset(&b->items[i], 0, sizeof(Binding));
         b->items[i].name = im->generics[i];
     }
 }
 
 static bool interface_covers(VM* vm, ObjInterface* it, TRef a) {
-    for (int i = 0; i < it->nimpls; i++) {
+    for (int i = 0; i < it->nimpls; ++i) {
         Bindings ib;
         impl_bindings(&it->impls[i], &ib);
         if (type_accepts(vm, tref(it->impls[i].target, it->impls[i].env, &ib), a, true)) {
@@ -517,7 +529,7 @@ static bool interface_covers(VM* vm, ObjInterface* it, TRef a) {
     return false;
 }
 
-/* a callback of type a can be passed where type p is expected */
+// a callback of type a can be passed where type p is expected
 static bool fn_type_accepts(VM* vm, TRef p, TRef a) {
     if (p.t->variadic || a.t->variadic) {
         return true;
@@ -527,7 +539,7 @@ static bool fn_type_accepts(VM* vm, TRef p, TRef a) {
         return false;
     }
 
-    for (int i = 0; i < p.t->nargs; i++) {
+    for (int i = 0; i < p.t->nargs; ++i) {
         if (!type_accepts(vm, tref(a.t->args[i], a.env, a.b), tref(p.t->args[i], p.env, p.b), false)) {
             return false;
         }
@@ -548,17 +560,16 @@ static Type* record_of(Type* t, Value named, ObjEnv** env) {
 
     if (is_record_typedef(named)) {
         *env = ((ObjTypeDef*)named.as.o)->env;
+
         return ((ObjTypeDef*)named.as.o)->def;
     }
 
     return NULL;
 }
 
-/*
- * Does a parameter of type p accept every value of type a? With `strict`, a
- * parameter that accepts anything (untyped, `any`) does not count: an interface
- * wants a function written for the type, not a catch-all.
- */
+// Does a parameter of type p accept every value of type a? With `strict`, a
+// parameter that accepts anything (untyped, `any`) does not count: an interface
+// wants a function written for the type, not a catch-all.
 static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
     Value ps, as;
     const int pk = follow(&p, &ps);
@@ -592,6 +603,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
             const ObjTypeDef* td = (ObjTypeDef*)av.as.o;
             Bindings nb;
             make_bindings(vm, &nb, td->generics, NULL, td->ngenerics, td->env, at, a.env, a.b);
+
             return type_accepts(vm, p, tref(td->def, td->env, &nb), strict);
         }
     }
@@ -606,6 +618,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
             const ObjTypeDef* td = (ObjTypeDef*)pv.as.o;
             Bindings nb;
             make_bindings(vm, &nb, td->generics, NULL, td->ngenerics, td->env, pt, p.env, p.b);
+
             return type_accepts(vm, tref(td->def, td->env, &nb), a, strict);
         }
 
@@ -614,7 +627,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
         }
 
         if (IS_KIND(pv, OBJ_NATIVE_TYPE)) {
-            /* Map<K, V> accepts Map<K2, V2> when the arguments do; a bare std:Map accepts any map */
+            // Map<K, V> accepts Map<K2, V2> when the arguments do; a bare std:Map accepts any map
             if (at->kind != TY_NAME || av.as.o != pv.as.o) {
                 return false;
             }
@@ -623,7 +636,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
                 return true;
             }
 
-            for (int i = 0; i < pt->nargs && i < at->nargs; i++) {
+            for (int i = 0; i < pt->nargs && i < at->nargs; ++i) {
                 if (!type_accepts(vm, tref(pt->args[i], p.env, p.b), tref(at->args[i], a.env, a.b), false)) {
                     return false;
                 }
@@ -633,7 +646,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
         }
 
         if (IS_KIND(pv, OBJ_INTERFACE)) {
-            /* a Comparator can be passed where an Equals is expected when Comparator extends Equals */
+            // a Comparator can be passed where an Equals is expected when Comparator extends Equals
             if (at->kind == TY_NAME && IS_KIND(av, OBJ_INTERFACE) &&
                 interface_extends((ObjInterface*)av.as.o, (ObjInterface*)pv.as.o)) {
                 return true;
@@ -673,9 +686,9 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
                 return false;
             }
 
-            for (int i = 0; i < pt->nfields; i++) {
+            for (int i = 0; i < pt->nfields; ++i) {
                 int k = -1;
-                for (int j = 0; j < rec->nfields; j++) {
+                for (int j = 0; j < rec->nfields; ++j) {
                     if (rec->fnames[j] == pt->fnames[i] || str_equals(rec->fnames[j], pt->fnames[i]->chars)) {
                         k = j;
                     }
@@ -698,7 +711,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
                 return false;
             }
 
-            for (int i = 0; i < pt->nargs; i++) {
+            for (int i = 0; i < pt->nargs; ++i) {
                 if (!type_accepts(vm, tref(pt->args[i], p.env, p.b), tref(at->args[i], a.env, a.b), false)) {
                     return false;
                 }
@@ -710,7 +723,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
     }
 }
 
-/* -------------------------------------------- callbacks and interfaces */
+// -------------------------------------------- callbacks and interfaces
 
 static Signature* obj_sig(Obj* o) {
     switch (o->kind) {
@@ -724,27 +737,29 @@ static Signature* obj_sig(Obj* o) {
 static ObjEnv* obj_env(VM* vm, Obj* o) {
     switch (o->kind) {
         case OBJ_FUNCTION: return ((ObjFunction*)o)->closure;
-        /* a `native function` declared in a .pp module names that module's types (std:Map in lib/std.pp) */
+        // a `native function` declared in a .pp module names that module's types (std:Map in lib/std.pp)
         case OBJ_NATIVE: return ((ObjNative*)o)->env ? ((ObjNative*)o)->env : vm->builtins;
         case OBJ_VARIANT_CTOR: return ((ObjVariantCtor*)o)->en->env;
         default: return vm->builtins;
     }
 }
 
-/*
- * Can callable c be called with arguments of types args[] and give a result
- * that fits ret? For an overload set, one fitting member is enough.
- *
- * Callback mode (impl_mode false): a missing return type is accepted and a
- * `void` callback ignores the result.
- * Interface mode: parameters typed `self` (the interface name) must be written
- * for the implementing type, and the return type must be declared and fit.
- */
+// Can callable c be called with arguments of types args[] and give a result
+// that fits ret? For an overload set, one fitting member is enough.
+//
+// Callback mode (impl_mode false): a missing return type is accepted and a
+// `void` callback ignores the result.
+// Interface mode: parameters typed `self` (the interface name) must be written
+// for the implementing type, and the return type must be declared and fit.
 bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* ret, ObjEnv* fenv, Bindings* fb,
                    ObjString* self, bool impl_mode) {
+    if (c->kind == OBJ_CLOSURE) {
+        return true; // compiled code: the checker made sure it fits
+    }
+
     if (c->kind == OBJ_OVERLOAD) {
         const ObjOverload* set = (ObjOverload*)c;
-        for (int i = 0; i < set->count; i++) {
+        for (int i = 0; i < set->count; ++i) {
             if (callable_fits(vm, set->items[i], args, nargs, variadic, ret, fenv, fb, self, impl_mode)) {
                 return true;
             }
@@ -758,7 +773,7 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
     }
 
     if (c->kind == OBJ_NATIVE_TYPE) {
-        return false; /* not callable */
+        return false; // not callable
     }
 
     const Signature* sig = obj_sig(c);
@@ -780,13 +795,13 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
 
     Bindings cb;
     cb.count = sig->ngenerics;
-    for (int i = 0; i < sig->ngenerics; i++) {
+    for (int i = 0; i < sig->ngenerics; ++i) {
         memset(&cb.items[i], 0, sizeof(Binding));
         cb.items[i].name = sig->generics[i];
     }
 
     ObjEnv* cenv = obj_env(vm, c);
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         Type* at = args[i];
         const bool strict = impl_mode && self && at && at->kind == TY_NAME && !at->nquals && at->name == self;
         if (!type_accepts(vm, tref(sig->params[i].type, cenv, &cb), tref(at, fenv, fb), strict)) {
@@ -817,17 +832,15 @@ bool callable_fits(VM* vm, Obj* c, Type** args, int nargs, bool variadic, Type* 
     return type_accepts(vm, tref(ret, fenv, fb), tref(sig->ret, cenv, &cb), false);
 }
 
-/* ------------------------------------------ lambdas adopt callback types */
+// ------------------------------------------ lambdas adopt callback types
 
-/*
- * `const ToInt cb = f -> int(f)` gives the lambda the parameter types of
- * ToInt, as if it were written `(float f) -> int(f)`. The types are copied out
- * of the callback type into "concrete" types: generic parameters replaced by
- * what they are bound to in this call, names resolved to the typedef / enum /
- * interface they mean (Type.direct). That way they stay valid wherever the
- * lambda is called. Concrete types are deduplicated in vm->ctypes, so passing
- * lambdas in a loop does not keep allocating.
- */
+// `const ToInt cb = f -> int(f)` gives the lambda the parameter types of
+// ToInt, as if it were written `(float f) -> int(f)`. The types are copied out
+// of the callback type into "concrete" types: generic parameters replaced by
+// what they are bound to in this call, names resolved to the typedef / enum /
+// interface they mean (Type.direct). That way they stay valid wherever the
+// lambda is called. Concrete types are deduplicated in vm->ctypes, so passing
+// lambdas in a loop does not keep allocating.
 
 static void free_type_shallow(Type* t) {
     free(t->args);
@@ -836,9 +849,9 @@ static void free_type_shallow(Type* t) {
     free(t);
 }
 
-/* children are interned first, so comparing child pointers is enough */
+// children are interned first, so comparing child pointers is enough
 static Type* intern_type(VM* vm, Type* t) {
-    for (int i = 0; i < vm->nctypes; i++) {
+    for (int i = 0; i < vm->nctypes; ++i) {
         Type* o = vm->ctypes[i];
         if (o->kind != t->kind || o->prim != t->prim || o->direct != t->direct || o->nargs != t->nargs ||
             o->variadic != t->variadic || o->inner != t->inner || o->a != t->a || o->b != t->b || o->nfields != t->nfields) {
@@ -846,16 +859,17 @@ static Type* intern_type(VM* vm, Type* t) {
         }
 
         bool same = true;
-        for (int k = 0; k < t->nargs && same; k++) {
+        for (int k = 0; k < t->nargs && same; ++k) {
             same = o->args[k] == t->args[k];
         }
 
-        for (int k = 0; k < t->nfields && same; k++) {
+        for (int k = 0; k < t->nfields && same; ++k) {
             same = o->fnames[k] == t->fnames[k] && o->ftypes[k] == t->ftypes[k];
         }
 
         if (same) {
             free_type_shallow(t);
+
             return o;
         }
     }
@@ -888,7 +902,7 @@ static Type* direct_ctype(VM* vm, Obj* o, ObjString* name) {
     return intern_type(vm, t);
 }
 
-/* a generic bound to "the kind of this value" becomes that kind's type */
+// a generic bound to "the kind of this value" becomes that kind's type
 static Type* sample_type(VM* vm, Value v) {
     switch (v.kind) {
         case VAL_VOID: return NULL;
@@ -901,9 +915,10 @@ static Type* sample_type(VM* vm, Value v) {
     switch (v.as.o->kind) {
         case OBJ_STRING: return prim_ctype(vm, PRIM_STRING);
         case OBJ_RANGE: return prim_ctype(vm, PRIM_RANGE);
-        case OBJ_ARRAY: return intern_type(vm, new_ctype(TY_ARRAY)); /* element type unknown: any[] */
+        case OBJ_ARRAY: return intern_type(vm, new_ctype(TY_ARRAY)); // element type unknown: any[]
         case OBJ_OBJECT: {
             ObjTypeDef* tag = AS_OBJECT(v)->tag;
+
             return tag ? direct_ctype(vm, (Obj*)tag, tag->name) : prim_ctype(vm, PRIM_OBJECT);
         }
         case OBJ_ENUM_VALUE: return direct_ctype(vm, (Obj*)AS_ENUMV(v)->en, AS_ENUMV(v)->en->name);
@@ -915,20 +930,21 @@ static Type* sample_type(VM* vm, Value v) {
         case OBJ_ENUM:
         case OBJ_INTERFACE:
         case OBJ_NATIVE_TYPE: return prim_ctype(vm, PRIM_TYPE);
-        case OBJ_MAP: return direct_ctype(vm, (Obj*)vm->t_map, vm->t_map->name); /* element types unknown: any map */
+        case OBJ_MAP: return direct_ctype(vm, (Obj*)vm->t_map, vm->t_map->name); // element types unknown: any map
         case OBJ_SET: return direct_ctype(vm, (Obj*)vm->t_set, vm->t_set->name);
         case OBJ_INSTANCE: return direct_ctype(vm, (Obj*)AS_INSTANCE(v)->type, AS_INSTANCE(v)->type->name);
         case OBJ_TUPLE: {
-            Type* c = new_ctype(TY_TUPLE); /* element types unknown: tuple<any, ...> */
+            Type* c = new_ctype(TY_TUPLE); // element types unknown: tuple<any, ...>
             c->nargs = AS_TUPLE(v)->count;
             c->args = pp_calloc((size_t)(c->nargs ? c->nargs : 1), sizeof(Type*));
+
             return intern_type(vm, c);
         }
         default: return NULL;
     }
 }
 
-/* NULL means "any" */
+// NULL means "any"
 static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
     if (!t || depth > 32) {
         return NULL;
@@ -938,7 +954,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
         case TY_PRIM: return t->prim == PRIM_ANY ? NULL : prim_ctype(vm, t->prim);
         case TY_NAME: {
             if (t->direct) {
-                return t; /* already concrete */
+                return t; // already concrete
             }
 
             TRef r = tref(t, env, b);
@@ -963,7 +979,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
             if (t->nargs) {
                 c->args = pp_malloc(sizeof(Type*) * (size_t)t->nargs);
                 c->nargs = t->nargs;
-                for (int i = 0; i < t->nargs; i++) {
+                for (int i = 0; i < t->nargs; ++i) {
                     c->args[i] = concretize(vm, t->args[i], env, b, depth + 1);
                 }
             }
@@ -973,6 +989,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
         case TY_ARRAY: {
             Type* c = new_ctype(TY_ARRAY);
             c->inner = concretize(vm, t->inner, env, b, depth + 1);
+
             return intern_type(vm, c);
         }
         case TY_UNION: {
@@ -985,6 +1002,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
             Type* c = new_ctype(TY_UNION);
             c->a = x;
             c->b = y;
+
             return intern_type(vm, c);
         }
         case TY_RECORD: {
@@ -992,7 +1010,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
             c->nfields = t->nfields;
             c->fnames = pp_malloc(sizeof(ObjString*) * (size_t)(t->nfields ? t->nfields : 1));
             c->ftypes = pp_malloc(sizeof(Type*) * (size_t)(t->nfields ? t->nfields : 1));
-            for (int i = 0; i < t->nfields; i++) {
+            for (int i = 0; i < t->nfields; ++i) {
                 c->fnames[i] = t->fnames[i];
                 c->ftypes[i] = concretize(vm, t->ftypes[i], env, b, depth + 1);
             }
@@ -1003,7 +1021,7 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
             Type* c = new_ctype(TY_TUPLE);
             c->nargs = t->nargs;
             c->args = pp_malloc(sizeof(Type*) * (size_t)(t->nargs ? t->nargs : 1));
-            for (int i = 0; i < t->nargs; i++) {
+            for (int i = 0; i < t->nargs; ++i) {
                 c->args[i] = concretize(vm, t->args[i], env, b, depth + 1);
             }
 
@@ -1014,11 +1032,12 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
             c->variadic = t->variadic;
             c->nargs = t->nargs;
             c->args = pp_malloc(sizeof(Type*) * (size_t)(t->nargs ? t->nargs : 1));
-            for (int i = 0; i < t->nargs; i++) {
+            for (int i = 0; i < t->nargs; ++i) {
                 c->args[i] = concretize(vm, t->args[i], env, b, depth + 1);
             }
 
             c->inner = concretize(vm, t->inner, env, b, depth + 1);
+
             return intern_type(vm, c);
         }
     }
@@ -1026,18 +1045,16 @@ static Type* concretize(VM* vm, Type* t, ObjEnv* env, Bindings* b, int depth) {
     return NULL;
 }
 
-/* t with generic parameters replaced by what b binds them to and names resolved: valid in any env (NULL = any) */
+// t with generic parameters replaced by what b binds them to and names resolved: valid in any env (NULL = any)
 Type* concrete_type(VM* vm, Type* t, ObjEnv* env, Bindings* b) {
     return concretize(vm, t, env, b, 0);
 }
 
-/*
- * If v is a lambda with untyped parameters (or no return type) and t is a
- * callback type, returns a copy of the lambda whose untyped parameters have the
- * callback's parameter types and whose return type is the callback's (unless
- * that is void: a void callback ignores the result). Otherwise returns v.
- * `name` (the variable / parameter / field) names the copy in error messages.
- */
+// If v is a lambda with untyped parameters (or no return type) and t is a
+// callback type, returns a copy of the lambda whose untyped parameters have the
+// callback's parameter types and whose return type is the callback's (unless
+// that is void: a void callback ignores the result). Otherwise returns v.
+// `name` (the variable / parameter / field) names the copy in error messages.
 Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, ObjString* name) {
     if (!t || !IS_KIND(v, OBJ_FUNCTION)) {
         return v;
@@ -1046,11 +1063,11 @@ Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, O
     ObjFunction* fn = (ObjFunction*)v.as.o;
     Signature* sig = fn->sig;
     if (!sig->implicit_result) {
-        return v; /* only lambdas */
+        return v; // only lambdas
     }
 
     bool open = !sig->ret;
-    for (int i = 0; i < sig->nparams && !open; i++) {
+    for (int i = 0; i < sig->nparams && !open; ++i) {
         open = !sig->params[i].type;
     }
 
@@ -1058,7 +1075,7 @@ Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, O
         return v;
     }
 
-    /* find the callback type behind aliases such as Consumer<T> */
+    // find the callback type behind aliases such as Consumer<T>
     TRef r = tref(t, env, b);
     Bindings nb[8];
     int nnb = 0;
@@ -1096,7 +1113,7 @@ Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, O
     *ns = *sig;
     ns->params = pp_malloc(sizeof(Param) * (size_t)(sig->nparams ? sig->nparams : 1));
     bool changed = false;
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         ns->params[i] = sig->params[i];
         if (!sig->params[i].type) {
             ns->params[i].type = concretize(vm, ft->args[i], r.env, r.b, 0);
@@ -1116,6 +1133,7 @@ Value adopt_callback_types(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, O
     if (!changed) {
         free(ns->params);
         free(ns);
+
         return v;
     }
 
@@ -1135,15 +1153,15 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
                  app->nargs);
     }
 
-    for (int i = 0; i < it->nimpls; i++) {
+    for (int i = 0; i < it->nimpls; ++i) {
         Impl* im = &it->impls[i];
-        /* <K, V>impl Index<K, V> for std:Map<K, V>: matching the value binds K and V */
+        // <K, V>impl Index<K, V> for std:Map<K, V>: matching the value binds K and V
         Bindings ib;
         impl_bindings(im, &ib);
         Value tv;
         bool fits;
         if (im->target->kind == TY_NAME && resolve_type_value(vm, im->target, im->env, &tv) && is_record_typedef(tv)) {
-            fits = IS_KIND(v, OBJ_OBJECT) && AS_OBJECT(v)->tag == (ObjTypeDef*)tv.as.o; /* nominal */
+            fits = IS_KIND(v, OBJ_OBJECT) && AS_OBJECT(v)->tag == (ObjTypeDef*)tv.as.o; // nominal
         } else {
             fits = type_match(vm, im->target, v, im->env, &ib, false) > 0;
         }
@@ -1153,7 +1171,7 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
         }
 
         bool args_ok = true;
-        for (int k = 0; k < app->nargs && args_ok; k++) {
+        for (int k = 0; k < app->nargs && args_ok; ++k) {
             TRef x = tref(im->args[k], im->env, &ib);
             TRef y = tref(app->args[k], env, b);
             args_ok = type_accepts(vm, x, y, false) && type_accepts(vm, y, x, false);
@@ -1167,7 +1185,7 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
     return 0;
 }
 
-/* ------------------------------------------------------------- printing */
+// ------------------------------------------------------------- printing
 
 static const char* prim_name(Prim p) {
     switch (p) {
@@ -1189,11 +1207,18 @@ static const char* prim_name(Prim p) {
 void type_to_string(Type* t, StrBuf* sb) {
     if (!t) {
         sb_puts(sb, "any");
+
         return;
     }
 
     switch (t->kind) {
-        case TY_PRIM: sb_puts(sb, prim_name(t->prim)); break;
+        case TY_PRIM:
+            sb_puts(sb, prim_name(t->prim));
+            if (t->prim == PRIM_RANGE && t->inner) {
+                sb_printf(sb, "<%s>", prim_name(t->inner->prim));
+            }
+
+            break;
         case TY_NAME:
             if (str_equals(t->name, "Option") && t->nargs == 1) {
                 type_to_string(t->args[0], sb);
@@ -1204,7 +1229,7 @@ void type_to_string(Type* t, StrBuf* sb) {
             qualified_name(t, sb);
             if (t->nargs) {
                 sb_putc(sb, '<');
-                for (int i = 0; i < t->nargs; i++) {
+                for (int i = 0; i < t->nargs; ++i) {
                     if (i) {
                         sb_puts(sb, ", ");
                     }
@@ -1227,7 +1252,7 @@ void type_to_string(Type* t, StrBuf* sb) {
             break;
         case TY_RECORD:
             sb_puts(sb, "{ ");
-            for (int i = 0; i < t->nfields; i++) {
+            for (int i = 0; i < t->nfields; ++i) {
                 if (i) {
                     sb_puts(sb, ", ");
                 }
@@ -1243,7 +1268,7 @@ void type_to_string(Type* t, StrBuf* sb) {
                 type_to_string(t->args[0], sb);
             } else {
                 sb_putc(sb, '(');
-                for (int i = 0; i < t->nargs; i++) {
+                for (int i = 0; i < t->nargs; ++i) {
                     if (i) {
                         sb_puts(sb, ", ");
                     }
@@ -1263,7 +1288,7 @@ void type_to_string(Type* t, StrBuf* sb) {
             break;
         case TY_TUPLE:
             sb_puts(sb, "tuple<");
-            for (int i = 0; i < t->nargs; i++) {
+            for (int i = 0; i < t->nargs; ++i) {
                 if (i) {
                     sb_puts(sb, ", ");
                 }
@@ -1279,7 +1304,7 @@ void type_to_string(Type* t, StrBuf* sb) {
 void sig_to_string(Signature* sig, StrBuf* sb) {
     if (sig->ngenerics) {
         sb_putc(sb, '<');
-        for (int i = 0; i < sig->ngenerics; i++) {
+        for (int i = 0; i < sig->ngenerics; ++i) {
             if (i) {
                 sb_puts(sb, ", ");
             }
@@ -1291,7 +1316,7 @@ void sig_to_string(Signature* sig, StrBuf* sb) {
     }
 
     sb_printf(sb, "%s(", sig->name->chars);
-    for (int i = 0; i < sig->nparams; i++) {
+    for (int i = 0; i < sig->nparams; ++i) {
         if (i) {
             sb_puts(sb, ", ");
         }

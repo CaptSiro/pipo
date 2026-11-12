@@ -1,1 +1,1 @@
-expected P but got object
+cannot initialize 'p': expected P but got { string a }

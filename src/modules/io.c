@@ -1,17 +1,17 @@
-/*
- * The `io` module:
- *
- *     import io
- *     io:print("hello", 42)
- *     io:write("no newline" + io:nl)
- *
- * It is a native module: its functions are written in C, and the module is
- * created the first time something imports it.
- */
+// The `io` module:
+//
+//     import io
+//     io:print("hello", 42)
+//     io:write("no newline" + io:nl)
+//
+// It is a native module: its functions are written in C, and the module is
+// created the first time something imports it.
 #include "vm.h"
 
+
+
 static Value format_args(VM* vm, StrBuf* sb, int argc, Value* a) {
-    for (int i = 0; i < argc; i++) {
+    for (int i = 0; i < argc; ++i) {
         if (i) {
             sb_putc(sb, ' ');
         }
@@ -101,7 +101,7 @@ static Value fail_errno(VM* vm, const char* what, const char* path) {
     return r;
 }
 
-/* read_file(path) -> Error<string> */
+// read_file(path) -> Error<string>
 static Value io_read_file(VM* vm, int argc, Value* a) {
     const char* path = AS_STR(a[0])->chars;
     size_t len;
@@ -116,7 +116,7 @@ static Value io_read_file(VM* vm, int argc, Value* a) {
     return make_success(vm, s);
 }
 
-/* write_file(path, content) -> Error<int> (bytes written) */
+// write_file(path, content) -> Error<int> (bytes written)
 static Value io_write_file(VM* vm, int argc, Value* a) {
     const char* path = AS_STR(a[0])->chars;
     const ObjString* content = AS_STR(a[1]);
@@ -138,13 +138,13 @@ static ObjModule* io_init(VM* vm) {
     ObjModule* m = module_new(vm, "io", "<native io>", vm->builtins);
     vm_push(vm, obj_val(m));
     def_const_str(vm, m->env, "nl", "\n");
-    def_native(vm, m->env, "print", "(...)", io_print);
-    def_native(vm, m->env, "print_nl", "(...)", io_print_nl);
-    def_native(vm, m->env, "eprint", "(...)", io_eprint);
-    def_native(vm, m->env, "eprint_nl", "(...)", io_eprint_nl);
+    def_native(vm, m->env, "print", "(...) -> void", io_print);
+    def_native(vm, m->env, "print_nl", "(...) -> void", io_print_nl);
+    def_native(vm, m->env, "eprint", "(...) -> void", io_eprint);
+    def_native(vm, m->env, "eprint_nl", "(...) -> void", io_eprint_nl);
     def_native(vm, m->env, "input", "(...) -> string", io_input);
-    def_native(vm, m->env, "read_file", "(string path)", io_read_file);
-    def_native(vm, m->env, "write_file", "(string path, string content)", io_write_file);
+    def_native(vm, m->env, "read_file", "(string path) -> Error<string>", io_read_file);
+    def_native(vm, m->env, "write_file", "(string path, string content) -> Error<int>", io_write_file);
     module_export_all(m);
     vm->sp--;
 

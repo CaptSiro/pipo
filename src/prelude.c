@@ -1,8 +1,6 @@
-/*
- * The prelude is ordinary source code that runs in the builtins scope before
- * any user program. Things that can be expressed in the language itself live
- * here instead of in C.
- */
+// The prelude is ordinary source code that runs in the builtins scope before
+// any user program. Things that can be expressed in the language itself live
+// here instead of in C.
 const char* PP_PRELUDE =
     "type number = int || float\n"
     "\n"

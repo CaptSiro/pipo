@@ -15,7 +15,7 @@ impl ord:Comparator for Money
 const Money a = { cents: 100 }
 const Money b = { cents: 250 }
 io:print_nl(a != b, a != a, a > b, b > a, a >= a, b >= a)
-io:print_nl(ord:max(a, b), ord:max(b, a):cents)
+io:print_nl(ord:max(a, b), (ord:max(b, a) as Money).unwrap():cents)
 
 // a Comparator is accepted where an Equals is expected
 function same(ord:Equals x, ord:Equals y) -> bool { return x == y }

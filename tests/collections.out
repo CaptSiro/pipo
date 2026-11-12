@@ -8,7 +8,7 @@ anna
 bob
 [tuple("john", 22), tuple("anna", 31), tuple("bob", 40)]
 some(22) none() Map{"anna": 31, "bob": 40}
-32 Map Map{"anna": 32, "bob": 40} Map{"anna": 32, "bob": 40}
+32 Map<string, int> Map{"anna": 32, "bob": 40} Map{"anna": 32, "bob": 40}
 Map{"a": 1, "b": 2} true false true
 some("one") one false
 some("s1") n none()
@@ -19,7 +19,7 @@ origin ?
 Map{} 0 none()
 Map{"again": 1}
 50500 some(-1) some(-2) some(199998) 4999000500
-Set{1, 2, 3} 3 true false true Set
+Set{1, 2, 3} 3 true false true Set<int>
 Set{1, 2, 3, 4} Set{2, 3} Set{2, 3}
 Set{1, 2, 3, 0} Set{} Set{}
 false true true false Set{2, 3, 10} [2, 3, 10]

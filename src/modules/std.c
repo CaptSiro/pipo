@@ -1,18 +1,16 @@
-/*
- * The C half of lib/std.pp (a mixed module): bodies of its `native` functions,
- * including the functions of std:Map and std:Set.
- */
+// The C half of lib/std.pp (a mixed module): bodies of its `native` functions,
+// including the functions of std:Map and std:Set.
 #include <math.h>
 
 #include "vm.h"
 
-/*
- * has(range r, number x): is x one of the elements a for loop over r visits,
- * i.e. x == start + k*step for some 0 <= k < #r. Int ranges are exact. When
- * the range or x is a float, k is rounded to the nearest element and x must be
- * within a tiny fraction of the step from it, so 0.3 in range(0, 1, 0.1) holds
- * even though 3 * 0.1 is 0.30000000000000004.
- */
+
+
+// has(range r, number x): is x one of the elements a for loop over r visits,
+// i.e. x == start + k*step for some 0 <= k < #r. Int ranges are exact. When
+// the range or x is a float, k is rounded to the nearest element and x must be
+// within a tiny fraction of the step from it, so 0.3 in range(0, 1, 0.1) holds
+// even though 3 * 0.1 is 0.30000000000000004.
 static Value std_range_has(VM* vm, int argc, Value* a) {
     ObjRange* r = AS_RANGE(a[0]);
     const Value x = a[1];
@@ -28,6 +26,7 @@ static Value std_range_has(VM* vm, int argc, Value* a) {
         }
 
         const int64_t k = d / step;
+
         return bool_val(k >= 0 && k < len);
     }
 
@@ -46,11 +45,10 @@ static Value std_range_has(VM* vm, int argc, Value* a) {
     return bool_val(fabs(elem - xf) <= fabs(step) * 1e-9);
 }
 
-/**
- * Checks only start and end, does not take in count step property.
- * The bounds follow the range's direction and end: 0...5 is [0, 5),
- * 5...1 is (1, 5], 5...=1 is [1, 5] and range(0, 1, 0.25) is [0, 1).
- */
+// *
+// Checks only start and end, does not take in count step property.
+// The bounds follow the range's direction and end: 0...5 is [0, 5),
+// 5...1 is (1, 5], 5...=1 is [1, 5] and range(0, 1, 0.25) is [0, 1).
 static Value std_in_range(VM* vm, int argc, Value* a) {
     const Value x = a[0];
     const ObjRange* r = AS_RANGE(a[1]);
@@ -63,21 +61,21 @@ static Value std_in_range(VM* vm, int argc, Value* a) {
     const double step = num_as_double(r->step);
     double end = num_as_double(r->end);
     if (r->inclusive) {
-        /* ...= stored end one step past the last element: undo that, the end is included */
+        // ...= stored end one step past the last element: undo that, the end is included
         end -= step;
+
         return bool_val(step > 0 ? xf >= start && xf <= end : xf <= start && xf >= end);
     }
 
     return bool_val(step > 0 ? xf >= start && xf < end : xf <= start && xf > end);
 }
 
-/* ------------------------------------------------- std:Map and std:Set
- *
- * The tables themselves are in src/collections.c. Overload resolution has
- * already checked the receiver (Map<K, V> / Set<T>) before these run.
- */
+// ------------------------------------------------- std:Map and std:Set
+//
+// The tables themselves are in src/collections.c. Overload resolution has
+// already checked the receiver (Map<K, V> / Set<T>) before these run.
 
-/* the constructors: std:map(), std:map(from), std:set(), std:set(from) (see native_type_construct) */
+// the constructors: std:map(), std:map(from), std:set(), std:set(from) (see native_type_construct)
 static Value map_new_fn(VM* vm, int argc, Value* a) {
     return native_type_construct(vm, vm->t_map, argc, a, 0);
 }
@@ -88,16 +86,18 @@ static Value set_new_fn(VM* vm, int argc, Value* a) {
 
 static Value map_get_fn(VM* vm, int argc, Value* a) {
     const MapEntry* e = map_find(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0));
+
     return e ? make_some(vm, e->value) : make_none(vm);
 }
 
 
 static Value map_put_fn(VM* vm, int argc, Value* a) {
     map_put(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0), a[2]);
+
     return void_val();
 }
 
-/* has(map, key) and has(set, item) */
+// has(map, key) and has(set, item)
 static Value map_has(VM* vm, int argc, Value* a) {
     return bool_val(map_find(AS_MAP(a[0]), a[1], hash_key(vm, a[1], 0)) != NULL);
 }
@@ -123,11 +123,11 @@ static Value set_add(VM* vm, int argc, Value* a) {
     return bool_val(s->live != before);
 }
 
-/* the keys of a map, the items of a set: in insertion order */
+// the keys of a map, the items of a set: in insertion order
 static Value map_keys(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
-    for (int i = 0; i < m->count; i++) {
+    for (int i = 0; i < m->count; ++i) {
         if (m->entries[i].live) {
             r->items[r->count++] = m->entries[i].key;
         }
@@ -139,7 +139,7 @@ static Value map_keys(VM* vm, int argc, Value* a) {
 static Value map_values(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
-    for (int i = 0; i < m->count; i++) {
+    for (int i = 0; i < m->count; ++i) {
         if (m->entries[i].live) {
             r->items[r->count++] = m->entries[i].value;
         }
@@ -148,11 +148,11 @@ static Value map_values(VM* vm, int argc, Value* a) {
     return obj_val(r);
 }
 
-/* [tuple(key, value), ...]; no GC can run inside a native, so the half-built array is safe */
+// [tuple(key, value), ...]; no GC can run inside a native, so the half-built array is safe
 static Value map_entries(VM* vm, int argc, Value* a) {
     ObjMap* m = AS_MAP(a[0]);
     ObjArray* r = array_new(vm, m->live);
-    for (int i = 0; i < m->count; i++) {
+    for (int i = 0; i < m->count; ++i) {
         if (!m->entries[i].live) {
             continue;
         }
@@ -168,15 +168,16 @@ static Value map_entries(VM* vm, int argc, Value* a) {
 
 static Value map_clear_fn(VM* vm, int argc, Value* a) {
     map_clear(AS_MAP(a[0]));
+
     return void_val();
 }
 
-/* union / intersection / difference build a new set, in the order of a, then b */
+// union / intersection / difference build a new set, in the order of a, then b
 static Value set_combine(VM* vm, Value* a, int mode) {
     const ObjMap* x = AS_MAP(a[0]);
     ObjMap* y = AS_MAP(a[1]);
     ObjMap* r = map_new(vm, OBJ_SET);
-    for (int i = 0; i < x->count; i++) {
+    for (int i = 0; i < x->count; ++i) {
         const MapEntry* e = &x->entries[i];
         if (!e->live) {
             continue;
@@ -189,7 +190,7 @@ static Value set_combine(VM* vm, Value* a, int mode) {
     }
 
     if (mode == 0) {
-        for (int i = 0; i < y->count; i++) {
+        for (int i = 0; i < y->count; ++i) {
             if (y->entries[i].live) {
                 map_put(r, y->entries[i].key, y->entries[i].hash, void_val());
             }

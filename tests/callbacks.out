@@ -20,5 +20,5 @@ block 3
 Thunk ToInt ToInt
 7
 clicked ok [1, 2, 3] [1, 4, 9]
-function true
+ToInt true
 big

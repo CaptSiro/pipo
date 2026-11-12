@@ -35,7 +35,7 @@ nums.fill(1, 1, 3)
 io:print_nl(nums, nums.slice(1), nums.slice(1, -1), nums.to_array(), nums.element_size())
 const fs = types:float64array(3)
 fs.fill(2)
-io:print_nl(fs, fs.to_array(), fs.element_size(), type_of(fs.slice(0, 1)))
+io:print_nl(fs, fs.to_array(), fs.element_size(), get_type(fs.slice(0, 1)))
 types:copy_into(nums, 0, nums, 1, 4)    // ranges may overlap
 io:print_nl(nums)
 
@@ -49,7 +49,7 @@ function sum(types:IntArray a) -> int {
     for x in a { t += x }
     return t
 }
-function kind(types:TypedArray a) -> string { return type_of(a) }
+function kind(types:TypedArray a) -> string { return get_type(a) }
 function kind(any a) -> string { return "other" }
 io:print_nl(sum(bytes), sum(types:int16array([1, 2])), kind(floats), kind([1, 2]))
 const types:FloatArray fa = floats

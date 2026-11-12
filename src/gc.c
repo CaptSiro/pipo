@@ -1,12 +1,12 @@
-/*
- * Mark & sweep garbage collector.
- *
- * Collection only happens at statement boundaries (gc_maybe is called before
- * each statement executes). Every value that is alive across the execution of
- * a statement must therefore be reachable from a root: the value stack, the
- * scope stack, the builtins scope or the module cache.
- */
+// Mark & sweep garbage collector.
+//
+// Collection only happens at statement boundaries (gc_maybe is called before
+// each statement executes). Every value that is alive across the execution of
+// a statement must therefore be reachable from a root: the value stack, the
+// scope stack, the builtins scope or the module cache.
 #include "vm.h"
+
+
 
 static Obj** gray;
 static int ngray, capgray;
@@ -28,7 +28,7 @@ static void mark_value(Value v) {
 }
 
 static void mark_table(Table* t) {
-    for (int i = 0; i < t->count; i++) {
+    for (int i = 0; i < t->count; ++i) {
         mark_obj((Obj*)t->entries[i].key);
         mark_value(t->entries[i].value);
     }
@@ -39,10 +39,10 @@ static void blacken(Obj* o) {
         case OBJ_STRING:
         case OBJ_RANGE:
         case OBJ_NATIVE_TYPE:
-        case OBJ_INSTANCE: break; /* its type is permanent, and instances hold no GC references */
+        case OBJ_INSTANCE: break; // its type is permanent, and instances hold no GC references
         case OBJ_TUPLE: {
             const ObjTuple* t = (ObjTuple*)o;
-            for (int i = 0; i < t->count; i++) {
+            for (int i = 0; i < t->count; ++i) {
                 mark_value(t->items[i]);
             }
 
@@ -51,7 +51,7 @@ static void blacken(Obj* o) {
         case OBJ_MAP:
         case OBJ_SET: {
             ObjMap* m = (ObjMap*)o;
-            for (int i = 0; i < m->count; i++) {
+            for (int i = 0; i < m->count; ++i) {
                 if (!m->entries[i].live) {
                     continue;
                 }
@@ -65,7 +65,7 @@ static void blacken(Obj* o) {
         case OBJ_NATIVE: mark_obj((Obj*)((ObjNative*)o)->env); break;
         case OBJ_ARRAY: {
             const ObjArray* a = (ObjArray*)o;
-            for (int i = 0; i < a->count; i++) {
+            for (int i = 0; i < a->count; ++i) {
                 mark_value(a->items[i]);
             }
 
@@ -78,9 +78,17 @@ static void blacken(Obj* o) {
             break;
         }
         case OBJ_FUNCTION: mark_obj((Obj*)((ObjFunction*)o)->closure); break;
+        case OBJ_CLOSURE: {
+            const ObjClosure* cl = (ObjClosure*)o;
+            for (int i = 0; i < cl->ncaps; ++i) {
+                mark_value(cl->caps[i]);
+            }
+
+            break;
+        }
         case OBJ_OVERLOAD: {
             const ObjOverload* s = (ObjOverload*)o;
-            for (int i = 0; i < s->count; i++) {
+            for (int i = 0; i < s->count; ++i) {
                 mark_obj(s->items[i]);
             }
 
@@ -91,7 +99,7 @@ static void blacken(Obj* o) {
             mark_obj((Obj*)en->env);
             mark_obj((Obj*)en->module);
             mark_table(&en->impl_fns);
-            for (int i = 0; i < en->nvariants; i++) {
+            for (int i = 0; i < en->nvariants; ++i) {
                 mark_value(en->variants[i].value);
                 mark_obj((Obj*)en->variants[i].singleton);
                 mark_obj((Obj*)en->variants[i].ctor);
@@ -103,7 +111,7 @@ static void blacken(Obj* o) {
         case OBJ_ENUM_VALUE: {
             const ObjEnumValue* ev = (ObjEnumValue*)o;
             mark_obj((Obj*)ev->en);
-            for (int i = 0; i < ev->count; i++) {
+            for (int i = 0; i < ev->count; ++i) {
                 mark_value(ev->payload[i]);
             }
 
@@ -118,11 +126,11 @@ static void blacken(Obj* o) {
             const ObjInterface* it = (ObjInterface*)o;
             mark_obj((Obj*)it->env);
             mark_obj((Obj*)it->module);
-            for (int i = 0; i < it->nimpls; i++) {
+            for (int i = 0; i < it->nimpls; ++i) {
                 mark_obj((Obj*)it->impls[i].env);
             }
 
-            for (int i = 0; i < it->nparents; i++) {
+            for (int i = 0; i < it->nparents; ++i) {
                 mark_obj((Obj*)it->parents[i]);
             }
 
@@ -192,16 +200,16 @@ static void free_obj(Obj* o) {
 }
 
 void gc_collect(VM* vm) {
-    /* inline caches hold raw pointers; they must never outlive their targets */
-    for (int i = 0; i < vm->ncaches; i++) {
+    // inline caches hold raw pointers; they must never outlive their targets
+    for (int i = 0; i < vm->ncaches; ++i) {
         vm->caches[i]->sets[0] = NULL;
     }
 
-    for (int i = 0; i < vm->sp; i++) {
+    for (int i = 0; i < vm->sp; ++i) {
         mark_value(vm->stack[i]);
     }
 
-    for (int i = 0; i < vm->esp; i++) {
+    for (int i = 0; i < vm->esp; ++i) {
         mark_obj((Obj*)vm->envs[i]);
     }
 
@@ -209,21 +217,22 @@ void gc_collect(VM* vm) {
     mark_table(&vm->modules);
     mark_table(&vm->globals);
     mark_value(vm->ret);
+    mark_value(vm->bc_roots);
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);
-    /* std:Map / std:Set are permanent (never marked themselves), but what impl recorded on them is not */
+    // std:Map / std:Set are permanent (never marked themselves), but what impl recorded on them is not
     ObjNativeType* nts[2] = {vm->t_map, vm->t_set};
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 2; ++i) {
         mark_table(&nts[i]->impl_fns);
         mark_obj((Obj*)nts[i]->module);
     }
 
-    for (int i = 0; i < vm->nnative_types; i++) {
+    for (int i = 0; i < vm->nnative_types; ++i) {
         mark_table(&vm->native_types[i]->impl_fns);
         mark_obj((Obj*)vm->native_types[i]->module);
     }
 
-    for (int i = 0; i < vm->nctypes; i++) {
+    for (int i = 0; i < vm->nctypes; ++i) {
         mark_obj(vm->ctypes[i]->direct);
     }
 

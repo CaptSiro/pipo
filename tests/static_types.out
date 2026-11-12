@@ -1,0 +1,10 @@
+unknown int float array
+int || float int int[][] { int a, string b }
+int? tuple<int, string> range<int> range<float>
+int 42 string of 3 something else: array
+some(3.0) none() some(3)
+1 3
+2 two ["a", "b"]
+float[] Map<string, int> 2
+[0, 1] [5, 3]
+[1, 1] ["a", "a"] int[] bool[]

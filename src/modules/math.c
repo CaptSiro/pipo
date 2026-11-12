@@ -10,6 +10,8 @@
 
 #include "vm.h"
 
+
+
 static Value float_to_int(VM* vm, double d, const char* what) {
     if (isnan(d) || isinf(d) || d > 9.2e18 || d < -9.2e18) {
         rt_error(vm, 0, "%s: result does not fit in an int", what);
@@ -66,16 +68,15 @@ static Value math_pow(VM* vm, int argc, Value* a) {
     return float_val(pow(math_num(a[0]), math_num(a[1])));
 }
 
-/* ------------------------------------------------- one number in, one float out
- *
- * Trigonometry, hyperbolic functions, exponents and logarithms. Every one
- * takes an int or a float and returns a float; outside the domain the result
- * is NaN (acos(2), log(-1)) or an infinity (log(0)), as in C and JavaScript.
- */
+// ------------------------------------------------- one number in, one float out
+//
+// Trigonometry, hyperbolic functions, exponents and logarithms. Every one
+// takes an int or a float and returns a float; outside the domain the result
+// is NaN (acos(2), log(-1)) or an infinity (log(0)), as in C and JavaScript.
 
-#define MATH_UNARY(name)                                                       \
-    static Value math_##name(VM* vm, int argc, Value* a) {                     \
-        return float_val(name(math_num(a[0])));                                \
+#define MATH_UNARY(NAME)                                                       \
+    static Value math_##NAME(VM* vm, int argc, Value* a) {                     \
+        return float_val(NAME(math_num(a[0])));                                \
     }
 
 MATH_UNARY(sin)
@@ -100,12 +101,12 @@ MATH_UNARY(cbrt)
 
 #undef MATH_UNARY
 
-/* atan2(y, x): the angle of the point (x, y), in -pi...=pi */
+// atan2(y, x): the angle of the point (x, y), in -pi...=pi
 static Value math_atan2(VM* vm, int argc, Value* a) {
     return float_val(atan2(math_num(a[0]), math_num(a[1])));
 }
 
-/* ------------------------------------------------- rounding and sign */
+// ------------------------------------------------- rounding and sign
 
 static Value math_trunc(VM* vm, int argc, Value* a) {
     return a[0].kind == VAL_INT
@@ -113,10 +114,11 @@ static Value math_trunc(VM* vm, int argc, Value* a) {
         : float_to_int(vm, trunc(a[0].as.f), "trunc");
 }
 
-/* sign(int) -> -1, 0 or 1; sign(float) -> -1.0 or 1.0, or x itself for 0.0, -0.0 and NaN */
+// sign(int) -> -1, 0 or 1; sign(float) -> -1.0 or 1.0, or x itself for 0.0, -0.0 and NaN
 static Value math_sign(VM* vm, int argc, Value* a) {
     if (a[0].kind == VAL_INT) {
         const int64_t i = a[0].as.i;
+
         return int_val((i > 0) - (i < 0));
     }
 
@@ -132,17 +134,15 @@ static Value math_sign(VM* vm, int argc, Value* a) {
     return a[0];
 }
 
-/* fround(x): the nearest 32-bit float, as a float */
+// fround(x): the nearest 32-bit float, as a float
 static Value math_fround(VM* vm, int argc, Value* a) {
     return float_val((double)(float)math_num(a[0]));
 }
 
-/*
- * The nearest 16-bit (half precision) float. Rounds once, straight from the
- * double (ties to even), so there is no double rounding through float. Half
- * floats have 10 mantissa bits, exponents -14...=15 and subnormals down to
- * 2^-24; 65520 and above round to infinity.
- */
+// The nearest 16-bit (half precision) float. Rounds once, straight from the
+// double (ties to even), so there is no double rounding through float. Half
+// floats have 10 mantissa bits, exponents -14...=15 and subnormals down to
+// 2^-24; 65520 and above round to infinity.
 static double to_half(double x) {
     if (isnan(x) || isinf(x) || x == 0) {
         return x;
@@ -154,31 +154,30 @@ static double to_half(double x) {
     }
 
     int exponent;
-    frexp(ax, &exponent); /* ax = m * 2^exponent, m in [0.5, 1) */
-    exponent -= 1;        /* now m in [1, 2) */
+    frexp(ax, &exponent); // ax = m * 2^exponent, m in [0.5, 1)
+    exponent -= 1;        // now m in [1, 2)
     if (exponent < -14) {
-        exponent = -14; /* subnormal: a fixed step of 2^-24 */
+        exponent = -14; // subnormal: a fixed step of 2^-24
     }
 
-    /* step is the distance between neighbouring half floats; scaling by a power of 2 is exact */
+    // step is the distance between neighbouring half floats; scaling by a power of 2 is exact
     const int step = exponent - 10;
     const double r = ldexp(nearbyint(ldexp(ax, -step)), step);
 
     return copysign(r, x);
 }
 
-/* f16round(x): the nearest 16-bit float, as a float */
+// f16round(x): the nearest 16-bit float, as a float
 static Value math_f16round(VM* vm, int argc, Value* a) {
     return float_val(to_half(math_num(a[0])));
 }
 
-/* ------------------------------------------------- 32-bit integer helpers, as in JavaScript
- *
- * Both use the low 32 bits of their arguments, like JavaScript's ToUint32 /
- * ToInt32: clz32(-1) is 0 and clz32(1 << 32) is 32.
- */
+// ------------------------------------------------- 32-bit integer helpers, as in JavaScript
+//
+// Both use the low 32 bits of their arguments, like JavaScript's ToUint32 /
+// ToInt32: clz32(-1) is 0 and clz32(1 << 32) is 32.
 
-/* clz32(x): the number of leading zero bits of x as an unsigned 32-bit int */
+// clz32(x): the number of leading zero bits of x as an unsigned 32-bit int
 static Value math_clz32(VM* vm, int argc, Value* a) {
     uint32_t x = (uint32_t)a[0].as.i;
     if (x == 0) {
@@ -194,15 +193,16 @@ static Value math_clz32(VM* vm, int argc, Value* a) {
     return int_val(n);
 }
 
-/* imul(a, b): a * b as 32-bit ints, wrapping around like C's int32_t */
+// imul(a, b): a * b as 32-bit ints, wrapping around like C's int32_t
 static Value math_imul(VM* vm, int argc, Value* a) {
     const uint32_t product = (uint32_t)a[0].as.i * (uint32_t)a[1].as.i;
+
     return int_val((int64_t)(int32_t)product);
 }
 
-/* ------------------------------------------------- hypot and sum_precise */
+// ------------------------------------------------- hypot and sum_precise
 
-/* hypot(x, y), hypot(x, y, z): the length of a vector, without overflow on the way */
+// hypot(x, y), hypot(x, y, z): the length of a vector, without overflow on the way
 static Value math_hypot2(VM* vm, int argc, Value* a) {
     return float_val(hypot(math_num(a[0]), math_num(a[1])));
 }
@@ -211,38 +211,36 @@ static Value math_hypot3(VM* vm, int argc, Value* a) {
     return float_val(hypot(hypot(math_num(a[0]), math_num(a[1])), math_num(a[2])));
 }
 
-/* hypot(values): the same for any number of values; hypot([]) is 0.0 */
+// hypot(values): the same for any number of values; hypot([]) is 0.0
 static Value math_hypot_array(VM* vm, int argc, Value* a) {
     const ObjArray* values = AS_ARRAY(a[0]);
     double r = 0;
-    for (int i = 0; i < values->count; i++) {
+    for (int i = 0; i < values->count; ++i) {
         r = hypot(r, math_num(values->items[i]));
     }
 
     return float_val(r);
 }
 
-/*
- * sum_precise(values): the sum of the values as if computed exactly, then
- * rounded once to the nearest float (Shewchuk's algorithm, the one behind
- * Python's math.fsum). sum_precise([0.1, 0.2]) is 0.30000000000000004 like
- * 0.1 + 0.2, but sum_precise([1e20, 1, -1e20]) is 1.0, not 0.0.
- *
- * The partials are non-overlapping floats, smallest first, whose exact sum is
- * the sum of the values seen so far. Infinities and NaN are summed apart:
- * inf + -inf is NaN. Ints are converted to floats first, so ints above 2^53
- * lose their lowest bits. A partial sum above the largest float is a runtime
- * error, even when later values would bring the total back into range.
- */
+// sum_precise(values): the sum of the values as if computed exactly, then
+// rounded once to the nearest float (Shewchuk's algorithm, the one behind
+// Python's math.fsum). sum_precise([0.1, 0.2]) is 0.30000000000000004 like
+// 0.1 + 0.2, but sum_precise([1e20, 1, -1e20]) is 1.0, not 0.0.
+//
+// The partials are non-overlapping floats, smallest first, whose exact sum is
+// the sum of the values seen so far. Infinities and NaN are summed apart:
+// inf + -inf is NaN. Ints are converted to floats first, so ints above 2^53
+// lose their lowest bits. A partial sum above the largest float is a runtime
+// error, even when later values would bring the total back into range.
 static Value math_sum_precise(VM* vm, int argc, Value* a) {
     const ObjArray* values = AS_ARRAY(a[0]);
     double* partials = NULL;
     int count = 0;
     int cap = 0;
-    double special = 0; /* the sum of the infinities and NaNs */
+    double special = 0; // the sum of the infinities and NaNs
     bool has_special = false;
 
-    for (int i = 0; i < values->count; i++) {
+    for (int i = 0; i < values->count; ++i) {
         double x = math_num(values->items[i]);
         if (isnan(x) || isinf(x)) {
             special += x;
@@ -251,7 +249,7 @@ static Value math_sum_precise(VM* vm, int argc, Value* a) {
         }
 
         int kept = 0;
-        for (int j = 0; j < count; j++) {
+        for (int j = 0; j < count; ++j) {
             double y = partials[j];
             if (fabs(x) < fabs(y)) {
                 const double t = x;
@@ -287,10 +285,11 @@ static Value math_sum_precise(VM* vm, int argc, Value* a) {
 
     if (has_special) {
         free(partials);
+
         return float_val(special);
     }
 
-    /* add the partials from the largest down, stopping once the rest cannot change the result */
+    // add the partials from the largest down, stopping once the rest cannot change the result
     double hi = 0;
     if (count > 0) {
         int n = count - 1;
@@ -306,11 +305,9 @@ static Value math_sum_precise(VM* vm, int argc, Value* a) {
             }
         }
 
-        /*
-         * Round half to even, corrected: when the rest (lo) is exactly half a
-         * step and the next partial has the same sign, the true sum is a
-         * little further than half, so round away from hi.
-         */
+        // Round half to even, corrected: when the rest (lo) is exactly half a
+        // step and the next partial has the same sign, the true sum is a
+        // little further than half, so round away from hi.
         if (n > 0 && ((lo < 0 && partials[n - 1] < 0) || (lo > 0 && partials[n - 1] > 0))) {
             const double y = lo * 2;
             const double x = hi + y;
@@ -325,16 +322,15 @@ static Value math_sum_precise(VM* vm, int argc, Value* a) {
     return float_val(hi);
 }
 
-/* ------------------------------------------------- random
- *
- * xoshiro256** (Blackman and Vigna): 256 bits of state, fast, and good enough
- * for games and simulations. Not for cryptography.
- *
- * A Random value (math:seed(42)) owns its own state, so the same seed always
- * gives the same numbers, on every platform. math:random() and
- * math:random_int() use one global generator, seeded on first use from the
- * clock and an address, so runs differ even within the same second.
- */
+// ------------------------------------------------- random
+//
+// xoshiro256** (Blackman and Vigna): 256 bits of state, fast, and good enough
+// for games and simulations. Not for cryptography.
+//
+// A Random value (math:seed(42)) owns its own state, so the same seed always
+// gives the same numbers, on every platform. math:random() and
+// math:random_int() use one global generator, seeded on first use from the
+// clock and an address, so runs differ even within the same second.
 
 typedef struct {
     uint64_t s[4];
@@ -345,7 +341,7 @@ typedef struct {
     RngState state;
 } ObjRandom;
 
-#define RANDOM(v) ((ObjRandom*)(v).as.o)
+#define RANDOM(V) ((ObjRandom*)(V).as.o)
 
 static RngState global_rng;
 static bool global_rng_seeded = false;
@@ -358,9 +354,9 @@ static uint64_t splitmix64(uint64_t* x) {
     return z ^ (z >> 31);
 }
 
-/* spreads one 64-bit seed over the whole state; never all zeros, which xoshiro cannot leave */
+// spreads one 64-bit seed over the whole state; never all zeros, which xoshiro cannot leave
 static void rng_seed(RngState* rng, uint64_t seed) {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 4; ++i) {
         rng->s[i] = splitmix64(&seed);
     }
 }
@@ -383,16 +379,14 @@ static uint64_t rng_next(RngState* rng) {
     return result;
 }
 
-/* a float in [0, 1): the top 53 bits, so every result is a multiple of 2^-53 */
+// a float in [0, 1): the top 53 bits, so every result is a multiple of 2^-53
 static double rng_float(RngState* rng) {
     return (double)(rng_next(rng) >> 11) * 0x1.0p-53;
 }
 
-/*
- * an int in [start, end), every one equally likely. Plain rng % span would
- * favour small results when span does not divide 2^64, so values below
- * threshold (2^64 mod span of them) are thrown away and drawn again.
- */
+// an int in [start, end), every one equally likely. Plain rng % span would
+// favour small results when span does not divide 2^64, so values below
+// threshold (2^64 mod span of them) are thrown away and drawn again.
 static int64_t rng_int(RngState* rng, int64_t start, int64_t end) {
 
     const uint64_t span = (uint64_t)end - (uint64_t)start;
@@ -405,7 +399,7 @@ static int64_t rng_int(RngState* rng, int64_t start, int64_t end) {
     return (int64_t)((uint64_t)start + r % span);
 }
 
-/* the int arguments of random_int / interval: [0, end) or [start, end), which must not be empty */
+// the int arguments of random_int / interval: [0, end) or [start, end), which must not be empty
 static void int_range(VM* vm, const char* fn, const Value* args, int n, int64_t* start, int64_t* end) {
     *start = n > 1 ? args[0].as.i : 0;
     *end = args[n - 1].as.i;
@@ -430,12 +424,12 @@ static RngState* global(void) {
     return &global_rng;
 }
 
-/* random() -> float in [0, 1), from the global generator */
+// random() -> float in [0, 1), from the global generator
 static Value math_random(VM* vm, int argc, Value* a) {
     return float_val(rng_float(global()));
 }
 
-/* random_int(end) -> int in [0, end); random_int(start, end) -> int in [start, end) */
+// random_int(end) -> int in [0, end); random_int(start, end) -> int in [start, end)
 static Value math_random_int(VM* vm, int argc, Value* a) {
     int64_t start, end;
     int_range(vm, "random_int", a, argc, &start, &end);
@@ -443,7 +437,7 @@ static Value math_random_int(VM* vm, int argc, Value* a) {
     return int_val(rng_int(global(), start, end));
 }
 
-/* seed(s) -> Random: a new generator; the same seed gives the same numbers */
+// seed(s) -> Random: a new generator; the same seed gives the same numbers
 static Value math_seed_new(VM* vm, int argc, Value* a) {
     ObjRandom* r = (ObjRandom*)instance_new(vm, vm_native_type(vm, "math", "Random"));
     rng_seed(&r->state, (uint64_t)a[0].as.i);
@@ -451,19 +445,19 @@ static Value math_seed_new(VM* vm, int argc, Value* a) {
     return obj_val(r);
 }
 
-/* seed(r, s): starts r over, as if it was made with seed(s) */
+// seed(r, s): starts r over, as if it was made with seed(s)
 static Value math_seed_set(VM* vm, int argc, Value* a) {
     rng_seed(&RANDOM(a[0])->state, (uint64_t)a[1].as.i);
 
     return void_val();
 }
 
-/* value(r) -> float in [0, 1) */
+// value(r) -> float in [0, 1)
 static Value math_poll(VM* vm, int argc, Value* a) {
     return float_val(rng_float(&RANDOM(a[0])->state));
 }
 
-/* interval(r, end) -> int in [0, end); interval(r, start, end) -> int in [start, end) */
+// interval(r, end) -> int in [0, end); interval(r, start, end) -> int in [start, end)
 static Value math_poll_int(VM* vm, int argc, Value* a) {
     int64_t start, end;
     int_range(vm, "interval", a + 1, argc - 1, &start, &end);
@@ -471,7 +465,7 @@ static Value math_poll_int(VM* vm, int argc, Value* a) {
     return int_val(rng_int(&RANDOM(a[0])->state, start, end));
 }
 
-/* copy(r): a second generator in the same state, which then gives the same numbers as r */
+// copy(r): a second generator in the same state, which then gives the same numbers as r
 static ObjInstance* random_copy(VM* vm, ObjInstance* self) {
     ObjRandom* r = (ObjRandom*)instance_new(vm, self->type);
     r->state = ((ObjRandom*)self)->state;

@@ -1,0 +1,1 @@
+cannot assign to 'total': expected int but got string

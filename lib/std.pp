@@ -39,7 +39,7 @@ export global native "std_in_range" function in(number, range) -> bool
 // a in b: are a's bounds within b's, ends included or not: (1...3) in (0...3) and (0...=2) in (0...3) are
 // true, (0...=3) in (0...3) is not. The direction and the step do not matter; an empty range is in every range.
 export global function in(range inner, range outer) -> bool {
-    if is_inner.empty() {
+    if inner.is_empty() {
         return true
     }
 
@@ -111,14 +111,15 @@ export native type Map<K, V>
 export native type Set<T>
 
 export native "std_map_new" function map() -> Map
-export native "std_map_new" function map(tuple<any, any>[] entries) -> Map
+export native "std_map_new" <K, V>function map(tuple<K, V>[] entries) -> Map<K, V>
 export native "std_map_new" function map(object fields) -> Map
-export native "std_map_new" function map(Map other) -> Map
+export native "std_map_new" <K, V>function map(Map<K, V> other) -> Map<K, V>
 
 export native "std_set_new" function set() -> Set
-export native "std_set_new" function set(any[] items) -> Set
-export native "std_set_new" function set(range items) -> Set
-export native "std_set_new" function set(Set other) -> Set
+export native "std_set_new" <T>function set(T[] items) -> Set<T>
+export native "std_set_new" function set(range<int> items) -> Set<int>
+export native "std_set_new" function set(range<float> items) -> Set<float>
+export native "std_set_new" <T>function set(Set<T> other) -> Set<T>
 
 export global native "std_map_get" <K, V>function get(Map<K, V> m, K key) -> V?
 export global native "std_map_put" <K, V>function put(Map<K, V> m, K key, V value) -> void
@@ -170,7 +171,7 @@ export <K, V>interface Index {
         return match collection.get(key) {
             some(value) -> value
             none() -> {
-                panic(type_of(collection) + " has no key " + shown(key))
+                panic(get_type(collection) + " has no key " + shown(key))
             }
         }
     }
@@ -190,7 +191,7 @@ export interface Length {
 
 // a key as it would be written: "b" for a string, tuple(1, 2) for a tuple
 function shown(any value) -> string {
-    return if type_of(value) == "string" {
+    return if get_type(value) == "string" {
         str([value]).slice(1, -1)
     } else {
         str(value)

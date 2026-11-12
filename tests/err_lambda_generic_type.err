@@ -1,3 +1,1 @@
 no overload of 'consumer' accepts (string)
-  candidates:
-    consumer(int x)

@@ -323,6 +323,10 @@ void st_print(const SType* t, StrBuf* sb) {
                     sb_puts(sb, ", ");
                 }
 
+                if (i == t->rest - 1) {
+                    sb_puts(sb, "...");
+                }
+
                 st_print(t->ftypes[i], sb);
                 sb_printf(sb, " %s", t->fnames[i]->chars);
             }
@@ -416,6 +420,10 @@ static SType* binding_of(SBindings* b, ObjString* name, int* index) {
     return NULL;
 }
 
+static bool is_option_type(const SType* t) {
+    return t && t->kind == ST_ENUM && t->decl && t->decl->name && str_equals(t->decl->name, "Option");
+}
+
 static int fit_record(SType* want, SType* got, SBindings* b) {
     if (got->kind != ST_RECORD) {
         return 0;
@@ -436,17 +444,47 @@ static int fit_record(SType* want, SType* got, SBindings* b) {
         return 5;
     }
 
+    const int rest = want->rest - 1;
     for (int i = 0; i < want->nfields; ++i) {
+        if (i == rest) {
+            continue;
+        }
+
         int k = -1;
         for (int j = 0; j < got->nfields; ++j) {
-            if (got->fnames[j] == want->fnames[i]) {
+            if (record_key_names(got->fnames[j], want->fnames[i])) { // aria-label writes aria_label
                 k = j;
                 break;
             }
         }
 
+        if (k < 0 && is_option_type(want->ftypes[i])) {
+            continue; // a T? field left out of a record literal is none()
+        }
+
         if (k < 0 || !st_fit(want->ftypes[i], got->ftypes[k], b)) {
             return 0;
+        }
+    }
+
+    if (rest >= 0) {
+        // the fields want does not name go to its rest map: each must fit V of ...Map<string, V>
+        SType* rt = want->ftypes[rest];
+        SType* vt = rt && rt->kind == ST_NATIVE && rt->nargs > 1 ? rt->args[1] : NULL;
+        for (int j = 0; j < got->nfields; ++j) {
+            bool named = false;
+            for (int i = 0; i < want->nfields && !named; ++i) {
+                named = i != rest && record_key_names(got->fnames[j], want->fnames[i]);
+            }
+
+            if (named) {
+                continue;
+            }
+
+            SType* need = record_key_names(got->fnames[j], want->fnames[rest]) ? rt : vt;
+            if (need && !st_fit(need, got->ftypes[j], b)) {
+                return 0;
+            }
         }
     }
 
@@ -686,6 +724,22 @@ int st_fit(SType* want, SType* got, SBindings* b) {
             return 4;
         }
         case ST_NATIVE: {
+            if (want->decl->which == NT_MAP && got->kind == ST_RECORD && !got->decl) {
+                // a record (not of a named record type) is a Map<string, V> of its fields when each is a V; the
+                // checker rewrites the value into map(value) where it is converted (record_to_map)
+                if (want->nargs && !st_fit(want->args[0], st_prim(ST_STRING), b)) {
+                    return 0;
+                }
+
+                for (int i = 0; want->nargs > 1 && i < got->nfields; ++i) {
+                    if (!st_fit(want->args[1], got->ftypes[i], b)) {
+                        return 0;
+                    }
+                }
+
+                return 1; // the weakest fit: any overload that takes the record as it is wins
+            }
+
             if (got->kind != ST_NATIVE || got->decl != want->decl) {
                 return 0;
             }

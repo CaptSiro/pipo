@@ -94,6 +94,40 @@ success value    // unary: an identifier followed by an argument on the same lin
 a + b            // binary
 ```
 
+### Tag calls
+
+A tag is one more way to write a call, for calls with named arguments and nested
+content (markup, configuration, trees). The design is in [TAG_CALLS.md](TAG_CALLS.md).
+
+| written | calls |
+|---------|-------|
+| `<f/>` | `f()`, or `f({})` when no `f` takes zero arguments |
+| `<f a="text" b=3 c={expr} d/>` | `f({ a: "text", b: 3, c: expr, d: true })` |
+| `<f a={x}>"text" {y} <g/></f>` | `f({ a: x }, ["text", y, g()])` |
+| `<f>"text"</f>` | `f(["text"])` when an `f` takes exactly one array, else `f({}, ["text"])` |
+| `<f a={x}></f>` | `f({ a: x }, [])`: an empty body is still a body |
+| `<m:f/>`, `<m:sub:f>...</m:sub:f>` | `m:f()`, `m:sub:f([...])` |
+
+```
+const page = <h:div class={some("card")}>
+    <h:p>"Hello, " {name} "!"</h:p>
+    <h:br/>
+</h:div>
+```
+
+* The tag is a function name (or a module path, or a record type: `<Person age={1} name="x"/>`
+  is `Person({ ... })`), found like any call. The language knows no HTML.
+* Attribute values are literals (a string, a number, `true`, `false`) or `{expression}`; an
+  attribute without a value is `true`. Attribute names may be kebab-case: `aria-label` is
+  the field `aria_label`.
+* Text is a string literal, kept exactly: there is no whitespace rule. Between children,
+  whitespace and comments are layout.
+* `/>` and a body are different calls. A body given to a function without children, or `/>`
+  on one that needs them, is an error that says which to write.
+* A `<` in operand position followed by a name with no space is a tag; `a < b` and `a <b`
+  (after an operand) stay comparisons. A function `<` or `>` with one parameter is
+  therefore a syntax error.
+
 ## `.` calls, `:` reads attributes
 
 `.` is reserved for function calls. Attributes are read with `:`:
@@ -186,6 +220,53 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `number`                | prelude alias for `int \|\| float`           |
 
 `type Name = ...` and `type Pair<A, B> = { A first, B second }` define types.
+### Record literals
+
+A record literal converted to a record type (an argument, a typed declaration, `Type({ ... })`):
+
+* may leave out the fields whose type is `T?`: they are `none()` (`type Opts = { int? size }`
+  accepts `{}`). Values for them are still written `some(x)`;
+* may write a field `a_b` as `a-b` (that is how tag attributes such as `aria-label` arrive);
+* may **not** name a field the type does not have: `Props has no field 'lable' (did you mean
+  'label'?)`. Only literals are checked this way; a value that already has a record type
+  still matches structurally.
+
+**Rest fields.** A record type may end with one rest field, `...Map<string, V> name`. The
+fields a literal has and the type does not name go into that map, each one a `V`:
+
+```
+type DivAttrs = { string? id, ...Map<string, string> attrs }
+div({ id: some("main"), role: "button" })         // attrs is Map{"role": "button"}
+<div id={some("x")} data-user-id="42"/>           // attrs is Map{"data-user-id": "42"}
+```
+
+**A record as a map.** Where a `Map<string, V>` is expected (a parameter, a declaration,
+an assignment, a return, a field), a record that is not of a named record type is a map of
+its fields, each one a `V`. This is the most general form of a function taking named values,
+and the first step before a typed version:
+
+```
+function element(Map<string, unknown> attrs) -> string { ... }
+<element tag="my-widget" size={3} data-user-id="u1"/>   // attrs: Map{"tag": ..., "size": 3, "data-user-id": "u1"}
+count({ a: 1, b: 2 })                                    // count(Map<string, int> m)
+```
+
+It is the weakest fit, so an overload that takes the record itself (`object`, a record type)
+wins. A value of a named record type stays a record.
+
+**Generics through record fields.** A generic record type binds its parameters from the
+literal's fields, and lambdas in the literal (or in an array literal) take their types from
+it: with `<T, K>function For(ForProps<T, K> p, ItemView<T>[] children)`,
+`<For each={todos} key={t -> t:id}>{t -> t:title}</For>` binds `T = Todo` from `each`,
+types `t` in both lambdas as a `Todo`, and binds `K = int` from the key's result.
+
+**`decode(m, T)`** goes the other way: it checks a `Map<string, unknown>` against the record
+type `T` and gives an `Error<T>`: `success(record)`, or `fail(why)` with the path of the first
+mismatch (`Page: field 'card': Card: field 'title': expected string but got int`). A missing
+`T?` field is `none()`, a plain value for a `T?` field becomes `some(value)`, an int fills a
+float field, a nested map fills a field of a record type, the leftovers fill the rest field
+(or are an error without one).
+
 Records are nominal when declared and structural otherwise. See
 [DATATYPES_AND_FUNCTIONS.md](DATATYPES_AND_FUNCTIONS.md).
 
@@ -691,7 +772,7 @@ function [](Matrix m, int row, int col) -> float { return m:cells[row * m:cols +
 function []=(Matrix m, int row, int col, float v) -> void { m:cells[row * m:cols + col] = v }
 mx[1, 0] = 3.0                             // several indices: []=(mx, 1, 0, 3.0)
 
-<T>function [](T[] items, Range<int> r) -> T[] { return items.slice(r:start, r:end) }
+<T>function [](T[] items, Range<int> r) -> T[] { return items.slice(r) }   // ...= includes the end
 xs[1...3]                                  // a slice
 ```
 

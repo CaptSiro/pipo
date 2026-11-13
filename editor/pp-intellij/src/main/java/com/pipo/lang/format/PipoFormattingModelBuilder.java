@@ -77,13 +77,22 @@ public final class PipoFormattingModelBuilder implements FormattingModelBuilder 
             IElementType[] pair = brackets(parent);
             boolean inside = false;
             boolean first = true;
+            boolean tagBody = false; // the children of <f ...> ... </f>: between the opening '>' and </f>
             for (ASTNode c = myNode.getFirstChildNode(); c != null; c = c.getTreeNext()) {
                 IElementType t = c.getElementType();
                 if (t == TokenType.WHITE_SPACE || c.getTextLength() == 0) {
                     continue;
                 }
                 Indent ind = Indent.getNoneIndent();
-                if (pair != null && !inside && t == pair[0]) {
+                if (parent == TAG_EXPR) {
+                    if (t == TAG_CLOSE) {
+                        tagBody = false;
+                    } else if (tagBody) {
+                        ind = Indent.getNormalIndent();
+                    } else if (t == OP && c.getText().equals(">")) {
+                        tagBody = true;
+                    }
+                } else if (pair != null && !inside && t == pair[0]) {
                     inside = true;
                 } else if (pair != null && inside && t == pair[1]) {
                     inside = false;

@@ -45,7 +45,7 @@ Not global. Printing and reading come from the `io` module
 ## Arrays
 
 `push(a, x)`, `pop(a) -> T?`, `insert(a, i, x)`, `remove(a, i) -> item`,
-`concat(a, b)`, `multiply(a, n)` / `repeat(a, n)`, `slice(a, start[, end])`,
+`concat(a, b)`, `multiply(a, n)` / `repeat(a, n)`, `slice(a, start[, end])` (end excluded), `slice(a, r)`,
 `contains(a, x)`, `index_of(a, x) -> int?`, `reverse(a)`, `sort(a)`,
 `sort(a, compare)`, `join(a, sep)`, `copy(x)`.
 
@@ -56,6 +56,13 @@ tuple unchanged. `Map` and `Set`, their constructors `map(...)` / `set(...)` and
 `src/modules/std.c`); see [LANGUAGE.md](LANGUAGE.md#maps-and-sets).
 
 `sort`, `reverse`, `concat` and `slice` return new arrays.
+
+`slice(a, start, end)` excludes `end`. `slice(a, r)` takes a range of int indices
+and follows it: `xs.slice(1...3)` is items 1 and 2, `xs.slice(1...=3)` items 1 to 3.
+Negative indices count from the back in both (`xs.slice(1...=-1)` drops the first
+item, `"hello".slice(-3...=-1)` is `"llo"`). The bounds count, not the direction
+(`xs.slice(3...0)` is empty, like `slice(xs, 3, 0)`), and a range with a step
+other than 1 (`range(0, 4, 2)`) is an error.
 A `sort` comparator returns a number (negative means a comes first) or a bool
 (true means a comes first).
 
@@ -89,7 +96,7 @@ until it is read. `xs.map(f).to_array()` gives the array.
 
 `split(s, sep)`, `upper(s)`, `lower(s)`, `trim(s)`, `replace(s, from, to)`,
 `starts_with(s, p)`, `ends_with(s, p)`, `chars(s)` (code points), `ord(s)`,
-`chr(code)`, `concat(a, b)`, `repeat(s, n)`, `slice(s, start[, end])`,
+`chr(code)`, `concat(a, b)`, `repeat(s, n)`, `slice(s, start[, end])`, `slice(s, r)`,
 `contains(s, sub)`, `index_of(s, sub) -> int?`, `reverse(s)`.
 
 `format(fmt, ...) -> string` formats like C `printf`: `format("%d + %.2f = %s", 1, 2.5, "x")`.
@@ -177,6 +184,7 @@ returns from). Calling it at the top level of a file, or passing it as a value
 | function                  |                                          |
 |---------------------------|------------------------------------------|
 | `range(start, end, step)` | range with a custom step; numbers, any float makes a float range |
+| `decode(m, T)` | a `Map<string, unknown>` checked and converted into the record type `T`: `success(record)` or `fail(why)` ([LANGUAGE.md](LANGUAGE.md#record-literals)) |
 | `panic(message)`          | aborts with a runtime error              |
 | `assert(cond[, message])` |                                          |
 | `clock() -> float`        | monotonic seconds, for timing            |

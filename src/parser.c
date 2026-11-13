@@ -1,5 +1,7 @@
 #include "parser.h"
 
+#include <ctype.h>
+
 #include "lexer.h"
 
 
@@ -402,12 +404,29 @@ static Type* parse_type_primary(Parser* p) {
                 continue;
             }
 
+            if (ty->rest) {
+                perr(p, peek(p), "the rest field must be the last field of a record type");
+            }
+
+            // ...Map<string, V> name: the fields a record literal has and the type does not name
+            Token* dots = tok_is(peek(p), T_OP, "...") ? advance(p) : NULL;
             Type* ft = parse_type(p);
+            if (dots) {
+                const bool map = ft->kind == TY_NAME && str_equals(ft->name, "Map") && ft->nquals == 0 && ft->nargs == 2 &&
+                                 ft->args[0]->kind == TY_PRIM && ft->args[0]->prim == PRIM_STRING;
+                if (!map) {
+                    perr(p, dots, "a rest field is a map from field names: ...Map<string, V> name");
+                }
+            }
+
             Token* name = expect(p, T_IDENT, "field name");
             GROW(ty->fnames, ty->nfields, cap);
             GROW(ty->ftypes, n2, cap2);
             ty->fnames[ty->nfields++] = intern_tok(p, name);
             ty->ftypes[n2++] = ft;
+            if (dots) {
+                ty->rest = ty->nfields;
+            }
         }
 
         expect(p, T_RBRACE, "'}'");
@@ -1390,8 +1409,283 @@ static Node* parse_postfix(Parser* p, Node* e) {
     return e;
 }
 
+// ------------------------------------------------------------------ tag calls
+
+// `<` directly followed by a name, in operand position: a tag call
+static bool at_tag(Parser* p) {
+    const Token* t = peek(p);
+    const Token* n = peek_at(p, 1);
+
+    return t->kind == T_OP && t->len == 1 && t->start[0] == '<' && n->kind == T_IDENT && !n->space_before && !n->nl_before;
+}
+
+// do the operator tokens from here (glued together) start with s? `></` may be one token or three
+static bool at_ops(Parser* p, const char* s) {
+    const size_t n = strlen(s);
+    size_t have = 0;
+    for (int i = 0; have < n; ++i) {
+        const Token* t = peek_at(p, i);
+        if (t->kind != T_OP || (i > 0 && (t->space_before || t->nl_before))) {
+            return false;
+        }
+
+        for (int k = 0; k < t->len && have < n; ++k) {
+            if (t->start[k] != s[have++]) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+// consumes what at_ops accepted, splitting tokens where needed
+static void eat_ops(Parser* p, const char* s) {
+    char buf[8];
+    while (*s) {
+        const Token* t = peek(p);
+        size_t n = (size_t)t->len < strlen(s) ? (size_t)t->len : strlen(s);
+        memcpy(buf, s, n);
+        buf[n] = '\0';
+        eat_op_prefix(p, buf);
+        s += n;
+    }
+}
+
+// a word an attribute name can be made of: an identifier or a keyword (for, in, class, ...)
+static bool is_attr_word(const Token* t) {
+    return t->len > 0 && (isalpha((unsigned char)t->start[0]) || t->start[0] == '_') &&
+           (t->kind == T_IDENT || (t->kind >= T_IMPORT && t->kind <= T_FALSE));
+}
+
+// name or m:sub:name; *text gets "m:sub:name"
+static Node* parse_tag_path(Parser* p, StrBuf* text) {
+    Token* t = expect(p, T_IDENT, "a tag name");
+    Node* e = new_node(N_IDENT, t->line);
+    e->as.str = intern_tok(p, t);
+    sb_printf(text, "%.*s", t->len, t->start);
+    while (check(p, T_COLON) && !peek(p)->space_before && peek_at(p, 1)->kind == T_IDENT && !peek_at(p, 1)->space_before) {
+        advance(p);
+        Token* nm = advance(p);
+        Node* f = new_node(N_FIELD, nm->line);
+        f->as.field.obj = e;
+        f->as.field.name = intern_tok(p, nm);
+        sb_printf(text, ":%.*s", nm->len, nm->start);
+        e = f;
+    }
+
+    return e;
+}
+
+// { expression } inside a tag: an attribute value or a child
+static Node* parse_tag_braces(Parser* p) {
+    expect(p, T_LBRACE, "'{'");
+    p->depth++;
+    Node* e = parse_expression(p);
+    expect(p, T_RBRACE, "'}' to close the expression");
+    p->depth--;
+
+    return e;
+}
+
+static Node* parse_tag(Parser* p) {
+    Token* open = advance(p); // <
+    StrBuf name;
+    sb_init(&name);
+    Node* callee = parse_tag_path(p, &name);
+    Node* call = new_call(p, callee, open->line);
+    call->as.call.tag = str_cintern(p->vm, name.data);
+
+    // attributes: name, name="text", name=3, name={expression}; a-b-c is the field a_b_c
+    Node* attrs = NULL;
+    int cap = 0, nkeys = 0;
+    while (!at_ops(p, "/>") && !at_ops(p, ">")) {
+        Token* w = peek(p);
+        if (!is_attr_word(w)) {
+            perr(p, w, "expected an attribute, '>' or '/>' in <%s> but found %s", name.data, tok_desc(w));
+        }
+
+        advance(p);
+        StrBuf key;
+        sb_init(&key);
+        sb_printf(&key, "%.*s", w->len, w->start);
+        while (at_ops(p, "-") && peek(p)->len == 1 && !peek(p)->space_before && is_attr_word(peek_at(p, 1)) &&
+               !peek_at(p, 1)->space_before) {
+            advance(p);
+            Token* part = advance(p);
+            sb_printf(&key, "-%.*s", part->len, part->start); // kept as written: a-b fills the field a_b, or a rest field
+        }
+
+        ObjString* k = str_cintern(p->vm, key.data);
+        sb_free(&key);
+        if (!attrs) {
+            attrs = new_node(N_OBJECT, w->line);
+        }
+
+        for (int i = 0; i < nkeys; ++i) {
+            if (attrs->as.object.keys[i] == k) {
+                perr(p, w, "<%s> has the attribute '%s' twice", name.data, k->chars);
+            }
+        }
+
+        Node* value;
+        if (accept(p, T_ASSIGN)) {
+            Token* v = peek(p);
+            if (v->kind == T_STRING || v->kind == T_INT || v->kind == T_FLOAT || v->kind == T_TRUE || v->kind == T_FALSE) {
+                value = parse_primary(p);
+            } else if (v->kind == T_LBRACE) {
+                value = parse_tag_braces(p);
+            } else {
+                perr(p, v, "the value of attribute '%s' is a string, a number, true, false or {expression}, not %s", k->chars,
+                     tok_desc(v));
+            }
+        } else {
+            value = new_node(N_BOOL, w->line); // an attribute alone is true
+            value->as.bval = true;
+        }
+
+        GROW(attrs->as.object.keys, nkeys, cap);
+        attrs->as.object.keys[nkeys++] = k;
+        nl_push(&attrs->as.object.values, value);
+    }
+
+    if (attrs) {
+        call->as.call.tag_form |= TAG_ATTRS;
+        nl_push(&call->as.call.args, attrs);
+    }
+
+    if (at_ops(p, "/>")) {
+        eat_ops(p, "/>");
+        sb_free(&name);
+
+        return call;
+    }
+
+    eat_ops(p, ">");
+    // children: "text", <tag ...>, {expression}, up to </name>
+    Node* children = new_node(N_ARRAY, open->line);
+    p->depth++;
+    while (!at_ops(p, "</")) {
+        Token* c = peek(p);
+        if (c->kind == T_STRING) {
+            nl_push(&children->as.array.items, parse_primary(p));
+        } else if (c->kind == T_LBRACE) {
+            nl_push(&children->as.array.items, parse_tag_braces(p));
+        } else if (at_tag(p)) {
+            nl_push(&children->as.array.items, parse_tag(p));
+        } else if (c->kind == T_EOF) {
+            perr_line(p, open->line, "<%s> is never closed: expected </%s>", name.data, name.data);
+        } else {
+            perr(p, c, "expected a child of <%s> (a \"string\", a <tag> or {expression}) or </%s> but found %s", name.data,
+                 name.data, tok_desc(c));
+        }
+    }
+
+    p->depth--;
+    Token* close = peek(p);
+    eat_ops(p, "</");
+    StrBuf closing;
+    sb_init(&closing);
+    parse_tag_path(p, &closing);
+    if (strcmp(closing.data, name.data) != 0) {
+        perr(p, close, "expected '</%s>' (to close <%s> at line %d) but found '</%s>'", name.data, name.data, open->line,
+             closing.data);
+    }
+
+    if (!at_ops(p, ">")) {
+        perr(p, peek(p), "expected '>' to end '</%s'", name.data);
+    }
+
+    eat_ops(p, ">");
+    sb_free(&closing);
+    sb_free(&name);
+    call->as.call.tag_form |= TAG_BODY;
+    nl_push(&call->as.call.args, children);
+
+    return call;
+}
+
+static bool sig_takes(const Signature* s, int n) {
+    return s->variadic ? n >= s->nparams : n == s->nparams;
+}
+
+bool tag_lower(VM* vm, Node* call, Signature** sigs, int nsigs, bool ctor, bool known, StrBuf* err) {
+    if (call->as.call.tag_form & TAG_LOWERED) {
+        return true;
+    }
+
+    call->as.call.tag_form |= TAG_LOWERED;
+    const bool attrs = call->as.call.tag_form & TAG_ATTRS;
+    const bool body = call->as.call.tag_form & TAG_BODY;
+    if (!known) {
+        return true;
+    }
+
+    bool has0 = false, has1 = false, has1arr = false, has2 = false;
+    if (ctor) {
+        has1 = true; // a record type takes one record
+    }
+
+    for (int i = 0; i < nsigs; ++i) {
+        const Signature* s = sigs[i];
+        if (!s) {
+            continue;
+        }
+
+        has0 = has0 || sig_takes(s, 0);
+        has1 = has1 || sig_takes(s, 1);
+        has2 = has2 || sig_takes(s, 2);
+        has1arr = has1arr || (!s->variadic && s->nparams == 1 && s->params[0].type && s->params[0].type->kind == TY_ARRAY);
+    }
+
+    const char* name = call->as.call.tag->chars;
+    NodeList* args = &call->as.call.args;
+    if (!body) {
+        if (!attrs && has0) {
+            return true; // <f/>: f()
+        }
+
+        if (!has1 && has2) {
+            sb_printf(err, "<%s/> is written without a body, but every '%s' takes children; write <%s ...></%s> (an empty "
+                           "body gives [])", name, name, name, name);
+
+            return false;
+        }
+
+        if (!attrs && has1) {
+            nl_push(args, new_node(N_OBJECT, call->line)); // <f/>: f({})
+        }
+
+        return true;
+    }
+
+    if (!attrs && has1arr) {
+        return true; // <f>...</f>: f([...])
+    }
+
+    if (!has2) {
+        sb_printf(err, "<%s> is written with a body, but no '%s' takes children; write <%s .../> (no body), or add an "
+                       "overload that takes the children as its last parameter", name, name, name);
+
+        return false;
+    }
+
+    if (!attrs) {
+        // <f>...</f>: f({}, [...])
+        nl_push(args, NULL);
+        args->items[1] = args->items[0];
+        args->items[0] = new_node(N_OBJECT, call->line);
+    }
+
+    return true;
+}
+
 static Node* parse_unary(Parser* p) {
     Token* t = peek(p);
+    if (at_tag(p)) {
+        return parse_postfix(p, parse_tag(p));
+    }
+
     if (t->kind == T_OP) {
         advance(p);
         Node* id = new_node(N_IDENT, t->line);

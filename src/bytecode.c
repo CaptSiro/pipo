@@ -362,6 +362,50 @@ static void enum_values(Comp* c, Node* n, TDecl* d) {
     }
 }
 
+static int typedef_index(BcProgram* prog, TDecl* d);
+
+// binds into env the user types t names (through arrays, options, type arguments), as the program's typedefs / enums
+static void bind_field_types(BcProgram* prog, ObjEnv* env, CScope* scope, const Type* t) {
+    if (!t) {
+        return;
+    }
+
+    if (t->kind == TY_ARRAY) {
+        bind_field_types(prog, env, scope, t->inner);
+
+        return;
+    }
+
+    if (t->kind == TY_UNION) {
+        bind_field_types(prog, env, scope, t->a);
+        bind_field_types(prog, env, scope, t->b);
+
+        return;
+    }
+
+    if (t->kind != TY_NAME) {
+        return;
+    }
+
+    for (int i = 0; i < t->nargs; ++i) {
+        bind_field_types(prog, env, scope, t->args[i]);
+    }
+
+    const CSym* sym = t->nquals ? NULL : scope_lookup(scope, t->name);
+    if (!sym || sym->kind != SYM_TYPE || !sym->tdecl || table_find(&env->vars, t->name)) {
+        return;
+    }
+
+    TDecl* d = sym->tdecl;
+    if (d->kind == TD_ALIAS && d->def && d->def->kind == TY_RECORD) {
+        const int k = typedef_index(prog, d);
+        env_define(prog->vm, env, t->name, obj_val(prog->typedefs[k]), VAR_CONST, NULL);
+    } else if (d->kind == TD_ENUM) {
+        const int k = enum_index(prog, d);
+        env_define(prog->vm, env, t->name, obj_val(prog->enums[k]), VAR_CONST, NULL);
+    }
+}
+
 static int typedef_index(BcProgram* prog, TDecl* d) {
     for (int i = 0; i < prog->ntypedefs; ++i) {
         if (prog->typedef_decls[i] == d) {
@@ -370,6 +414,7 @@ static int typedef_index(BcProgram* prog, TDecl* d) {
     }
 
     ObjTypeDef* td = vm_typedef_new(prog->vm, d->name);
+    td->def = d->def; // decode(m, T) reads the record's fields
     keep(prog, obj_val(td));
     if (prog->ntypedefs >= prog->captypedefs) {
         prog->captypedefs = prog->captypedefs ? prog->captypedefs * 2 : 8;
@@ -379,8 +424,18 @@ static int typedef_index(BcProgram* prog, TDecl* d) {
 
     prog->typedefs[prog->ntypedefs] = td;
     prog->typedef_decls[prog->ntypedefs] = d;
+    const int index = prog->ntypedefs++;
+    // the types its fields name (a nested record, an enum), bound where decode(m, T) resolves them
+    if (d->def && d->def->kind == TY_RECORD && d->scope) {
+        ObjEnv* env = env_new(prog->vm, prog->vm->builtins);
+        keep(prog, obj_val(env));
+        prog->typedefs[index]->env = env;
+        for (int i = 0; i < d->def->nfields; ++i) {
+            bind_field_types(prog, env, d->scope, d->def->ftypes[i]);
+        }
+    }
 
-    return prog->ntypedefs++;
+    return index;
 }
 
 // the C body of a function: a builtin / native module's, or a library module's `native function`
@@ -1033,8 +1088,18 @@ static void type_value(Comp* c, Node* n, const SType* t) {
     }
 
     switch (d->kind) {
-        case TD_ENUM: op1(c, OP_CONST, add_const(c->prog, obj_val(c->prog->enums[enum_index(c->prog, d)]))); return;
-        case TD_ALIAS: op1(c, OP_CONST, add_const(c->prog, obj_val(c->prog->typedefs[typedef_index(c->prog, d)]))); return;
+        case TD_ENUM: {
+            const int k = enum_index(c->prog, d); // first: it may grow (move) prog->enums
+            op1(c, OP_CONST, add_const(c->prog, obj_val(c->prog->enums[k])));
+
+            return;
+        }
+        case TD_ALIAS: {
+            const int k = typedef_index(c->prog, d); // first: it may grow (move) prog->typedefs
+            op1(c, OP_CONST, add_const(c->prog, obj_val(c->prog->typedefs[k])));
+
+            return;
+        }
         case TD_NATIVE: {
             ObjNativeType* nt = d->which == NT_MAP ? vm->t_map : d->which == NT_SET ? vm->t_set : NULL;
             if (!nt) {

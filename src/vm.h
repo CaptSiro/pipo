@@ -192,6 +192,16 @@ void vm_register_native_types(VM* vm, const char* module, const NativeClass* cla
 ObjNativeType* vm_native_type(VM* vm, const char* module, const char* name); // a registered class's type, or NULL
 Value make_some(VM* vm, Value v);
 Value make_none(VM* vm);
+// Record conversion: a record literal may leave out its T? fields (none()), write a field a_b as a-b
+// (tag attributes), and, for a record type with a rest field, have fields the type does not name
+// (they move into the rest map). record_convert does that to an object taking a record type.
+bool type_is_option(const Type* t);
+bool record_key_names(const ObjString* key, const ObjString* field); // key is field, or field with '_' written '-'
+void record_convert(VM* vm, ObjObject* o, const Type* record);
+// a record (an untyped object) where a Map<string, V> is expected: a new map of its fields; other values as they are
+Value record_as_map(VM* vm, Type* t, Value v, ObjEnv* env);
+// decode(m, T): a Map<string, unknown> checked and converted into the record type T, as an Error<T>
+Value record_decode(VM* vm, Value map, Value type, int line);
 Value make_success(VM* vm, Value v);
 Value make_fail(VM* vm, Value v);
 Value vm_lift(VM* vm, Value v);

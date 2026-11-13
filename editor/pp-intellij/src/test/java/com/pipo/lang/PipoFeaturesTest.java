@@ -392,6 +392,38 @@ public class PipoFeaturesTest extends BasePlatformTestCase {
 
     /* ----------------------------------------------------------- formatter */
 
+    public void testTagCallsResolveAndIndent() {
+        myFixture.configureByText("a.pp", """
+                function row(string[] cells) -> string {
+                    return join(cells, "|")
+                }
+                const r = <r<caret>ow>"a" "b"</row>
+                """);
+        PipoFunctionDecl decl = (PipoFunctionDecl) single();
+        assertEquals("row", decl.getName());
+
+        myFixture.configureByText("b.pp", """
+                function row(string[] cells) -> string {
+                    return join(cells, "|")
+                }
+                const r = <row>
+                "a"
+                        <row>"b"</row>
+                </row>
+                """);
+        WriteCommandAction.runWriteCommandAction(getProject(),
+                (Runnable) () -> CodeStyleManager.getInstance(getProject()).reformat(myFixture.getFile()));
+        myFixture.checkResult("""
+                function row(string[] cells) -> string {
+                    return join(cells, "|")
+                }
+                const r = <row>
+                    "a"
+                    <row>"b"</row>
+                </row>
+                """);
+    }
+
     public void testFormatterIndentsWithoutChangingMeaning() {
         myFixture.configureByText("a.pp", """
                 function f(int a,int b) -> int {

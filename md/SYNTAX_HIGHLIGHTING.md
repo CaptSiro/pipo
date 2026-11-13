@@ -70,6 +70,8 @@ the IDE. JetBrains caches TextMate bundles.
 | `entity.name.namespace` | the module / object before `:`, as in `io:print` |
 | `punctuation.accessor` | `:` and `.` before a name |
 | `keyword.operator` | operator runs, `->`, `...`, `...=` |
+| `meta.tag`, `entity.name.tag`, `punctuation.definition.tag` | a tag call `<h:div ...>` / `/>` and its closing `</h:div>` (a `<` glued to a name, not after an operand, and not a generic list such as `<T>function`) |
+| `entity.other.attribute-name` | `class`, `aria-label` in a tag; `{ ... }` inside is highlighted as code |
 
 Matching is purely by regular expressions, so contextual words such as
 `type` or `as` are coloured as keywords even when used as variable names.

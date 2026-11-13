@@ -173,6 +173,9 @@ public final class PipoPsiUtil {
     /** is e the callee of a call: f(x), f x, recv.f(x), mod:f(x) */
     public static boolean isCallee(PsiElement e) {
         PsiElement p = e.getParent();
+        if (is(p, PipoElementTypes.TAG_EXPR) || is(p, PipoElementTypes.TAG_CLOSE)) {
+            return true; // <f ...> and </f>
+        }
         if (is(p, PipoElementTypes.CALL_EXPR) || is(p, PipoElementTypes.SCOPE_CALL_EXPR)) {
             return p.getFirstChild() == e;
         }

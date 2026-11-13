@@ -222,9 +222,13 @@ native function repeat(any[] array, int count) -> any[]
 native function repeat(string s, int count) -> string
 // a new array / string from start up to (not including) end
 native function slice(any[] array, int start) -> any[]
+// the end is excluded
 native function slice(any[] array, int start, int end) -> any[]
 native function slice(string s, int start) -> string
 native function slice(string s, int start, int end) -> string
+// the indices of r: ... excludes the end, ...= includes it; negatives count from the back
+native function slice(any[] array, Range r) -> any[]
+native function slice(string s, Range r) -> string
 native function contains(any[] array, any item) -> bool
 native function contains(string s, string sub) -> bool
 native function index_of(any[] array, any item) -> int?
@@ -277,6 +281,8 @@ native function clamp(number x, any a, any b) -> any
 
 // a range with a custom step; any float makes a float range
 native function range(number start, number end, number step) -> Range
+// a Map<string, unknown> checked and converted into the record type T: success(record) or fail(why)
+native function decode(any map, type record) -> Error
 // aborts with a runtime error
 native function panic(any message) -> void
 native function assert(bool condition) -> void

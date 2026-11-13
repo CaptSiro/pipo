@@ -1,0 +1,6 @@
+Hi some(3) 2.0 Map{"color": "red"}
+Page: field 'card': Card: field 'title': expected string but got int
+Card: field 'title' is missing
+fail("Strict has no field \"b\"") success({
+    "a": 1
+})

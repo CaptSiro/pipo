@@ -1,0 +1,5 @@
+<div id=main role=button> <div>
+<div id=x data-user-id=42 aria-live=polite hx-get=/items>
+some("c") Map{"title": "t"} 1
+Name 1
+1 Map{"b": 2, "c": 3}

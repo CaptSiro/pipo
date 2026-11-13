@@ -255,11 +255,14 @@ static int utf8_len(unsigned char c) {
     return 1;
 }
 
-static void tag_value(Value v, ObjTypeDef* td) {
+// record: the declaration's record type, for the T? fields a literal left out (they become none())
+static void tag_value(VM* vm, Value v, ObjTypeDef* td, const Type* record) {
     if (IS_KIND(v, OBJ_OBJECT)) {
         if (!AS_OBJECT(v)->tag) {
             AS_OBJECT(v)->tag = td;
         }
+
+        record_convert(vm, AS_OBJECT(v), record);
 
         return;
     }
@@ -267,7 +270,7 @@ static void tag_value(Value v, ObjTypeDef* td) {
     if (IS_KIND(v, OBJ_ARRAY)) {
         const ObjArray* a = AS_ARRAY(v);
         for (int i = 0; i < a->count; ++i) {
-            tag_value(a->items[i], td);
+            tag_value(vm, a->items[i], td, record);
         }
     }
 }
@@ -920,7 +923,11 @@ static Value run(VM* vm, int stop) {
 
                 break;
             }
-            case OP_TAG: tag_value(PEEK(0), prog->typedefs[READ()]); break;
+            case OP_TAG: {
+                const int k = READ();
+                tag_value(vm, PEEK(0), prog->typedefs[k], prog->typedef_decls[k]->def);
+                break;
+            }
 
             case OP_ITER_INIT: {
                 const int s = READ();

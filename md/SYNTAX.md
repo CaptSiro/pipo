@@ -155,6 +155,14 @@ primary     = literal | ident
             | generics? 'function' name? params '->' type block
             | lambda
             | if | match
+            | tag                                   in operand position: '<' glued to a name
+
+tag         = '<' path attribute* ('/>' | '>' child* '</' path '>')     the closing path repeats the opening one
+path        = ident (':' ident)*
+attribute   = attr_name ('=' attr_value)?            no value: true
+attr_name   = word ('-' word)*                       no spaces; a-b is the field a_b
+attr_value  = string | int | float | 'true' | 'false' | '{' expression '}'
+child       = string | tag | '{' expression '}'
 
 lambda      = (ident | params) '->' (block | expression)    not inside a match pattern or guard
 

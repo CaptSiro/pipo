@@ -95,6 +95,14 @@ public interface PipoElementTypes {
     IElementType SCOPE_EXPR = new PipoTokenType("SCOPE_EXPR");
     /** expr as Type: a checked downcast, some(value) or none() */
     IElementType AS_EXPR = new PipoTokenType("AS_EXPR");
+    /** <f a={x}>children</f>: a tag call (md/TAG_CALLS.md); its name is a REF_EXPR / FIELD_EXPR */
+    IElementType TAG_EXPR = new PipoTokenType("TAG_EXPR");
+    /** name, name="text", name={expression} */
+    IElementType TAG_ATTR = new PipoTokenType("TAG_ATTR");
+    /** the name of an attribute: identifiers joined by '-' (aria-label) */
+    IElementType TAG_ATTR_NAME = new PipoTokenType("TAG_ATTR_NAME");
+    /** </f>: the closing tag, its name again */
+    IElementType TAG_CLOSE = new PipoTokenType("TAG_CLOSE");
 
     TokenSet TYPES = TokenSet.create(TYPE_REF, ARRAY_TYPE, OPTION_TYPE, UNION_TYPE, RECORD_TYPE, FUNCTION_TYPE,
             PAREN_TYPE, CALLBACK_TYPE);

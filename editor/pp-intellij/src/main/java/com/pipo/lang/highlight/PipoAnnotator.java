@@ -59,6 +59,8 @@ public final class PipoAnnotator implements Annotator {
             colorRef(ref, holder);
         } else if (element instanceof PipoFieldExpr field) {
             colorField(field, holder);
+        } else if (t == PipoElementTypes.TAG_ATTR_NAME) {
+            color(holder, element.getTextRange(), PipoColors.FIELD); // <input aria-label="..."/>
         } else if (element instanceof PipoObjectEntry entry && !entry.isShorthand() && entry.getFirstChild() != null
                 && !is(entry.getFirstChild(), PipoTokenTypes.STRING)) {
             color(holder, entry.getFirstChild().getTextRange(), PipoColors.FIELD);

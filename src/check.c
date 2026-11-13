@@ -385,6 +385,7 @@ SType* st_record_fill(Checker* c, SType* t) {
     t->fnames = names;
     t->ftypes = types;
     t->nfields = def->nfields;
+    t->rest = def->rest;
     for (int i = 0; i < def->nfields; ++i) {
         names[i] = def->fnames[i];
         types[i] = st_prim(ST_DYN);
@@ -592,6 +593,7 @@ SType* resolve_type(Ctx* x, Type* t, CScope* s, SBindings* gen) {
         case TY_RECORD: {
             SType* r = st_new(ST_RECORD);
             r->nfields = t->nfields;
+            r->rest = t->rest;
             r->fnames = pp_calloc((size_t)(t->nfields + 1), sizeof(ObjString*));
             r->ftypes = pp_calloc((size_t)(t->nfields + 1), sizeof(SType*));
             for (int i = 0; i < t->nfields; ++i) {

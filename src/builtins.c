@@ -328,6 +328,11 @@ static Value n_range_num_incl(VM* vm, int argc, Value* a) {
     return make_float_range(vm, num_as_double(a[0]), num_as_double(a[1]), true);
 }
 
+// decode(m, T): a Map<string, unknown> converted into the record type T, success(record) or fail(why)
+static Value n_decode(VM* vm, int argc, Value* a) {
+    return record_decode(vm, a[0], a[1], 0);
+}
+
 static Value n_range_to(VM* vm, int argc, Value* a) {
     return make_range(vm, 0, a[0].as.i, false);
 }
@@ -971,6 +976,47 @@ static Value n_slice(VM* vm, int argc, Value* a) {
     return obj_val(r);
 }
 
+// slice(xs, r): the indices from r:start to r:end, the end included for a ...= range. Negative
+// indices count from the back as in slice(xs, start, end), so xs.slice(1...=-1) drops the first item.
+// The bounds are what counts, not the direction: 3...0 is empty, like slice(xs, 3, 0).
+static Value n_slice_range(VM* vm, int argc, Value* a) {
+    const ObjRange* r = AS_RANGE(a[1]);
+    if (!range_is_numeric(r) || range_is_float(r)) {
+        rt_error(vm, 0, "slice takes a range of ints (indices), got a range of %s", value_type_name(r->start));
+    }
+
+    if (r->step.as.i != 1 && r->step.as.i != -1) {
+        rt_error(vm, 0, "slice takes a range of consecutive indices, got one with step %" PRId64, r->step.as.i);
+    }
+
+    const int64_t len = IS_KIND(a[0], OBJ_STRING) ? AS_STR(a[0])->len : AS_ARRAY(a[0])->count;
+    int64_t start = r->start.as.i;
+    int64_t end = range_end(r).as.i;
+    if (start < 0) {
+        start += len;
+    }
+
+    if (end < 0) {
+        end += len;
+    }
+
+    if (r->inclusive) {
+        end += 1;
+    }
+
+    if (start < 0) {
+        start = 0;
+    }
+
+    if (end < 0) {
+        end = 0;
+    }
+
+    Value args[3] = {a[0], int_val(start), int_val(end)};
+
+    return n_slice(vm, 3, args);
+}
+
 static Value n_contains(VM* vm, int argc, Value* a) {
     const ObjArray* arr = AS_ARRAY(a[0]);
     for (int i = 0; i < arr->count; ++i) {
@@ -1520,6 +1566,7 @@ void builtins_register(VM* vm) {
     def(vm, "...=", "(int start, int end) -> Range", n_range_incl);
     def(vm, "...=", "(number start, number end) -> Range", n_range_num_incl);
     def(vm, "range", "(number start, number end, number step) -> Range", n_range_step);
+    def(vm, "decode", "(any map, type record)", n_decode);
 
     // printing & input live in the `io` module (src/modules/io.c)
 
@@ -1549,6 +1596,8 @@ void builtins_register(VM* vm) {
     def(vm, "slice", "(any[] array, int start, int end)", n_slice);
     def(vm, "slice", "(string s, int start) -> string", n_slice);
     def(vm, "slice", "(string s, int start, int end) -> string", n_slice);
+    def(vm, "slice", "(any[] array, Range r)", n_slice_range);
+    def(vm, "slice", "(string s, Range r) -> string", n_slice_range);
     def(vm, "contains", "(any[] array, any item) -> bool", n_contains);
     def(vm, "contains", "(string s, string sub) -> bool", n_contains_str);
     def(vm, "index_of", "(any[] array, any item)", n_index_of);

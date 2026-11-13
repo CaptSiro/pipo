@@ -45,6 +45,7 @@ struct Type {
     ObjString** fnames;  // TY_RECORD
     Type** ftypes;
     int nfields;
+    int rest;            // TY_RECORD: 1 + the index of its rest field (...Map<string, V> name), 0 = none
 };
 
 // monomorphic inline cache for overload resolution at a call site
@@ -144,7 +145,9 @@ struct Node {
         ObjString* str; // N_STRING value, N_IDENT name
         struct { NodeList items; } array;
         struct { ObjString** keys; NodeList values; } object;
-        struct { Node* callee; NodeList args; InlineCache* ic; } call;
+        // tag != NULL: written as a tag call (<f a={x}>...</f>, md/TAG_CALLS.md); tag is its name ("h:div")
+        // and tag_form says what was written (TAG_ATTRS, TAG_BODY), and TAG_LOWERED once tag_lower ran
+        struct { Node* callee; NodeList args; InlineCache* ic; ObjString* tag; int tag_form; } call;
         // recv.callee(args) == callee(recv, args); callee is a name or a:b:c path
         struct { Node* recv; Node* callee; NodeList args; InlineCache* ic; } method;
         struct { Node* obj; ObjString* name; } field;

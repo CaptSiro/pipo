@@ -255,6 +255,44 @@ static ObjModule* module_of_env(VM* vm, ObjEnv* env) {
     return NULL;
 }
 
+// A tag call the checker did not see (--no-check): pick its form from the callee's signatures
+static void lower_tag_at_runtime(VM* vm, Node* n, Value callee) {
+    Signature* one[1];
+    Signature** sigs = one;
+    int nsigs = 0;
+    bool ctor = false;
+    bool known = true;
+    if (IS_KIND(callee, OBJ_OVERLOAD)) {
+        const ObjOverload* set = (ObjOverload*)callee.as.o;
+        sigs = pp_malloc(sizeof(Signature*) * (size_t)(set->count + 1));
+        for (int i = 0; i < set->count; ++i) {
+            const Obj* f = set->items[i];
+            sigs[nsigs++] = f->kind == OBJ_FUNCTION ? ((ObjFunction*)f)->sig : f->kind == OBJ_NATIVE ? ((ObjNative*)f)->sig : NULL;
+        }
+    } else if (IS_KIND(callee, OBJ_FUNCTION)) {
+        one[nsigs++] = ((ObjFunction*)callee.as.o)->sig;
+    } else if (IS_KIND(callee, OBJ_NATIVE)) {
+        one[nsigs++] = ((ObjNative*)callee.as.o)->sig;
+    } else if (IS_KIND(callee, OBJ_TYPEDEF)) {
+        ctor = true;
+    } else {
+        known = false;
+    }
+
+    StrBuf err;
+    sb_init(&err);
+    const bool ok = tag_lower(vm, n, sigs, nsigs, ctor, known, &err);
+    if (sigs != one) {
+        free(sigs);
+    }
+
+    if (!ok) {
+        rt_error(vm, n->line, "%s", err.data);
+    }
+
+    sb_free(&err);
+}
+
 // For recv.name(args): the overload set `name` exported by the module that
 // declared the receiver's type, so `r.area()` works without `r.shapes:area()`.
 static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
@@ -579,6 +617,24 @@ static void adopt_field_callbacks(VM* vm, ObjObject* o);
 // match nominally later (interfaces, overloads, dot calls). With deep, the
 // elements of an array were checked too (`const Item[] xs = [{...}]`,
 // `let Order o = ...` with `type Order = Item[]`), so they are tagged as well.
+// a record passed where a record type is expected gets the T? fields it left out, as none()
+static void fill_options_for(VM* vm, Type* t, Value v, ObjEnv* env) {
+    if (!t || !IS_KIND(v, OBJ_OBJECT)) {
+        return;
+    }
+
+    if (t->kind == TY_RECORD) {
+        record_convert(vm, AS_OBJECT(v), t);
+
+        return;
+    }
+
+    Value tv;
+    if (t->kind == TY_NAME && resolve_type_value(vm, t, env, &tv) && IS_KIND(tv, OBJ_TYPEDEF)) {
+        record_convert(vm, AS_OBJECT(v), ((ObjTypeDef*)tv.as.o)->def);
+    }
+}
+
 static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
     if (!t) {
         return;
@@ -624,6 +680,8 @@ static void maybe_tag(VM* vm, Type* t, Value v, ObjEnv* env, bool deep) {
     if (!o->tag) {
         o->tag = td;
     }
+
+    record_convert(vm, o, td->def);
 }
 
 // lambdas stored in fields of a record type take the callback types of those fields
@@ -655,6 +713,7 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
         rt_error(vm, line, "%s: expected %s but got %s", what, sb.data, value_type_name(v));
     }
 
+    v = record_as_map(vm, t, v, env);
     maybe_tag(vm, t, v, env, deep);
     if (IS_KIND(v, OBJ_OBJECT)) {
         adopt_field_callbacks(vm, AS_OBJECT(v));
@@ -825,6 +884,8 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
         }
 
         a = adopt_callback_types(vm, pt, a, fn->closure, b, sig->params[i].name);
+        a = record_as_map(vm, pt, a, fn->closure); // a record given for a Map<string, V> (without the checker)
+        fill_options_for(vm, pt, a, fn->closure);
         env_define(vm, env, sig->params[i].name, a, 0, sig->ngenerics ? NULL : pt);
     }
 
@@ -1022,6 +1083,7 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
 
             if (IS_KIND(args[0], OBJ_OBJECT) && td->def->kind == TY_RECORD) {
                 AS_OBJECT(args[0])->tag = td;
+                record_convert(vm, AS_OBJECT(args[0]), td->def);
                 adopt_field_callbacks(vm, AS_OBJECT(args[0]));
             }
 
@@ -1572,6 +1634,9 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             const int base = vm->sp;
             const Value callee = eval(vm, n->as.call.callee, env);
             vm_push(vm, callee);
+            if (n->as.call.tag && !(n->as.call.tag_form & TAG_LOWERED)) {
+                lower_tag_at_runtime(vm, n, callee);
+            }
 
             return eval_call_args(vm, n, env, callee, &n->as.call.args, base, n->as.call.ic);
         }

@@ -176,3 +176,5 @@ io:print_nl(nums, nums.pop(), nums, reduce([1, 2, 3], (a, b) -> a + b, 0))
 // a range's end is the end as written: a ...= range stores it one step further
 const incl = 2...=6
 io:print_nl(incl:start, incl:end, incl:step, incl:inclusive, (9...=3):end, (0...4):end)
+// slice by a range: ... excludes the end, ...= includes it
+io:print_nl(nums.slice(0...=1), "hello".slice(1...=-2), 0...=5, 5...=1)

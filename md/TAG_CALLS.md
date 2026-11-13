@@ -1,5 +1,24 @@
 # Tag calls (draft 4)
 
+**Implemented** (2026-11-13) in the parser, the checker and the interpreter, with the
+IntelliJ plugin and the TextMate grammar. The rules for users are in
+[LANGUAGE.md](LANGUAGE.md#tag-calls). Status of the design below:
+
+| | |
+|-|-|
+| tags, the four call forms, the `/>` / body hints, kebab attribute names, string text, `m:f` paths, tags on record types | done (`tests/tags.pp`, `tests/err_tag_*.pp`) |
+| `T?` fields may be left out of a record literal (`none()`) | done, for record literals in general |
+| the bytecode VM | works too: tags become ordinary calls before it compiles them (`tests/tags.pp` runs on it); wasm is not tested |
+| rest fields `...Map<string, V> name` and `decode(m, T)` | done, in the interpreter and the bytecode VM (`tests/rest_fields.pp`, `tests/decode.pp`); a record type with a rest field is converted where an argument, a typed declaration or `Type({...})` gives a value its type (on the bytecode VM: named record types only) |
+| a kebab name filling `a_b` or going to the rest field (rules 1 and 2 below) | done: tag attributes keep their kebab names, and record conversion maps them |
+| a record where a `Map<string, V>` is expected (rule 3, level 3: `element(Map<string, unknown> attrs)`) | done, everywhere a value is converted (arguments, declarations, assignments, returns, fields), on every target: the checker rewrites the value into `map(value)` (`tests/map_params.pp`) |
+| generic inference through record fields (`<For each={...}>`), lambdas in record and array literals typed from the parameter | done (`tests/record_inference.pp`) |
+| unknown attributes of a closed record, with `"did you mean"` | done, for record literals in general: `Props has no field 'lable' (did you mean 'label'?)` (when the misspelling also leaves a required field missing, the error is still `no overload of 'f' accepts (...)`) |
+
+One rule became more precise while implementing: `<f>...</f>` without attributes
+calls `f([...])` only when an `f` takes **exactly one array**; otherwise it is
+`f({}, [...])`. A `T?` attribute is given as `size={some(3)}`, like any `T?` value.
+
 A design, not an implementation. It takes the tag call of [WEB.md](WEB.md#tag-calls-a-calling-paradigm)
 (draft 2), works through the second round of [designer notes](WEB.md#designer-notes-2),
 and, in this draft, the [design notes](#design-notes) at the end of this file.

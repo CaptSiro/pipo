@@ -456,8 +456,10 @@ public final class PipoResolver {
         if (t == PipoElementTypes.OBJECT_EXPR) {
             return List.of(expr);
         }
-        if (t == PipoElementTypes.CALL_EXPR || t == PipoElementTypes.METHOD_CALL_EXPR) {
-            PsiElement callee = t == PipoElementTypes.CALL_EXPR ? expr.getFirstChild() : PipoPsiUtil.methodCallee(expr);
+        if (t == PipoElementTypes.CALL_EXPR || t == PipoElementTypes.METHOD_CALL_EXPR || t == PipoElementTypes.TAG_EXPR) {
+            PsiElement callee = t == PipoElementTypes.CALL_EXPR ? expr.getFirstChild()
+                    : t == PipoElementTypes.TAG_EXPR ? ((PipoElement) expr).child(PipoElement.class)
+                    : PipoPsiUtil.methodCallee(expr);
             List<PsiElement> out = new ArrayList<>();
             for (PsiElement c : targetsOf(callee, depth + 1)) {
                 if (c instanceof PipoTypeDecl) {

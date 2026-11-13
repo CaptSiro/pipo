@@ -1,4 +1,5 @@
 #include "check_int.h"
+#include "parser.h"
 
 
 
@@ -929,6 +930,116 @@ static bool is_lambda(Node* n) {
 }
 
 // a call of the candidates with argument nodes (some may be lambdas typed from the chosen candidate)
+static char* tname(const SType* t);
+static bool literal_with_lambdas(Node* n);
+
+// a record or array literal with a record literal somewhere inside
+static bool nested_literal(Node* n) {
+    NodeList* items = n->kind == N_OBJECT ? &n->as.object.values : n->kind == N_ARRAY ? &n->as.array.items : NULL;
+    for (int i = 0; items && i < items->count; ++i) {
+        if (items->items[i]->kind == N_OBJECT || nested_literal(items->items[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool is_map_type(const SType* t) {
+    return t && t->kind == ST_NATIVE && t->decl && t->decl->which == NT_MAP;
+}
+
+// A record value where a Map<string, V> is expected (an argument, a declaration, an assignment, a
+// return, a field of a literal): the expression is rewritten in place into map(expression), so every
+// target sees a real map. Returns the type the value has now.
+static SType* record_to_map(Ctx* x, Node* n, SType* want, SType* got) {
+    if (!n || !is_map_type(want) || !got || got->kind != ST_RECORD || got->decl) {
+        return got;
+    }
+
+    Node* inner = pp_malloc(sizeof(Node));
+    *inner = *n;
+    memset(&n->as, 0, sizeof n->as);
+    n->kind = N_CALL;
+    Node* id = pp_calloc(1, sizeof(Node));
+    id->kind = N_IDENT;
+    id->line = n->line;
+    id->as.str = str_cintern(x->c->vm, "map");
+    n->as.call.callee = id;
+    n->as.call.ic = pp_calloc(1, sizeof(InlineCache));
+    GROW(n->as.call.args.items, n->as.call.args.count, n->as.call.args.cap);
+    n->as.call.args.items[n->as.call.args.count++] = inner;
+    check_expr(x, n, NULL);
+
+    return want;
+}
+
+// how far apart two names are (edits), for "did you mean"
+static int name_distance(const char* a, const char* b) {
+    const int la = (int)strlen(a), lb = (int)strlen(b);
+    if (la > 31 || lb > 31) {
+        return 99;
+    }
+
+    int d[32][32];
+    for (int i = 0; i <= la; ++i) {
+        d[i][0] = i;
+    }
+
+    for (int j = 0; j <= lb; ++j) {
+        d[0][j] = j;
+    }
+
+    for (int i = 1; i <= la; ++i) {
+        for (int j = 1; j <= lb; ++j) {
+            const int sub = d[i - 1][j - 1] + (a[i - 1] != b[j - 1]);
+            const int del = d[i - 1][j] + 1;
+            const int ins = d[i][j - 1] + 1;
+            d[i][j] = sub < del ? (sub < ins ? sub : ins) : (del < ins ? del : ins);
+        }
+    }
+
+    return d[la][lb];
+}
+
+// A record literal given where a closed record type is expected: a field the type does not name is
+// an error (with a rest field, ...Map<string, V> name, they go to the map instead).
+static void check_literal_fields(Ctx* x, Node* lit, SType* want) {
+    if (!lit || lit->kind != N_OBJECT || !want || want->kind != ST_RECORD) {
+        return;
+    }
+
+    SType* rec = st_record_fill(x->c, want);
+    if (rec->rest || !rec->fnames) {
+        return;
+    }
+
+    for (int i = 0; i < lit->as.object.values.count; ++i) {
+        ObjString* key = lit->as.object.keys[i];
+        bool known = false;
+        const char* best = NULL;
+        int best_d = 3;
+        for (int f = 0; f < rec->nfields && !known; ++f) {
+            known = record_key_names(key, rec->fnames[f]);
+            const int dist = name_distance(key->chars, rec->fnames[f]->chars);
+            if (dist < best_d && dist <= key->len / 2) { // a suggestion only when it is close
+                best_d = dist;
+                best = rec->fnames[f]->chars;
+            }
+        }
+
+        if (!known) {
+            StrBuf hint;
+            sb_init(&hint);
+            if (best) {
+                sb_printf(&hint, " (did you mean '%s'?)", best);
+            }
+
+            cerr(x->c, lit->line, "%s has no field '%s'%s", tname(want), key->chars, hint.data);
+        }
+    }
+}
+
 static SType* resolve_and_call(Ctx* x, Node* n, ObjString* name, Cands* cs, SType** args, Node** arg_nodes, int argc,
                                CCall* call) {
     if (any_dyn(args, argc)) {
@@ -948,9 +1059,16 @@ static SType* resolve_and_call(Ctx* x, Node* n, ObjString* name, Cands* cs, STyp
         no_overload(x, name, cs, args, argc, n->line);
     }
 
-    // lambdas take their types from the parameter they are passed to
+    // lambdas take their types from the parameter they are passed to, also inside record and array literals
+    // ({ each: xs, key: t -> t:id }): those are checked again against the parameter's type
     bool had_lambda = false;
     for (int i = 0; arg_nodes && i < argc; ++i) {
+        if (arg_nodes[i] && literal_with_lambdas(arg_nodes[i])) {
+            args[i] = check_expr(x, arg_nodes[i], expect_for_lambda(x, f, i, args, argc, &b));
+            had_lambda = true;
+            continue;
+        }
+
         if (!arg_nodes[i] || !is_lambda(arg_nodes[i]) || args[i]->kind != ST_FUNCTION) {
             continue;
         }
@@ -967,6 +1085,29 @@ static SType* resolve_and_call(Ctx* x, Node* n, ObjString* name, Cands* cs, STyp
 
         if (!score_func(x, f, args, argc, &b)) {
             no_overload(x, name, cs, args, argc, n->line);
+        }
+    }
+
+    for (int i = 0; arg_nodes && i < argc && !dispatch; ++i) {
+        if (!arg_nodes[i]) {
+            continue;
+        }
+
+        SType* want = expect_for_lambda(x, f, i, args, argc, &b);
+        if (arg_nodes[i]->kind == N_OBJECT) {
+            check_literal_fields(x, arg_nodes[i], want);
+        }
+
+        if (want && (want->kind == ST_RECORD || want->kind == ST_ARRAY) && nested_literal(arg_nodes[i])) {
+            // a literal inside a literal ({ attrs: { a: "1" } }): checked again against the parameter's type, so
+            // the inner one becomes what its field expects (a map, ...)
+            args[i] = check_expr(x, arg_nodes[i], want);
+        }
+
+        // map(record) itself: its C body copies a record's fields (no map(map(...)) of the rewrite)
+        const bool ctor = f->kind == CF_NATIVE && f->impl_name && is_name(f->impl_name, "std_map_new");
+        if (!ctor) {
+            args[i] = record_to_map(x, arg_nodes[i], want, args[i]);
         }
     }
 
@@ -1153,6 +1294,24 @@ static SType* builtin_result(Ctx* x, CFunc* f, SType** a, int argc, CCall* call,
         call->op = argc == 1 ? (incl ? COP_RANGE_TO_INCL : COP_RANGE_TO) : (incl ? COP_RANGE_INCL : COP_RANGE);
 
         return range_of(ST_INT);
+    }
+
+    if (strcmp(name, "decode") == 0 && argc == 2) {
+        // decode(m, T): the second argument is a record type, the result an Error<T>
+        TDecl* d = a[1]->kind == ST_TYPE ? a[1]->decl : NULL;
+        if (!d || d->kind != TD_ALIAS || !d->def || d->def->kind != TY_RECORD) {
+            cerr(x->c, n->line, "decode(m, T): T must be the name of a record type, got %s", tname(a[1]));
+        }
+
+        const bool map = a[0]->kind == ST_NATIVE && a[0]->decl && a[0]->decl->which == NT_MAP &&
+                         (!a[0]->nargs || a[0]->args[0]->kind == ST_STRING || st_is_dyn(a[0]->args[0]));
+        if (!map && !st_is_dyn(a[0]) && a[0]->kind != ST_UNKNOWN) {
+            cerr(x->c, n->line, "decode(m, T): m must be a Map<string, unknown>, got %s", tname(a[0]));
+        }
+
+        SType* ea[2] = {named_record(x->c, d), st_prim(ST_STRING)};
+
+        return enum_type(x->c, x->c->error, ea, 2);
     }
 
     if (strcmp(name, "range") == 0) {
@@ -1900,10 +2059,69 @@ static bool untyped_lambda(Node* n) {
     return !n->as.func.sig->ret && n->as.func.lambda;
 }
 
+static SType* lambda_placeholder(Node* lambda) {
+    SType* placeholder = st_new(ST_FUNCTION);
+    placeholder->arity = lambda->as.func.sig->nparams + 1;
+
+    return placeholder;
+}
+
+// a record or array literal with an untyped lambda in it ({ key: t -> t:id }, [t -> t:title]), at any depth:
+// its lambdas take their types from the parameter the literal is passed to, once the call is resolved
+static bool literal_with_lambdas(Node* n) {
+    NodeList* items = n->kind == N_OBJECT ? &n->as.object.values : n->kind == N_ARRAY ? &n->as.array.items : NULL;
+    for (int i = 0; items && i < items->count; ++i) {
+        if (untyped_lambda(items->items[i]) || literal_with_lambdas(items->items[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// the type of such a literal while the call is resolved: its lambdas as placeholders (they fit a callback
+// type by their parameter count), every other value checked as usual
+static SType* literal_placeholder(Ctx* x, Node* n) {
+    if (untyped_lambda(n)) {
+        return lambda_placeholder(n);
+    }
+
+    if (n->kind == N_ARRAY && literal_with_lambdas(n)) {
+        SType* elem = NULL;
+        for (int i = 0; i < n->as.array.items.count; ++i) {
+            SType* e = literal_placeholder(x, n->as.array.items.items[i]);
+            elem = elem && e->kind == ST_FUNCTION && elem->kind == ST_FUNCTION ? elem : join(elem, e);
+        }
+
+        return st_array(elem ? elem : st_prim(ST_NEVER));
+    }
+
+    if (n->kind == N_OBJECT && literal_with_lambdas(n)) {
+        SType* r = st_new(ST_RECORD);
+        const int nf = n->as.object.values.count;
+        r->nfields = nf;
+        r->fnames = pp_calloc((size_t)(nf + 1), sizeof(ObjString*));
+        r->ftypes = pp_calloc((size_t)(nf + 1), sizeof(SType*));
+        for (int i = 0; i < nf; ++i) {
+            r->fnames[i] = n->as.object.keys[i];
+            r->ftypes[i] = literal_placeholder(x, n->as.object.values.items[i]);
+        }
+
+        return r;
+    }
+
+    return check_expr(x, n, NULL);
+}
+
 static void check_args(Ctx* x, NodeList* al, SType** args, Node** nodes, int offset) {
     for (int i = 0; i < al->count; ++i) {
         Node* a = al->items[i];
         nodes[offset + i] = a;
+        if (literal_with_lambdas(a)) {
+            args[offset + i] = literal_placeholder(x, a);
+            continue;
+        }
+
         if (untyped_lambda(a)) {
             // typed once the call is resolved; its parameter count already picks between callback types
             SType* placeholder = st_new(ST_FUNCTION);
@@ -1932,6 +2150,12 @@ static SType* construct_record(Ctx* x, Node* n, TDecl* d, SType** args, int argc
     }
 
     SType* t = named_record(c, d);
+    Node* lit = n->kind == N_CALL && n->as.call.args.count == 1 ? n->as.call.args.items[0] : NULL;
+    if (lit && lit->kind == N_OBJECT) {
+        // Type({ ... }): the literal checked against the type (strict fields, nested maps, lambdas)
+        args[0] = check_expr(x, lit, t);
+    }
+
     if (!st_fit(t, args[0], NULL)) {
         cerr(c, n->line, "expected %s but got %s", tname(t), tname(args[0]));
     }
@@ -2029,8 +2253,61 @@ static SType* call_value(Ctx* x, Node* n, SType* callee, SType** args, Node** no
     }
 }
 
+// A tag call (<f ...>...</f>): pick f() / f({}) and f([...]) / f({}, [...]) from the candidates'
+// signatures, before the call is checked like any other (parser.h, tag_lower)
+static void lower_tag(Ctx* x, Node* n) {
+    Checker* c = x->c;
+    Node* cn = n->as.call.callee;
+    Signature** sigs = NULL;
+    int nsigs = 0, cap = 0;
+    bool ctor = false;
+    bool known = true;
+    const CFuncSet* sets[2] = {NULL, NULL};
+    if (cn->kind == N_IDENT) {
+        const CSym* sym = scope_lookup(x->scope, cn->as.str);
+        if (sym && sym->kind == SYM_TYPE) {
+            ctor = true;
+        } else if (sym && sym->kind != SYM_FUNCS) {
+            known = false; // a variable holding a function: its signature is not a list of candidates
+        } else {
+            sets[0] = sym ? sym->funcs : NULL;
+            sets[1] = global_funcs(c, cn->as.str);
+        }
+    } else {
+        SType* t = check_expr(x, cn, NULL);
+        if (t->kind == ST_OVERLOAD) {
+            sets[0] = t->funcs;
+        } else if (t->kind == ST_TYPE) {
+            ctor = true;
+        } else {
+            known = false;
+        }
+    }
+
+    for (int s = 0; s < 2; ++s) {
+        for (int i = 0; sets[s] && i < sets[s]->count; ++i) {
+            GROW(sigs, nsigs, cap);
+            sigs[nsigs++] = sets[s]->items[i]->sig;
+        }
+    }
+
+    StrBuf err;
+    sb_init(&err);
+    const bool ok = tag_lower(c->vm, n, sigs, nsigs, ctor, known, &err);
+    free(sigs);
+    if (!ok) {
+        cerr(c, n->line, "%s", err.data);
+    }
+
+    sb_free(&err);
+}
+
 static SType* check_call(Ctx* x, Node* n) {
     Checker* c = x->c;
+    if (n->as.call.tag) {
+        lower_tag(x, n);
+    }
+
     Node* cn = n->as.call.callee;
     NodeList* al = &n->as.call.args;
     const int argc = al->count;
@@ -2461,12 +2738,22 @@ SType* check_expr(Ctx* x, Node* n, SType* expect) {
             r->fnames = pp_calloc((size_t)(nf + 1), sizeof(ObjString*));
             r->ftypes = pp_calloc((size_t)(nf + 1), sizeof(SType*));
             SType* rec = expect && expect->kind == ST_RECORD ? st_record_fill(c, expect) : NULL;
+            check_literal_fields(x, n, rec ? expect : NULL);
             for (int i = 0; i < nf; ++i) {
                 SType* want = NULL;
                 for (int k = 0; rec && k < rec->nfields; ++k) {
-                    if (same_name_req(rec->fnames[k], n->as.object.keys[i])) {
+                    if (k != rec->rest - 1 &&
+                        (same_name_req(rec->fnames[k], n->as.object.keys[i]) || record_key_names(n->as.object.keys[i], rec->fnames[k]))) {
                         want = rec->ftypes[k];
                     }
+                }
+
+                if (!want && rec && rec->rest) {
+                    // a field for the rest map: a V of ...Map<string, V>
+                    SType* rt = rec->ftypes[rec->rest - 1];
+                    want = record_key_names(n->as.object.keys[i], rec->fnames[rec->rest - 1]) ? rt
+                           : rt && rt->kind == ST_NATIVE && rt->nargs > 1                         ? rt->args[1]
+                                                                                                  : NULL;
                 }
 
                 ObjString* saved_name = lambda_name;
@@ -2479,7 +2766,8 @@ SType* check_expr(Ctx* x, Node* n, SType* expect) {
                 }
             }
 
-            t = r;
+            // a literal where a Map<string, V> is expected (a field of a literal, an array element) is a map
+            t = is_map_type(expect) && st_fit(expect, r, NULL) ? record_to_map(x, n, expect, r) : r;
             break;
         }
         case N_CALL: t = check_call(x, n); break;
@@ -2924,6 +3212,8 @@ static void check_let(Ctx* x, Node* n) {
                 cerr(c, n->line, "cannot initialize '%s': expected %s but got %s", name->chars, tname(declared), tname(v));
             }
 
+            v = record_to_map(x, n->as.let.init, declared, v);
+
             // a lambda keeps its own (named) parameters: it was typed from the declared callback type
             t = declared;
             if (declared->kind == ST_FUNC && v->kind == ST_FUNC && v->fnames) {
@@ -3005,6 +3295,8 @@ static void check_assign(Ctx* x, Node* n) {
                  target->kind == N_IDENT ? target->as.str->chars : target->kind == N_FIELD ? target->as.field.name->chars : "[]",
                  tname(cur), tname(v));
         }
+
+        record_to_map(x, n->as.assign.value, cur, v);
 
         return;
     }
@@ -3388,6 +3680,8 @@ static void check_return(Ctx* x, Node* n) {
     if (!st_fit(x->ret_want, t, NULL)) {
         cerr(c, n->line, "return value of '%s': expected %s but got %s", fname, tname(x->ret_want), tname(t));
     }
+
+    record_to_map(x, n->as.ret.value, x->ret_want, t);
 }
 
 static void check_import(Ctx* x, Node* n) {

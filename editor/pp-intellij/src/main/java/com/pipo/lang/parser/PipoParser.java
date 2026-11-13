@@ -454,12 +454,24 @@ public final class PipoParser implements PsiParser {
             if (is(LBRACE)) {
                 PsiBuilder.Marker m = mark();
                 adv();
+                boolean rest = false;
                 while (!is(RBRACE) && !eof()) {
                     if (accept(COMMA) || accept(SEMI)) {
                         continue;
                     }
+                    if (rest) {
+                        error("the rest field must be the last field of a record type");
+                    }
                     int before = b.getCurrentOffset();
                     PsiBuilder.Marker f = mark();
+                    if (op(0, "...")) {
+                        // ...Map<string, V> name: the fields a record literal has and the type does not name
+                        adv();
+                        rest = true;
+                        if (!(at(0) == IDENT && text(0).equals("Map") && op(1, "<") && text(2).equals("string"))) {
+                            error("a rest field is a map from field names: ...Map<string, V> name");
+                        }
+                    }
                     if (parseType() == null) {
                         f.drop();
                         if (b.getCurrentOffset() == before) {
@@ -1204,8 +1216,161 @@ public final class PipoParser implements PsiParser {
             return t == COMMA || t == RPAREN || t == RBRACKET || t == RBRACE || t == null || t == SEMI || nl(n);
         }
 
+        /* ------------------------------------------------------- tag calls */
+
+        /** `<` directly followed by a name, in operand position: a tag call */
+        private boolean atTag() {
+            return op(0, "<") && at(1) == IDENT && !space(1) && !nl(1);
+        }
+
+        /** do the operator tokens from here, glued together, spell s? (`></` may be three tokens) */
+        private boolean opsAt(String s) {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; sb.length() < s.length(); i++) {
+                if (at(i) != OP || (i > 0 && (space(i) || nl(i)))) {
+                    return false;
+                }
+                sb.append(text(i));
+            }
+            return sb.toString().equals(s);
+        }
+
+        private void advOps(String s) {
+            int n = 0;
+            while (n < s.length() && !eof()) {
+                n += text(0).length();
+                adv();
+            }
+        }
+
+        private boolean isAttrWord(int n) {
+            IElementType t = at(n);
+            String s = text(n);
+            return !s.isEmpty() && (Character.isLetter(s.charAt(0)) || s.charAt(0) == '_')
+                    && (t == IDENT || PipoTokenTypes.HARD_KEYWORDS.contains(t) || PipoTokenTypes.SOFT_KEYWORDS.contains(t)
+                    || t == TRUE || t == FALSE);
+        }
+
+        /** name or m:sub:name, as a REF_EXPR / FIELD_EXPR; returns its text */
+        private String parseTagPath() {
+            StringBuilder name = new StringBuilder(text(0));
+            PsiBuilder.Marker left = mark();
+            adv();
+            left.done(REF_EXPR);
+            while (is(COLON) && !space(0) && at(1) == IDENT && !space(1)) {
+                PsiBuilder.Marker f = left.precede();
+                adv();
+                name.append(':').append(text(0));
+                takeFnName();
+                f.done(FIELD_EXPR);
+                left = f;
+            }
+            return name.toString();
+        }
+
+        private void parseTagBraces() {
+            adv(); // {
+            depth++;
+            parseExpression();
+            expect(RBRACE, "'}' to close the expression");
+            depth--;
+        }
+
+        private Res parseTag() {
+            PsiBuilder.Marker m = mark();
+            int line = b.getCurrentOffset();
+            adv(); // <
+            String name = parseTagPath();
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            while (!eof() && !opsAt("/>") && !opsAt(">")) {
+                if (!isAttrWord(0)) {
+                    error("expected an attribute, '>' or '/>' in <" + name + "> but found " + desc(0));
+                    m.done(TAG_EXPR);
+                    return new Res(m, TAG_EXPR);
+                }
+                PsiBuilder.Marker a = mark();
+                PsiBuilder.Marker nm = mark();
+                StringBuilder key = new StringBuilder(text(0));
+                adv();
+                while (op(0, "-") && !space(0) && isAttrWord(1) && !space(1)) {
+                    adv();
+                    key.append('_').append(text(0));
+                    adv();
+                }
+                nm.done(TAG_ATTR_NAME);
+                if (!seen.add(key.toString())) {
+                    nm.precede().error("<" + name + "> has the attribute '" + key + "' twice");
+                }
+                if (accept(ASSIGN)) {
+                    IElementType v = at(0);
+                    if (v == STRING || v == INT || v == FLOAT || v == TRUE || v == FALSE) {
+                        PsiBuilder.Marker lit = mark();
+                        adv();
+                        lit.done(LITERAL);
+                    } else if (v == LBRACE) {
+                        parseTagBraces();
+                    } else {
+                        error("the value of attribute '" + key + "' is a string, a number, true, false or {expression}, not "
+                                + desc(0));
+                    }
+                }
+                a.done(TAG_ATTR);
+            }
+            if (opsAt("/>")) {
+                advOps("/>");
+                m.done(TAG_EXPR);
+                return new Res(m, TAG_EXPR);
+            }
+            advOps(">");
+            depth++;
+            while (!opsAt("</")) {
+                if (eof()) {
+                    error("<" + name + "> is never closed: expected </" + name + ">");
+                    depth--;
+                    m.done(TAG_EXPR);
+                    return new Res(m, TAG_EXPR);
+                }
+                IElementType c = at(0);
+                if (c == STRING) {
+                    PsiBuilder.Marker lit = mark();
+                    adv();
+                    lit.done(LITERAL);
+                } else if (c == LBRACE) {
+                    parseTagBraces();
+                } else if (atTag()) {
+                    parseTag();
+                } else {
+                    errorAdvance("expected a child of <" + name + "> (a \"string\", a <tag> or {expression}) or </" + name
+                            + "> but found " + desc(0));
+                }
+            }
+            depth--;
+            PsiBuilder.Marker close = mark();
+            advOps("</");
+            if (at(0) == IDENT) {
+                String closing = parseTagPath();
+                if (!closing.equals(name)) {
+                    error("expected '</" + name + ">' (to close <" + name + ">) but found '</" + closing + ">'");
+                }
+            } else {
+                error("expected the name of the closing tag </" + name + ">");
+            }
+            if (opsAt(">")) {
+                advOps(">");
+            } else {
+                error("expected '>' to end '</" + name + "'");
+            }
+            close.done(TAG_CLOSE);
+            m.done(TAG_EXPR);
+            return new Res(m, TAG_EXPR);
+        }
+
         private Res parseUnary() {
             IElementType t = at(0);
+            if (atTag()) {
+                return parsePostfix(parseTag());
+            }
+
             if (t == OP) {
                 PsiBuilder.Marker m = mark();
                 PsiBuilder.Marker r = mark();

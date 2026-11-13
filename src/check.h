@@ -50,6 +50,7 @@ struct SType {
     ObjString** fnames; // ST_RECORD
     SType** ftypes;
     int nfields;
+    int rest;           // ST_RECORD: 1 + the index of its rest field (...Map<string, V> name), 0 = none
     TDecl* decl;        // ST_RECORD (nominal), ST_ENUM, ST_NATIVE, ST_IFACE, ST_TYPE
     ObjString* name;    // ST_PARAM
     CFuncSet* funcs;    // ST_OVERLOAD

@@ -111,6 +111,9 @@ typedef enum {
     OP_SCOPE_CALL,   // func, argc, line: callee/void, value slot, defer slot, block, args -> value, exit
     OP_SCOPE_EXIT,   // exit: leaves the running block (SCOPE_RETURN pops the value to return)
     OP_DEFER,        // closure -> (the cleanup of the running scope call)
+    OP_SUSPEND,      // value ->: `emit value` in a generator: the frame is put aside until the next next()
+    OP_GEN_END,      // k: the generator's body ends (`return`, its end); k = 1: pops its last value (`return value`)
+    OP_JUMP_ITERABLE,// target: the value on top is a built-in collection or a generator (for iterates it directly)
     OP_COUNT
 } OpCode;
 
@@ -138,6 +141,7 @@ typedef struct BcFunc {
     int index;
     bool compiled;
     bool is_init;       // a module's top level: not shown in tracebacks
+    bool generator;     // a call builds an ObjGenerator; next() runs the body up to OP_SUSPEND
     BcKind kind;
     ObjString* scope;   // a block or defer: the name of its scope
     bool* cap_local;    // where each capture comes from in the function that creates the closure:

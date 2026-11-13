@@ -1,0 +1,1 @@
+err_for_set_pairs.pp:2: error: for i, x over a set: only a KeyIterable (an array, a map, pairs) has keys; use .enumerate() to count the items

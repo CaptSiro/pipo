@@ -1,0 +1,1 @@
+err_yield_missing.pp:4: error: this block is used as a value but gives none: write 'yield' before its last expression

@@ -1,0 +1,1 @@
+err_emit_outside.pp:2:5: syntax error: 'emit' can only be used in the body of a generator

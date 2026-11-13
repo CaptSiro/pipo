@@ -28,5 +28,5 @@ false true true false Set{2, 3, 10} [2, 3, 10]
 1 b
 true false
 x
-<type std:Map> <type std:Set> type
+<type Map> <type Set> type
 a map of 1

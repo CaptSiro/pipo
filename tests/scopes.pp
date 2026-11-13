@@ -7,7 +7,7 @@ interface Resource {
 
 type Res = { string name }
 
-function close(Res r) {
+function close(Res r) -> void {
     io:print_nl("close", r:name)
 }
 
@@ -18,7 +18,7 @@ function open(string name) -> Res {
 
 impl Resource for Res
 
-scope _resource(Block<void> code, Resource r) {
+scope _resource(Block<void> code, Resource r) -> void {
     defer { r.close() }
     code()
 }
@@ -55,7 +55,7 @@ for i in ...4 {
 }
 
 // the value the block is called with is `scope`
-scope _times(Block<int> code, int n) {
+scope _times(Block<int> code, int n) -> void {
     for i in ...n {
         code(i)
     }
@@ -74,7 +74,7 @@ _times 2 {
 }
 
 // defer is replaced: the last one before the exit runs
-scope _steps(Block<string> code) {
+scope _steps(Block<string> code) -> void {
     defer { io:print_nl("cleanup 1") }
     code("one")
     defer { io:print_nl("cleanup 2") }
@@ -82,7 +82,7 @@ scope _steps(Block<string> code) {
     defer { io:print_nl("cleanup 3") }
 }
 
-function steps(bool stop) {
+function steps(bool stop) -> void {
     _steps {
         io:print_nl("step", scope)
         if stop && scope == "two" {
@@ -96,12 +96,12 @@ function steps(bool stop) {
 steps(false)
 steps(true)
 
-// the block's last expression is the result of code(), the scope's result is the call's value
+// `yield` gives the result of code(), the scope's result is the call's value
 scope _twice(Block<int> code, int x) -> int {
     return code(code(x))
 }
 
-io:print_nl(_twice 3 { scope * 10 })
+io:print_nl(_twice 3 { yield scope * 10 })
 
 // lift in a block returns from the enclosing function, after the cleanups
 function parse_both(string a, string b) -> Error<int> {
@@ -128,7 +128,7 @@ io:print_nl(parse_both("1", "x"))
 // a Callback can be kept and called after the scope call ended
 let Callback<string>[] handlers = []
 
-scope _on(Callback<string> code, string event) {
+scope _on(Callback<string> code, string event) -> void {
     handlers.push(code)
 }
 
@@ -141,11 +141,11 @@ for h in handlers {
 }
 
 // scopes are ordinary overload sets: the arguments choose
-scope _show(Block<string> code, int n) {
+scope _show(Block<string> code, int n) -> void {
     code("int " + str(n))
 }
 
-scope _show(Block<string> code, string s) {
+scope _show(Block<string> code, string s) -> void {
     code("string " + s)
 }
 

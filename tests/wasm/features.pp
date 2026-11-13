@@ -9,7 +9,7 @@ function counter() -> Counter {
     let n = 0
     return () -> {
         n += 1
-        n
+        return n
     }
 }
 
@@ -56,7 +56,7 @@ function triple(int x) -> int {
 io:print_nl("value", apply_twice(triple, 2))
 
 // ---- scopes: blocks, defer, early exits
-scope _times(Block<int> code, int n) {
+scope _times(Block<int> code, int n) -> void {
     for i in ...n {
         code(i)
     }
@@ -68,7 +68,7 @@ _times 3 {
 
 io:print_nl()
 
-scope _guard(Block<void> code, string name) {
+scope _guard(Block<void> code, string name) -> void {
     defer { io:print_nl("close", name) }
     io:print_nl("open", name)
     code()
@@ -107,7 +107,7 @@ scope _twice(Block<int> code, int x) -> int {
     return code(code(x))
 }
 
-io:print_nl("twice", _twice 3 { scope * 10 })
+io:print_nl("twice", _twice 3 { yield scope * 10 })
 
 // a block that leaves through a nested scope call
 function nested_exit() -> int {
@@ -167,7 +167,7 @@ io:print_nl("area", total)
 
 // ---- natives the host runs
 const words = ["pear", "apple", "fig"]
-io:print_nl(words.sort(), words.map(w -> #w), words.filter(w -> #w > 3), join(words, "-"))
+io:print_nl(words.sort(), words.map(w -> #w).to_array(), words.filter(w -> #w > 3).to_array(), join(words, "-"))
 io:print_nl(upper("abc"), split("a,b,c", ","), "hello"[1], slice("hello", 1, -1), parse_int("42"), parse_int("x"))
 io:print_nl(format("%5.2f|%-4d|%s", 3.14159, 7, "ok"), [1, 2] == [1, 2], tuple(1, "a") != tuple(1, "b"))
 let nums = [3, 1, 2]

@@ -33,7 +33,7 @@ io:print_nl(c.value() == r.value(), c.interval(1000) == r.interval(1000))
 // every value of a small range comes up, nothing outside it
 const counts = [0, 0, 0, 0, 0, 0]
 for i in ...6000 { counts[r.interval(1, 7) - 1] += 1 }
-io:print_nl(#counts.filter(n -> n > 800) == 6, #counts)
+io:print_nl(#counts.filter(n -> n > 800).to_array() == 6, #counts)
 let ok = true
 for i in ...1000 {
     const x = math:random_int(-3, 3)

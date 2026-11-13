@@ -136,6 +136,7 @@ typedef struct {
 struct Node {
     NodeKind kind;
     int line;
+    signed char gen_pause; // interp: the statement contains a return / emit of a generator (1), not (-1), unknown (0)
     union {
         int64_t ival;
         double fval;
@@ -167,7 +168,8 @@ struct Node {
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;
-        struct { Node* expr; } expr;
+        // yield: `yield expr`, the value of the if / match arm / scope block it ends
+        struct { Node* expr; bool yield; } expr;
         struct { bool is_const; Type* type; ObjString* name; Node* init; } let;
         // target op= value: op is the operator without '=', opeq the whole name. An overload of opeq
         // that accepts (current value, value) runs in place; otherwise target = op(current, value).
@@ -215,12 +217,15 @@ struct Node {
             Type** parents; // impl Parent for Name: the interfaces this one extends
             int nparents;
         } iface;
-        // <K, V>impl Index<K, V> for std:Map<K, V>: generics are bound by the value being matched
+        // <K, V>impl Index<K, V> for Map<K, V>: generics are bound by the value being matched
         struct { Type* iface; Type* target; ObjString** generics; int ngenerics; } impl;
         struct { ObjString* op; int rel; ObjString* other; } prec;
-        struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; } for_;
+        // proto: iterate($for) / iterate_pairs($for), set by the checker when the iterated type implements the
+        // iteration interfaces; a compiling target calls it for a value that is not a built-in collection
+        struct { bool mut; ObjString* var1; ObjString* var2; Node* iter; Node* body; Node* proto; } for_;
         struct { Node* cond; Node* body; } while_;
-        struct { Node* value; } ret;
+        // emit: `emit value` in a generator (gives the value and pauses); a plain return ends the generator
+        struct { Node* value; bool emit; } ret;
         // args: expressions, or S_LET nodes for `const f = file(...)` (the variable is visible in body only);
         // uses_lift: body names lift, so a run of the block installs a LiftTarget
         struct { ObjString* name; NodeList args; Node* body; InlineCache* ic; bool uses_lift; } scall;

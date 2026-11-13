@@ -29,7 +29,7 @@ function sum_halves(int[] xs) -> Error<int> {
 }
 
 function lam() -> int[] {
-    return [1, 2, 3].map(x -> (x * 2).some().lift())
+    return [1, 2, 3].map(x -> (x * 2).some().lift()).to_array()
 }
 
 io:print_nl(quarter(8))

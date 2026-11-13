@@ -16,7 +16,8 @@ typedef struct {
     int line;
 } Frame;
 
-typedef enum { EX_NORMAL, EX_BREAK, EX_CONTINUE, EX_RETURN } ExecStatus;
+// EX_SUSPEND: a generator's body paused at an `emit` (interp.c, generators only)
+typedef enum { EX_NORMAL, EX_BREAK, EX_CONTINUE, EX_RETURN, EX_SUSPEND } ExecStatus;
 
 // A function whose body calls lift() installs one of these: lift() on none() / fail(..)
 // longjmps here and the function returns that value. Only functions the parser marked
@@ -106,8 +107,9 @@ struct VM {
     ObjEnum* option_enum;
     ObjEnum* error_enum;
 
-    ObjNativeType* t_map; // std:Map, std:Set: bound in lib/std.pp by `native type`
+    ObjNativeType* t_map; // Map, Set: bound in lib/std.pp by `native type`
     ObjNativeType* t_set;
+    ObjNativeType* t_generator; // Generator<T>: bound in the prelude by `native type`
     ObjNativeType** native_types; // NativeClass types registered by modules (vm_register_native_types), permanent
     int nnative_types;
     Obj* tuple_ctor;      // the built-in tuple(...) function, recognised in patterns
@@ -139,6 +141,7 @@ struct VM {
 
     Node* (*preparsed)(VM* vm, const char* abs_path); // the checked tree of a module file, or NULL
     Value (*closure_call)(VM* vm, Obj* closure, int argc, Value* args, int line); // runs an OBJ_CLOSURE
+    Value (*gen_resume)(VM* vm, ObjGenerator* g, bool* done); // runs a GEN_BYTECODE generator to its next value
     Value bc_roots; // the bytecode target's constants and the objects its natives come from
     void* checker;
 
@@ -182,6 +185,8 @@ ObjEnv* vm_current_env(VM* vm);
 void vm_register_ic(VM* vm, InlineCache* ic);
 void vm_register_native_module(VM* vm, const char* name, NativeModuleInit init);
 void vm_register_native_impls(VM* vm, const char* module, const NativeImpl* impls);
+// the name the prelude's `native function`s (Map, Set) are registered under; no library file can have it
+#define PP_PRELUDE_NATIVES "<prelude>"
 void vm_register_native_types(VM* vm, const char* module, const NativeClass* classes); // terminated by {NULL}
 ObjNativeType* vm_native_type(VM* vm, const char* module, const char* name); // a registered class's type, or NULL
 Value make_some(VM* vm, Value v);
@@ -213,6 +218,10 @@ void gc_collect(VM* vm);
 // builtins.c / prelude.c / src/modules/
 void builtins_register(VM* vm);
 void def_native(VM* vm, ObjEnv* env, const char* name, const char* sig, NativeFn fn);
+
+// generators (interp.c): a new one of the given kind, and its next value (false: it is done)
+ObjGenerator* gen_new(VM* vm, GenKind kind, ObjString* name);
+bool gen_next(VM* vm, ObjGenerator* g, Value* out, int line);
 void def_const(VM* vm, ObjEnv* env, const char* name, Value v);
 void def_const_str(VM* vm, ObjEnv* env, const char* name, const char* value);
 void module_export_all(ObjModule* m);

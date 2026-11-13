@@ -1,0 +1,1 @@
+err_generator_type.pp:2: error: value of generator 'g': expected int but got string

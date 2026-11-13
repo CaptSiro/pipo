@@ -10,6 +10,7 @@ void module_add_export(CModule* m, ObjString* name, ObjString* src);
 
 static SType* check_lambda(Ctx* x, Node* n, SType* expect);
 static SType* check_branchy(Ctx* x, Node* n, bool as_value, SType* expect);
+static void want_yield(Ctx* x, SType* got);
 static SType* check_scope_call(Ctx* x, Node* n, bool as_value);
 static Checker* hook_checker;
 
@@ -346,9 +347,15 @@ static void run_body(Checker* c, CInstance* inst) {
     x.in_scope_fn = f->name && f->name->chars[0] == '_';
     SType* last = check_block(&x, f->body, false, x.ret_want);
     const bool implicit = f->sig && f->sig->implicit_result;
+    if (implicit && x.dropped && !x.returned && x.ret_want && x.ret_want->kind != ST_VOID && x.ret_want->kind != ST_UNKNOWN &&
+        x.ret_want->kind != ST_DYN) {
+        cerr(c, x.dropped->line, "a lambda with a block body returns its value with 'return' (its last expression is "
+                                 "not the result)");
+    }
+
     if (!inst->infer_ret && implicit && last && inst->ret && inst->ret->kind != ST_VOID && inst->ret->kind != ST_UNKNOWN &&
         last->kind != ST_VOID && !st_fit(inst->ret, last, NULL)) {
-        // a lambda's last expression is its result
+        // an expression-bodied lambda's expression is its result
         StrBuf want, got;
         sb_init(&want);
         sb_init(&got);
@@ -691,7 +698,7 @@ static SType* call_result(Ctx* x, CFunc* f, SType** args, int argc, SBindings* b
 
     ret = subst(ret, b);
     if (ret->kind == ST_NATIVE && !ret->nargs && ret->decl->ngenerics && ret->decl->which != NT_CLASS) {
-        // std:map() and std:set() give a bare Map / Set: its types come from the argument, or from its first use
+        // map() and set() give a bare Map / Set: its types come from the argument, or from its first use
         SType* t = st_new(ST_NATIVE);
         t->decl = ret->decl;
         t->nargs = ret->decl->ngenerics;
@@ -738,7 +745,7 @@ static bool could_fit(Checker* c, SType* want, SType* got) {
             }
 
             return false;
-        case ST_IFACE: return st_implements(c, got->decl, got->args, got->nargs, want);
+        case ST_IFACE: return st_implements(c, got->decl, got->args, got->nargs, want, NULL);
         default: return false;
     }
 }
@@ -865,7 +872,7 @@ static bool fully_known(const SType* t) {
     return t && !contains_never(t) && !st_has_param(t) && !st_is_dyn(t) && t->kind != ST_UNKNOWN;
 }
 
-// a variable set to [] (or none(), std:map()) takes the type its first use gives it
+// a variable set to [] (or none(), map()) takes the type its first use gives it
 static SType* refine_var(Ctx* x, Node* arg, SType* want) {
     if (!arg || arg->kind != N_IDENT || !fully_known(want)) {
         return NULL;
@@ -1199,7 +1206,7 @@ static SType* builtin_result(Ctx* x, CFunc* f, SType** a, int argc, CCall* call,
         return elem_of(a[0]);
     }
 
-    static const char* same_array[] = {"concat", "multiply", "repeat", "slice", "reverse", "sort", "filter", NULL};
+    static const char* same_array[] = {"concat", "multiply", "repeat", "slice", "reverse", "sort", NULL};
     for (int i = 0; same_array[i]; ++i) {
         if (strcmp(name, same_array[i]) == 0) {
             if (a[0]->kind == ST_STRING) {
@@ -1250,14 +1257,31 @@ static SType* builtin_result(Ctx* x, CFunc* f, SType** a, int argc, CCall* call,
         return st_prim(ST_NEVER);
     }
 
-    if (strcmp(name, "map") == 0 && argc == 2) {
-        SType* e = elem_of(a[0]);
-
-        return st_array(fn_ret(x, a[1], &e, 1, n));
+    if (strcmp(name, "generator_next") == 0 && argc == 1) {
+        return is_generator(x->c, a[0]) && a[0]->nargs ? option_of(x->c, a[0]->args[0])
+                                                       : dyn_type(x, n, "next() of a value that is not a Generator");
     }
 
-    if (strcmp(name, "reduce") == 0 && argc == 3) {
-        return a[2];
+    if (strcmp(name, "fields") == 0 && argc == 1) {
+        // fields(record): tuple(name, value) for each field; the values have the fields' joined type
+        SType* v = st_prim(ST_UNKNOWN);
+        if (a[0]->kind == ST_RECORD) {
+            st_record_fill(x->c, a[0]);
+            SType* r = NULL;
+            for (int i = 0; i < a[0]->nfields; ++i) {
+                r = join(r, a[0]->ftypes[i]);
+            }
+
+            v = r ? r : st_prim(ST_NEVER);
+        }
+
+        SType* t = st_new(ST_TUPLE);
+        t->nargs = 2;
+        t->args = pp_calloc(3, sizeof(SType*));
+        t->args[0] = st_prim(ST_STRING);
+        t->args[1] = v;
+
+        return generator_of(x->c, t);
     }
 
     if (strcmp(name, "call") == 0 && argc >= 1) {
@@ -1292,24 +1316,10 @@ static SType* expect_for_lambda(Ctx* x, CFunc* f, int i, SType** args, int argc,
     if (f->kind == CF_NATIVE && f->builtin) {
         const char* name = f->name->chars;
         SType* e = argc ? elem_of(args[0]) : st_prim(ST_DYN);
-        if (strcmp(name, "map") == 0 && i == 1) {
-            return func_type(1, &e, NULL);
-        }
-
-        if (strcmp(name, "filter") == 0 && i == 1) {
-            return func_type(1, &e, st_prim(ST_BOOL));
-        }
-
         if (strcmp(name, "sort") == 0 && i == 1) {
             SType* two[2] = {e, e};
 
             return func_type(2, two, NULL);
-        }
-
-        if (strcmp(name, "reduce") == 0 && i == 1) {
-            SType* two[2] = {args[2], e};
-
-            return func_type(2, two, args[2]);
         }
 
         // xs.push(x -> ...) / xs.insert(i, x -> ...) into an array of callbacks: the element's type
@@ -1534,7 +1544,7 @@ static SType* field_of(Ctx* x, Node* n, SType* obj, ObjString* name) {
             }
 
             cerr(c, n->line, "%s has no field '%s' (the fields of a record are fixed; a value declared as "
-                             "'object' or a std:Map can take any key)", tname(obj), name->chars);
+                             "'object' or a Map can take any key)", tname(obj), name->chars);
         }
         case ST_OBJECT: return st_prim(ST_UNKNOWN); // any record: a field can hold anything
         case ST_UNKNOWN:
@@ -1894,7 +1904,7 @@ static void check_args(Ctx* x, NodeList* al, SType** args, Node** nodes, int off
 static SType* construct_record(Ctx* x, Node* n, TDecl* d, SType** args, int argc) {
     Checker* c = x->c;
     if (d->kind == TD_NATIVE) {
-        const char* ctor = d->which == NT_MAP ? "std:map" : d->which == NT_SET ? "std:set" : NULL;
+        const char* ctor = d->which == NT_MAP ? "map" : d->which == NT_SET ? "set" : NULL;
         if (!ctor && d->module) {
             const ObjNativeType* nt = vm_native_type(c->vm, d->module->name->chars, d->name->chars);
             ctor = nt && nt->cls ? nt->cls->constructor : NULL;
@@ -1985,7 +1995,7 @@ static SType* call_value(Ctx* x, Node* n, SType* callee, SType** args, Node** no
             }
 
             if (callee->nargs) {
-                return callee->args[0]; // the block's last expression, known per call of the scope
+                return callee->args[0]; // what the block yields, known per call of the scope
             }
 
             return st_prim(ST_VOID); // a Callback kept for later: its value is not known, so it gives none
@@ -2256,7 +2266,12 @@ static SType* check_branchy(Ctx* x, Node* n, bool as_value, SType* expect) {
                 require_bool(x, check_expr(x, arm->guard, NULL), "match guard", arm->guard->line);
             }
 
+            x->dropped = NULL;
             SType* t = arm->body_is_block ? check_block(x, arm->body, true, expect) : check_expr(x, arm->body, expect);
+            if (as_value && arm->body_is_block) {
+                want_yield(x, t);
+            }
+
             result = join(result, t);
             x->scope = saved;
         }
@@ -2331,7 +2346,7 @@ static SType* check_scope_call(Ctx* x, Node* n, bool as_value) {
         }
     }
 
-    // the block first: the value its last expression gives is what code() returns in the scope function,
+    // the block first: the value it yields is what code() returns in the scope function,
     // which is checked (instantiated) for this kind of block
     x->scope = body_scope;
     if (block->elem && block->elem->kind != ST_VOID) {
@@ -2498,23 +2513,37 @@ static void check_unused_functions(Ctx* x, CScope* s) {
     }
 }
 
+// the value of a statement: only `yield expr` gives one (and an expression statement is checked here too)
 static SType* stmt_value(Ctx* x, Node* s, SType* expect) {
     if (s->kind != S_EXPR) {
         check_stmt(x, s);
+        x->dropped = NULL;
 
         return st_prim(ST_VOID);
     }
 
+    const bool yield = s->as.expr.yield;
     Node* e = s->as.expr.expr;
+    SType* t;
     if (e->kind == N_IF || e->kind == N_MATCH) {
-        return record_info(x, e, check_branchy(x, e, false, expect));
+        t = record_info(x, e, check_branchy(x, e, false, yield ? expect : NULL));
+    } else if (e->kind == N_SCOPECALL) {
+        t = record_info(x, e, check_scope_call(x, e, false));
+    } else {
+        t = check_expr(x, e, yield ? expect : NULL);
     }
 
-    if (e->kind == N_SCOPECALL) {
-        return record_info(x, e, check_scope_call(x, e, false));
-    }
+    // for the hint "end the block with yield": only the value of the block's last statement counts
+    x->dropped = !yield && t && t->kind != ST_VOID && t->kind != ST_DYN && t->kind != ST_UNKNOWN ? s : NULL;
 
-    return check_expr(x, e, expect);
+    return yield ? t : st_prim(ST_VOID);
+}
+
+// a block used as a value gave nothing: when it ends with a bare expression, the fix is `yield`
+static void want_yield(Ctx* x, SType* got) {
+    if (got && got->kind == ST_VOID && x->dropped) {
+        cerr(x->c, x->dropped->line, "this block is used as a value but gives none: write 'yield' before its last expression");
+    }
 }
 
 SType* check_block(Ctx* x, Node* block, bool new_scope, SType* expect) {
@@ -3037,13 +3066,76 @@ static void check_assign(Ctx* x, Node* n) {
     }
 }
 
-static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key) {
+// the type arguments an interface (Iterable<T>, KeyIterable<K, V>) has for type t, NULL when t does not implement it
+static SType** iface_args_of(Ctx* x, TDecl* iface, SType* t) {
+    if (!iface) {
+        return NULL;
+    }
+
+    SType* want = st_new(ST_IFACE);
+    want->decl = iface;
+    want->nargs = iface->ngenerics;
+    want->args = pp_calloc((size_t)(iface->ngenerics + 1), sizeof(SType*));
+    SBindings b;
+    memset(&b, 0, sizeof b);
+    b.count = iface->ngenerics;
+    for (int i = 0; i < iface->ngenerics; ++i) {
+        SType* p = st_new(ST_PARAM);
+        p->name = iface->generics[i];
+        want->args[i] = p;
+        b.names[i] = iface->generics[i];
+    }
+
+    if (!st_fit(want, t, &b)) {
+        return NULL;
+    }
+
+    SType** r = pp_calloc((size_t)(iface->ngenerics + 1), sizeof(SType*));
+    for (int i = 0; i < iface->ngenerics; ++i) {
+        r[i] = b.types[i] ? b.types[i] : st_prim(ST_UNKNOWN);
+    }
+
+    return r;
+}
+
+static bool is_pair(const SType* t) {
+    return t && t->kind == ST_TUPLE && t->nargs == 2;
+}
+
+// `for k, v` over values that are pairs (a Generator / Iter of tuple<K, V>): the pair's two types
+static SType* pair_types(Ctx* x, Node* n, SType* item, SType** key, const char* what) {
+    if (!is_pair(item)) {
+        cerr(x->c, n->line, "for k, v over %s of %s: it needs pairs (a KeyIterable); use .enumerate() to count the items",
+             what, tname(item));
+    }
+
+    *key = item->args[0];
+
+    return item->args[1];
+}
+
+// The types `for` gives: the item, and *key for the first of two variables (pairs). A type of
+// the language is iterated directly; any other type through the interfaces Iterable<T> /
+// KeyIterable<K, V> (*proto: the backends call the prelude's iterate() / iterate_pairs()).
+static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key, bool pairs, bool* proto) {
     Checker* c = x->c;
     *key = st_prim(ST_INT);
+    const char* count_hint = "for i, x over a %s: only a KeyIterable (an array, a map, pairs) has keys; use .enumerate() "
+                             "to count the items";
     switch (it->kind) {
-        case ST_RANGE: return it->elem ? it->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT));
+        case ST_RANGE:
+            if (pairs) {
+                cerr(c, n->line, count_hint, "range");
+            }
+
+            return it->elem ? it->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT));
         case ST_ARRAY: return it->elem;
-        case ST_STRING: return st_prim(ST_STRING);
+        case ST_STRING:
+            if (pairs) {
+                cerr(c, n->line, count_hint, "string");
+            }
+
+            return st_prim(ST_STRING);
         case ST_TUPLE: {
             SType* r = NULL;
             for (int i = 0; i < it->nargs; ++i) {
@@ -3054,13 +3146,27 @@ static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key) {
         }
         case ST_NATIVE:
             if (it->decl->which == NT_MAP) {
+                if (!pairs) {
+                    cerr(c, n->line, "for x over a map: use map.keys() or map.values() (for k, v in map gives both)");
+                }
+
                 *key = it->nargs ? it->args[0] : st_prim(ST_DYN);
 
                 return it->nargs > 1 ? it->args[1] : st_prim(ST_DYN);
             }
 
             if (it->decl->which == NT_SET) {
+                if (pairs) {
+                    cerr(c, n->line, count_hint, "set");
+                }
+
                 return it->nargs ? it->args[0] : st_prim(ST_DYN);
+            }
+
+            if (it->decl->which == NT_GENERATOR) {
+                SType* e = it->nargs ? it->args[0] : st_prim(ST_DYN);
+
+                return pairs ? pair_types(x, n, e, key, "a Generator") : e;
             }
 
             {
@@ -3068,27 +3174,44 @@ static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key) {
 
                 return e ? e : dyn_type(x, n, "iterating a native class");
             }
-        case ST_RECORD: {
-            st_record_fill(c, it);
-            *key = st_prim(ST_STRING);
-            SType* r = NULL;
-            for (int i = 0; i < it->nfields; ++i) {
-                r = join(r, it->ftypes[i]);
+        case ST_RECORD:
+        case ST_OBJECT:
+        case ST_ENUM:
+        case ST_IFACE: {
+            *proto = true;
+            if (pairs) {
+                SType** kv = iface_args_of(x, c->key_iterable, it);
+                if (kv) {
+                    *key = kv[0];
+
+                    return kv[1];
+                }
             }
 
-            return r ? r : st_prim(ST_NEVER);
-        }
-        case ST_OBJECT:
-            *key = st_prim(ST_STRING);
+            SType** t = iface_args_of(x, c->iterable, it);
+            if (!t) {
+                t = iface_args_of(x, c->iter, it);
+            }
 
-            return st_prim(ST_UNKNOWN);
+            if (t) {
+                return pairs ? pair_types(x, n, t[0], key, tname(it)) : t[0];
+            }
+
+            if (it->kind == ST_RECORD || it->kind == ST_OBJECT) {
+                cerr(c, n->line, "cannot iterate over a record (%s): use fields(x) to go through its fields, or implement "
+                                 "Iterable<T> for its type", tname(it));
+            }
+
+            cerr(c, n->line, "cannot iterate over a value of type %s: it does not implement Iterable<T>%s", tname(it),
+                 pairs ? " or KeyIterable<K, V>" : "");
+        }
         case ST_UNION: {
             // every member must be iterable; the item is any of theirs
             SType* r = NULL;
             SType* k = NULL;
             for (int i = 0; i < it->nargs; ++i) {
                 SType* mk;
-                r = join(r, iter_types(x, n, it->args[i], &mk));
+                r = join(r, iter_types(x, n, it->args[i], &mk, pairs, proto));
                 k = join(k, mk);
             }
 
@@ -3110,18 +3233,57 @@ static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key) {
     }
 }
 
+// for over a type that implements the interfaces: the call the compiling targets make for a value
+// that is not a built-in collection, iterate($for) / iterate_pairs($for), checked here so that the
+// instance exists. $for is the iterated value (not a name a program can write).
+static Node* synth_ident(VM* vm, const char* name, int line) {
+    Node* id = pp_calloc(1, sizeof(Node));
+    id->kind = N_IDENT;
+    id->line = line;
+    id->as.str = str_cintern(vm, name);
+
+    return id;
+}
+
+static void protocol_call(Ctx* x, Node* n, SType* it, bool pairs) {
+    Checker* c = x->c;
+    VM* vm = c->vm;
+    if (!n->as.for_.proto) {
+        Node* call = pp_calloc(1, sizeof(Node));
+        call->kind = N_CALL;
+        call->line = n->line;
+        call->as.call.callee = synth_ident(vm, pairs ? "iterate_pairs" : "iterate", n->line);
+        call->as.call.ic = pp_calloc(1, sizeof(InlineCache));
+        GROW(call->as.call.args.items, call->as.call.args.count, call->as.call.args.cap);
+        call->as.call.args.items[call->as.call.args.count++] = synth_ident(vm, "$for", n->line);
+        n->as.for_.proto = call;
+    }
+
+    CScope* saved = x->scope;
+    x->scope = scope_new(c->builtins, x->module, x->inst);
+    bind_var(x, str_cintern(vm, "$for"), it, false);
+    check_expr(x, n->as.for_.proto, NULL);
+    x->scope = saved;
+}
+
 static void check_for(Ctx* x, Node* n) {
     SType* it = check_expr(x, n->as.for_.iter, NULL);
     SType* key;
-    SType* item = iter_types(x, n, it, &key);
-    const bool keyed = it->kind == ST_RECORD || it->kind == ST_OBJECT || (it->kind == ST_NATIVE && it->decl->which == NT_MAP);
+    const bool pairs = n->as.for_.var2 != NULL;
+    bool proto = false;
+    SType* item = iter_types(x, n, it, &key, pairs, &proto);
+    if (proto && it->kind != ST_UNION && !st_is_dyn(it)) {
+        const bool kv = pairs && iface_args_of(x, x->c->key_iterable, it);
+        protocol_call(x, n, it, kv);
+    }
+
     CScope* saved = x->scope;
     x->scope = scope_new(saved, NULL, NULL);
     if (n->as.for_.var2) {
         bind_var(x, n->as.for_.var1, key, n->as.for_.mut);
         bind_var(x, n->as.for_.var2, item, n->as.for_.mut);
     } else {
-        bind_var(x, n->as.for_.var1, keyed ? key : item, n->as.for_.mut);
+        bind_var(x, n->as.for_.var1, item, n->as.for_.mut);
     }
 
     x->loops++;
@@ -3148,6 +3310,21 @@ static void check_return(Ctx* x, Node* n) {
     Checker* c = x->c;
     if (x->in_value) {
         leave_error(x, n);
+    }
+
+    if (x->inst && x->inst->fn && x->inst->fn->sig && x->inst->fn->sig->generator) {
+        // emit v / return v in a generator: v is one of its values (T of Generator<T>)
+        SType* want = is_generator(c, x->ret_want) && x->ret_want->nargs ? x->ret_want->args[0] : NULL;
+        if (!n->as.ret.value) {
+            return;
+        }
+
+        SType* t = check_expr(x, n->as.ret.value, want);
+        if (want && want->kind != ST_UNKNOWN && want->kind != ST_DYN && !st_fit(want, t, NULL)) {
+            cerr(c, n->line, "value of generator '%s': expected %s but got %s", x->inst->fn->name->chars, tname(want), tname(t));
+        }
+
+        return;
     }
 
     SType* t = n->as.ret.value ? check_expr(x, n->as.ret.value, x->ret_want) : st_prim(ST_VOID);
@@ -3232,8 +3409,13 @@ void check_stmt(Ctx* x, Node* n) {
             d->def = n->as.type_decl.def;
             if (d->kind == TD_NATIVE) {
                 d->which = is_name(d->name, "Map") ? NT_MAP : is_name(d->name, "Set") ? NT_SET : NT_CLASS;
+                const bool prelude = x->module == c->builtins->module;
+                if (prelude && is_name(d->name, "Generator")) {
+                    d->which = NT_GENERATOR;
+                }
+
                 const char* lib = module_lib_path(x->module);
-                const bool has_c = lib && (vm_native_impls(c->vm, lib) || vm_native_type(c->vm, lib, d->name->chars));
+                const bool has_c = prelude || (lib && (vm_native_impls(c->vm, lib) || vm_native_type(c->vm, lib, d->name->chars)));
                 if (!has_c) {
                     cerr(c, n->line, "native type '%s' can only be declared in a library module with a C half", d->name->chars);
                 }

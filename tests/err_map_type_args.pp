@@ -1,3 +1,3 @@
 import io
 import std
-const std:Map<string> m = std:map()
+const Map<string> m = map()

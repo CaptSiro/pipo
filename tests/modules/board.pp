@@ -1,4 +1,4 @@
-// a type that implements std:Index; importers index it without importing [] or []=
+// a type that implements Index; importers index it without importing [] or []=
 import std
 
 export type Board = { int width, string[] cells }
@@ -20,7 +20,7 @@ function put(Board b, tuple<int, int> at, string value) -> void {
     b:cells[at[1] * b:width + at[0]] = value
 }
 
-impl std:Index<tuple<int, int>, string> for Board
+impl Index<tuple<int, int>, string> for Board
 
 export function rows(Board b) -> string[] {
     const out = [].repeat(0)

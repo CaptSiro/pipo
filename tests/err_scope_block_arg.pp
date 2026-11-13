@@ -1,4 +1,4 @@
-scope _x(Block<int> code) {
+scope _x(Block<int> code) -> void {
     code("a")
 }
 _x { }

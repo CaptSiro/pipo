@@ -1,2 +1,2 @@
-function f() { return f() }
+function f() -> int { return f() }
 f()

@@ -100,6 +100,9 @@ const OpInfo BC_OPS[OP_COUNT] = {
     [OP_SCOPE_CALL] = {"SCOPE_CALL", 3},
     [OP_SCOPE_EXIT] = {"SCOPE_EXIT", 1},
     [OP_DEFER] = {"DEFER", 0},
+    [OP_SUSPEND] = {"SUSPEND", 0},
+    [OP_GEN_END] = {"GEN_END", 1},
+    [OP_JUMP_ITERABLE] = {"JUMP_ITERABLE", 1},
 };
 
 
@@ -295,6 +298,7 @@ static BcFunc* func_for(BcProgram* prog, CInstance* inst) {
                                                         : "?";
         f->line = inst->fn->sig ? inst->fn->sig->line : 0;
         f->nparams = inst->nparams;
+        f->generator = inst->fn->sig && inst->fn->sig->generator;
     }
 
     GROW(prog->funcs, prog->nfuncs, prog->capfuncs);
@@ -383,6 +387,15 @@ static int typedef_index(BcProgram* prog, TDecl* d) {
 static int native_of(Comp* c, CFunc* f, int line) {
     if (f->native) {
         return add_native(c->prog, f->native->fn, f->native->sig->name->chars);
+    }
+
+    if (f->impl_name && f->module && f->module->path && strcmp(f->module->path, "<prelude>") == 0) {
+        const NativeImpl* impls = vm_native_impls(c->prog->vm, PP_PRELUDE_NATIVES);
+        for (int i = 0; impls && impls[i].name; ++i) {
+            if (str_equals(f->impl_name, impls[i].name)) {
+                return add_native(c->prog, impls[i].fn, f->name->chars);
+            }
+        }
     }
 
     if (f->impl_name && f->module && f->module->path) {
@@ -1489,7 +1502,7 @@ static void block_stmts(Comp* c, Node* block, bool value) {
         Node* s = block->as.block.stmts.items[i];
         if (value && i == count - 1) {
             op1(c, OP_LINE, s->line);
-            if (s->kind == S_EXPR) {
+            if (s->kind == S_EXPR && s->as.expr.yield) {
                 Node* e = s->as.expr.expr;
                 if (e->kind == N_IF || e->kind == N_MATCH) {
                     branchy(c, e, true);
@@ -1801,6 +1814,18 @@ static void for_loop(Comp* c, Node* n) {
     new_slot(c); // the position
     new_slot(c); // the index
     expr(c, n->as.for_.iter);
+    if (n->as.for_.proto) {
+        // a value of a type that implements Iterable / KeyIterable: unless it turns out to be a built-in
+        // collection or a generator (iterated directly), the prelude's iterate($for) makes a generator of it
+        const int direct = jump(c, OP_JUMP_ITERABLE);
+        begin_scope(c);
+        const BcLocal* v = add_local(c, str_cintern(c->prog->vm, "$for"));
+        op1(c, OP_STORE, v->slot);
+        expr(c, n->as.for_.proto);
+        end_scope(c);
+        patch(c, direct);
+    }
+
     op1(c, OP_ITER_INIT, it);
     BcLoop l;
     loop_begin(c, &l);
@@ -1879,7 +1904,7 @@ static void store_captures(BcFunc* f, const Comp* c) {
 
 // The body of a scope call's block (or of a defer) as a closure of c, left on the stack. The
 // checker typed it as part of c's instance; it captures c's variables like a lambda. A block
-// takes `scope` (slot 0) and gives its last expression; a defer takes and gives nothing.
+// takes `scope` (slot 0) and gives what it yields; a defer takes and gives nothing.
 static void inline_closure(Comp* c, Node* body, BcKind kind, int line) {
     BcProgram* prog = c->prog;
     BcFunc* f = pp_calloc(1, sizeof(BcFunc));
@@ -2138,6 +2163,23 @@ static void stmt(Comp* c, Node* n) {
         case S_BREAK: emit_leave_loop(c, false); return;
         case S_CONTINUE: emit_leave_loop(c, true); return;
         case S_RETURN:
+            if (c->fn->generator) {
+                // emit value: pause with it; return value: it is the last one; return: the end
+                SType* elem = c->ret && c->ret->nargs ? c->ret->args[0] : NULL;
+                if (n->as.ret.value) {
+                    expr_to(c, n->as.ret.value, elem);
+                    tag_as(c, elem);
+                }
+
+                if (n->as.ret.emit) {
+                    op0(c, OP_SUSPEND);
+                } else {
+                    op1(c, OP_GEN_END, n->as.ret.value ? 1 : 0);
+                }
+
+                return;
+            }
+
             if (n->as.ret.value) {
                 expr_to(c, n->as.ret.value, c->ret);
                 tag_as(c, c->ret);
@@ -2203,16 +2245,20 @@ static void compile_function(BcProgram* prog, BcFunc* f, Comp* outer, BcModule* 
             }
         }
 
-        // a lambda gives the value of its last expression
+        // an expression-bodied lambda gives its expression (the body ends with `yield`)
         const bool implicit = fn->sig && fn->sig->implicit_result;
         begin_scope(&c);
         block_stmts(&c, fn->body, implicit);
         end_scope(&c);
-        if (!implicit) {
-            op0(&c, OP_VOID);
-        }
+        if (f->generator) {
+            op1(&c, OP_GEN_END, 0);
+        } else {
+            if (!implicit) {
+                op0(&c, OP_VOID);
+            }
 
-        op0(&c, OP_RETURN);
+            op0(&c, OP_RETURN);
+        }
     }
 
     store_captures(f, &c);

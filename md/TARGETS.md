@@ -36,7 +36,7 @@ A construct a compiling target does not handle yet is refused when the program
 is compiled, with its line, never at runtime:
 
 ```
-tests/collections.pp:5: error: the wasm target cannot call native function 'map' yet
+tests/ranges.pp:9: error: the wasm target has no float ranges yet
 ```
 
 ## bytecode: the PC target
@@ -129,8 +129,15 @@ Supported now:
   imports of `.pp` modules and module constants;
 * `int` / `float` / `bool` / `string` arithmetic and comparisons, `str`, `+` on
   strings, `==` / `!=` on any value (structurally);
-* `if` / `while` / `for` over int ranges and arrays (with `break` / `continue`),
+* `if` / `while` / `for` over int ranges, arrays, strings (by character),
+  generators, `Map` (`for k, v`) and `Set` (with `break` / `continue`),
   `match` (variants, literals, bindings, guards), `lift()`;
+* **`Map` and `Set`** (below): every function of `Map` / `Set`, `m[k]`,
+  `m[k] = v`, `m[k] op= v`, `#`, `==`, `copy`, `str`, `in`, set operators;
+* **generators** (below), and with them the prelude's iteration: `Iterable` /
+  `Iter` / `KeyIterable`, a `for` over a type that implements them (through
+  `iterate()`), the lazy `map` / `filter` / `take` / `skip` / `enumerate` /
+  `zip` / `chain`, `to_array`, `reduce`;
 * arrays (literals, `#`, `[]`, `[] =`, `[] op=`, `push`, `pop`, `insert`,
   `remove`), records (also `Type({...})`), tuples, enums, `Option`;
 * **function values**: lambdas, closures (a captured variable lives in a cell,
@@ -143,7 +150,10 @@ Supported now:
   `x as T` tests the id against `T`; a call that needs dynamic dispatch tests
   the boxed arguments against each candidate (most specific first) and calls the
   first that fits, the values unboxed to its parameter types. The type tests are
-  generated last, from every type that was boxed somewhere in the program;
+  generated last, from every type that was boxed somewhere in the program. A
+  candidate that cannot fit is not compiled at all: `iter(string)` for an
+  `Iterable<int>`, or `iter(Set<T>)`, whose parameter type this target cannot
+  make values of;
 * natives the host runs (below): `sort`, `map`, `filter`, `reduce`, `join`,
   `contains`, `index_of`, `slice`, `split`, `upper`, `replace`, `parse_int`,
   `format`, `get_type`, string indexing, `in`, the `math` module, ...;
@@ -160,14 +170,72 @@ is expected (`MenuOption[]` as `View[]`, `int[]` as `float[]`) is **copied**
 with its elements converted, so the callee's changes to it are not seen by the
 caller.
 
-Not yet: maps and sets, `object` (open records), typed arrays, float ranges,
-natives and overloaded names used as function values (`reduce(xs, +, 0)`), the
-`os` / `fs` / `pp` modules (there is no file system in a browser; node could
-have one). Each is refused at compile time. Of the 28 `tests/*.pp` programs
-that run to the end, 9 compile to WebAssembly and print the same as the
-interpreter; one more (`inline_exports`) differs only in printing `4.0` for a
+Not yet: `object` (open records), typed arrays, float ranges,
+natives and overloaded names used as function values (`reduce(xs, +, 0)`),
+`fields()` (a generator the host would have to run), the `os` / `fs` / `pp`
+modules (there is no file system in a browser; node could have one). Each is
+refused at compile time. A map whose types the program never states
+(`const counts = map()`, then `counts[k] += 1`) has no static type for
+its values and is refused like any dynamic code. Of the 30 `tests/*.pp`
+programs that run to the end, 10 compile to WebAssembly and print the same as
+the interpreter (`generators` stops only at `reduce(xs, +, 0)`, `collections`
+at printing the type `Map` itself); one more (`inline_exports`) differs only in printing `4.0` for a
 `float` field given the int `4`, which the interpreter keeps as an int; the
 rest stop at one of these.
+
+### Generators as step functions
+
+WebAssembly cannot pause a function, so a generator is lowered (see
+[ITER.md](ITER.md#how-generators-run)). A generator is an object
+`[step][state][value][frame]`: `step` is the table slot of its **step
+function**, `(generator) -> i32`, which runs the body to its next value and
+returns 1 (the value in the `value` slot) or 0 (the body ended). Calling the
+generator function only allocates the object and puts the closure and the
+arguments into the frame.
+
+The step function is the body compiled as an ordinary function, with every
+local living in the frame between steps: the step loads all of them on entry
+and stores them when it pauses. `emit` stores the value, sets `state` to the
+number of the pause and leaves through a block around the body. Resuming at
+pause `k` enters the body again with a `resume` local set to `k`, and the code
+on the way to that `emit` is routed without running anything else:
+
+* in a block that holds pauses, each statement is guarded by
+  `resume == 0 || k is in it` (the pauses are numbered in source order, so
+  "in it" is a range test);
+* a `while` / `for` skips its test and its next item (the iterator's position
+  is a local, so it is in the frame);
+* an `if` / `match` takes the branch that holds the pause without evaluating
+  the condition, the subject or the patterns (the bindings are locals too);
+* the `emit` itself clears `resume`, and the body goes on after it.
+
+`state` -1 is done (every later step returns 0) and -2 is running: a step that
+finds it running fails with the interpreter's message (`next()` from the
+generator's own body). The frame is collected memory like any other object.
+
+### Map and Set in the heap
+
+A map or a set is an object of the collected heap, so wasm code holds it like
+any value and the collector traces through it:
+`[n][cap][keys][vals][index][icap][kt][vt]`. The `n` entries are kept in
+insertion order, their keys and values in 8-byte slots of the types `kt` / `vt`
+(type descriptor ids; a set has `vt` -2 and no values), with an open-addressing
+`index` of entry numbers. Removing an entry shifts the later ones down and
+rebuilds the index, so the order stays the interpreter's.
+
+The operations are the host's (the `std_map_*` / `std_set_*` natives of the
+bridge): JavaScript hashes and compares the keys by their type descriptor
+(strings by their bytes, tuples and enum values by their parts, an integral
+float like the int), and fails like the interpreter for a key that can change
+(an array, a record, a map). The map keeps its own `kt` / `vt`, and each call
+converts between them and the types of the call (boxing, unboxing, int to
+float), so a map made by `map()` (a `Map<never, never>`, types not known)
+takes them from the first call that states them, and `map({ a: 1, b:
+"x" })` stores its mixed values boxed. A `for` over a map or a set iterates a
+snapshot of its entries (`entries()`) or items (`values()`) as an array.
+`m[k]` and `m[k] = v` go through `Index` like on the other targets; the
+dispatch of a call on a boxed `Index` can now reach a native of the bridge
+(`get`, `put`).
 
 ### Scope calls without unwinding
 

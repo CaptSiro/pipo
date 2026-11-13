@@ -13,7 +13,7 @@ io:print_nl()
 let arr = [3, 1, 2]
 for i, v in arr { io:print(i, ":", v, " ") }
 io:print_nl()
-io:print_nl(sort(arr), arr.reverse(), arr.map(function(v) { return v * 10 }))
+io:print_nl(sort(arr), arr.reverse(), arr.map(function(v) -> int { return v * 10 }).to_array())
 io:print_nl(reduce(arr, +, 0))
 function fib(int n) -> int {
     if n < 2 { return n }
@@ -28,7 +28,7 @@ io:print_nl(+([], []), [].+([1]))
 io:print_nl(success 5, fail "bad", some(3), none())
 const v = match 5 {
     10 -> 1
-    5 -> { "five" }
+    5 -> { yield "five" }
     _ -> 0
 }
 io:print_nl(v)

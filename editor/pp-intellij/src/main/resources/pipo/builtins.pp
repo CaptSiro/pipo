@@ -27,6 +27,112 @@ native type Block<T>
 // break, continue or lift out of anything
 native type Callback<T>
 
+// ---- Map<K, V> and Set<T>: built-in hash containers (moved from std)
+// Keys and elements must be values that cannot change. map() / set() make empty ones; map([tuple("a", 1)]),
+// map({ a: 1 }), map(other), set([1, 2, 2]), set(0...5), set(other) copy from a value. Both keep insertion order.
+native type Map<K, V>
+native type Set<T>
+
+function map() -> Map
+<K, V>function map(tuple<K, V>[] entries) -> Map<K, V>
+function map(object fields) -> Map
+<K, V>function map(Map<K, V> other) -> Map<K, V>
+function set() -> Set
+<T>function set(T[] items) -> Set<T>
+function set(range<int> items) -> Set<int>
+function set(range<float> items) -> Set<float>
+<T>function set(Set<T> other) -> Set<T>
+
+<K, V>function get(Map<K, V> m, K key) -> V?
+<K, V>function put(Map<K, V> m, K key, V value) -> void
+<K, V>function has(Map<K, V> m, K key) -> bool
+<K, V>function remove(Map<K, V> m, K key) -> V?
+<K, V>function keys(Map<K, V> m) -> K[]
+<K, V>function values(Map<K, V> m) -> V[]
+<K, V>function entries(Map<K, V> m) -> tuple<K, V>[]
+<K, V>function clear(Map<K, V> m) -> void
+<K, V>function in(K key, Map<K, V> m) -> bool
+// add returns false when the item was already there, remove when it was not
+<T>function add(Set<T> s, T item) -> bool
+<T>function has(Set<T> s, T item) -> bool
+<T>function remove(Set<T> s, T item) -> bool
+<T>function values(Set<T> s) -> T[]
+<T>function clear(Set<T> s) -> void
+<T>function union(Set<T> a, Set<T> b) -> Set<T>
+<T>function intersection(Set<T> a, Set<T> b) -> Set<T>
+<T>function difference(Set<T> a, Set<T> b) -> Set<T>
+<T>function in(T item, Set<T> s) -> bool
+<T>function |(Set<T> a, Set<T> b) -> Set<T>
+<T>function &(Set<T> a, Set<T> b) -> Set<T>
+<T>function -(Set<T> a, Set<T> b) -> Set<T>
+
+// what c[key] and c[key] = value call; a type that implements Index only needs get and put
+<K, V>interface Index {
+    function get(Index collection, K key) -> V?
+    function [](Index collection, K key) -> V
+    function put(Index collection, K key, V value) -> void
+    function []=(Index collection, K key, V value) -> void
+}
+
+interface Length {
+    function length(Length collection) -> int
+    function #(Length collection) -> int
+}
+
+// ---- iteration (md/ITER.md)
+
+// what a call of a `generator` function gives; next() runs it to its next `emit`
+native type Generator<T>
+
+// a collection that can give a fresh Iter, as many times as asked; `for x in c` reads one
+<T>interface Iterable {
+    function iter(Iterable c) -> Iter<T>
+}
+
+// a source of values that is used up as it is read; every Iter is an Iterable of itself
+<T>interface Iter {
+    function next(Iter it) -> T?
+    function iter(Iter it) -> Iter<T> {
+        return it
+    }
+    impl Iterable<T> for Iter
+}
+
+// a collection whose items have keys: what `for key, value in c` reads
+<K, V>interface KeyIterable {
+    function pairs(KeyIterable c) -> Iter<tuple<K, V>>
+}
+
+<T, R>type Mapper = T -> R
+<T>type Predicate = T -> bool
+<A, T>type Reducer = (A, T) -> A
+
+// the generator's next value, or none() once it is done
+<T>function next(Generator<T> g) -> T?
+// a record's fields as tuple(name, value): for name, value in fields(r)
+native function fields(object record) -> Generator<tuple<string, any>>
+// lazy: the values of source with f applied, read only as far as they are read
+<T, R>function map(Iterable<T> source, Mapper<T, R> f) -> Generator<R>
+// lazy: the values of source for which keep is true
+<T>function filter(Iterable<T> source, Predicate<T> keep) -> Generator<T>
+// lazy: the first n values
+<T>function take(Iterable<T> source, int n) -> Generator<T>
+// lazy: the values after the first n
+<T>function skip(Iterable<T> source, int n) -> Generator<T>
+// lazy: tuple(0, first), tuple(1, second), ...
+<T>function enumerate(Iterable<T> source) -> Generator<tuple<int, T>>
+// lazy: tuple(a1, b1), tuple(a2, b2), ... as long as the shorter
+<A, B>function zip(Iterable<A> first, Iterable<B> second) -> Generator<tuple<A, B>>
+// lazy: the values of first, then of second
+<T>function chain(Iterable<T> first, Iterable<T> second) -> Generator<T>
+// every value, in an array
+<T>function to_array(Iterable<T> source) -> T[]
+// f(f(f(start, v1), v2), ...)
+<A, T>function reduce(Iterable<T> source, Reducer<A, T> f, A start) -> A
+// what `for` calls for a type that implements Iterable / KeyIterable
+<T>function iterate(Iterable<T> source) -> Generator<T>
+<K, V>function iterate_pairs(KeyIterable<K, V> source) -> Generator<tuple<K, V>>
+
 // ---- operators
 
 // addition of numbers, concatenation of strings
@@ -67,8 +173,8 @@ native function [](any[] array, int index) -> any
 native function [](string s, int index) -> string
 native function [](object o, string key) -> any
 // x[i] = v
-native function []=(any[] array, int index, any value)
-native function []=(object o, string key, any value)
+native function []=(any[] array, int index, any value) -> void
+native function []=(object o, string key, any value) -> void
 
 // ---- conversion and reflection
 
@@ -81,17 +187,19 @@ native function float(any value) -> float
 // none() instead of an error when s is not a number
 native function parse_int(string s) -> int?
 native function parse_float(string s) -> float?
-// "int", "string", "array", "Person", "Option", ...
+// the static type: "int", "int[]", "Person", "int?", ... (x is not evaluated)
 native function type_of(any value) -> string
+// the type of the value: "int", "string", "array", "Person", "Option", "Map", ...
+native function get_type(any value) -> string
 // the value associated with an enum variant: enum string Messages { NOTICE = "Notice" }
 native function enum_value(any variant) -> any
 
 // ---- arrays
 
-native function push(any[] array, any item)
+native function push(any[] array, any item) -> void
 // removes and returns the last item
 native function pop(any[] array) -> any?
-native function insert(any[] array, int index, any item)
+native function insert(any[] array, int index, any item) -> void
 // removes the item at index and returns it
 native function remove(any[] array, int index) -> any
 // a new array: a followed by b
@@ -117,11 +225,6 @@ native function reverse(string s) -> string
 native function sort(any[] array) -> any[]
 native function sort(any[] array, function compare) -> any[]
 native function join(any[] array, string separator) -> string
-// a new array with f applied to every item
-native function map(any[] array, function f) -> any[]
-// a new array with the items for which predicate returns true
-native function filter(any[] array, function predicate) -> any[]
-native function reduce(any[] array, function f, any initial) -> any
 // a shallow copy of an array, object, map or set; a tuple is returned unchanged
 native function copy(any value) -> any
 // a tuple of the arguments: tuple(1, "a") is a tuple<int, string>
@@ -164,9 +267,9 @@ native function clamp(number x, any a, any b) -> any
 // a range with a custom step; any float makes a float range
 native function range(number start, number end, number step) -> range
 // aborts with a runtime error
-native function panic(any message)
-native function assert(bool condition)
-native function assert(bool condition, any message)
+native function panic(any message) -> void
+native function assert(bool condition) -> void
+native function assert(bool condition, any message) -> void
 // monotonic seconds, for timing
 native function clock() -> float
 // is a name visible from the current scope

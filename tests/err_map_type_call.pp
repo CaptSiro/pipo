@@ -1,2 +1,2 @@
 import std
-std:Map()
+Map()

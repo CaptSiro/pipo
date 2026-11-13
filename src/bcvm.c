@@ -14,6 +14,7 @@ typedef struct {
     bool pop_callee;     // called through CALL_VALUE: the callee sits below the arguments
     bool traced;         // has an entry in vm->frames
     const char* saved_file;
+    ObjGenerator* gen;   // the frame runs a generator's body (resumed by next())
 } BcFrame;
 
 // a running scope call (OP_SCOPE_CALL): a block that leaves early unwinds to it
@@ -43,8 +44,30 @@ static void stack_check(VM* vm, int need, int line) {
     }
 }
 
+// a call of a generator: the arguments become the slots of a frame that next() starts; the generator
+// replaces the arguments (and the callee) on the stack
+static void make_generator(VM* vm, BcFunc* f, ObjClosure* closure, int argc, bool pop_callee) {
+    ObjGenerator* g = gen_new(vm, GEN_BYTECODE, f->name ? f->name : str_cintern(vm, "generator"));
+    g->bcfn = f;
+    g->closure = (Obj*)closure;
+    g->nslots = f->nlocals > argc ? f->nlocals : argc;
+    g->slots = pp_calloc((size_t)(g->nslots + 1), sizeof(Value));
+    for (int i = 0; i < g->nslots; ++i) {
+        g->slots[i] = i < argc ? vm->stack[vm->sp - argc + i] : void_val();
+    }
+
+    vm->sp -= argc + (pop_callee ? 1 : 0);
+    vm->stack[vm->sp++] = obj_val(g);
+}
+
 // starts a call of f with its arguments on the stack (argc of them, below vm->sp)
 static void enter(VM* vm, BcFunc* f, ObjClosure* closure, int argc, int line, bool pop_callee) {
+    if (f->generator) {
+        make_generator(vm, f, closure, argc, pop_callee);
+
+        return;
+    }
+
     if (vm->fp >= PP_FRAMES_MAX) {
         rt_error(vm, line, "stack overflow (more than %d nested calls)", PP_FRAMES_MAX);
     }
@@ -75,6 +98,7 @@ static void enter(VM* vm, BcFunc* f, ObjClosure* closure, int argc, int line, bo
     fr->pop_callee = pop_callee;
     fr->traced = !f->is_init;
     fr->saved_file = vm->cur_file;
+    fr->gen = NULL;
     for (int i = argc; i < f->nlocals; ++i) {
         vm->stack[vm->sp++] = void_val();
     }
@@ -185,6 +209,10 @@ static bool fits(SType* t, Value v) {
 
             if (t->decl->which == NT_SET) {
                 return IS_KIND(v, OBJ_SET);
+            }
+
+            if (t->decl->which == NT_GENERATOR) {
+                return IS_KIND(v, OBJ_GENERATOR);
             }
 
             return IS_KIND(v, OBJ_INSTANCE) && str_eq(AS_INSTANCE(v)->type->name, t->decl->name);
@@ -339,6 +367,16 @@ static bool iter_next(VM* vm, Value* slots, int line, Value* key, Value* item) {
         return true;
     }
 
+    if (IS_KIND(it, OBJ_GENERATOR)) {
+        if (!gen_next(vm, (ObjGenerator*)it.as.o, item, line)) {
+            return false;
+        }
+
+        slots[2] = int_val(idx + 1);
+
+        return true;
+    }
+
     if (IS_KIND(it, OBJ_INSTANCE)) {
         ObjInstance* inst = AS_INSTANCE(it);
         const NativeClass* cls = inst->type->cls;
@@ -368,8 +406,52 @@ static Value invoke(VM* vm, BcFunc* f, ObjClosure* closure, int argc, Value* arg
     }
 
     enter(vm, f, closure, argc, line, true);
+    if (f->generator) {
+        return vm->stack[--vm->sp]; // a generator: built, not run
+    }
 
     return run(vm, depth);
+}
+
+// next() of a bytecode generator: its frame goes back on the stack and runs to OP_SUSPEND / OP_GEN_END
+static Value gen_resume(VM* vm, ObjGenerator* g, bool* done) {
+    BcFunc* f = (BcFunc*)g->bcfn;
+    const int depth = nframes;
+    g->state = GEN_RUNNING;
+    if (vm->fp >= PP_FRAMES_MAX) {
+        rt_error(vm, 0, "stack overflow (more than %d nested calls)", PP_FRAMES_MAX);
+    }
+
+    Frame* tf = &vm->frames[vm->fp++];
+    tf->name = f->name ? f->name->chars : "?";
+    tf->file = vm->cur_file;
+    tf->line = vm->cur_line;
+    stack_check(vm, g->nslots + 64, vm->cur_line);
+    if (nframes >= capframes) {
+        capframes = capframes ? capframes * 2 : 64;
+        frames = pp_realloc(frames, sizeof(BcFrame) * (size_t)capframes);
+    }
+
+    BcFrame* fr = &frames[nframes++];
+    fr->fn = f;
+    fr->closure = (ObjClosure*)g->closure;
+    fr->base = vm->sp;
+    fr->ip = g->ip;
+    fr->pop_callee = false;
+    fr->traced = true;
+    fr->saved_file = vm->cur_file;
+    fr->gen = g;
+    for (int i = 0; i < g->nslots; ++i) {
+        vm->stack[vm->sp++] = g->slots[i];
+    }
+
+    vm->cur_file = f->file;
+    const int saved_line = vm->cur_line;
+    const Value r = run(vm, depth);
+    vm->cur_line = saved_line;
+    *done = g->state == GEN_DONE && !g->finish;
+
+    return r;
 }
 
 Value bc_call_closure(VM* vm, Obj* closure, int argc, Value* args, int line) {
@@ -638,7 +720,7 @@ static Value run(VM* vm, int stop) {
                 const int line = READ();
                 enter(vm, f, NULL, argc, line, false);
                 fr = &frames[nframes - 1];
-                code = f->code;
+                code = fr->fn->code; // the caller's own when f is a generator (built, not entered)
                 break;
             }
             case OP_CALL_NATIVE: {
@@ -833,12 +915,25 @@ static Value run(VM* vm, int stop) {
                 const int b = READ();
                 const int target = READ();
                 Value key, item;
-                if (!iter_next(vm, &LOCAL(s), vm->cur_line, &key, &item)) {
+                const bool more = iter_next(vm, &LOCAL(s), vm->cur_line, &key, &item);
+                fr = &frames[nframes - 1]; // a generator may have run (and grown the frame array)
+                code = fr->fn->code;
+                if (!more) {
                     fr->ip = target;
                     break;
                 }
 
                 const Value it = LOCAL(s);
+                if (b >= 0 && IS_KIND(it, OBJ_GENERATOR)) {
+                    // for k, v over pairs
+                    if (!IS_KIND(item, OBJ_TUPLE) || AS_TUPLE(item)->count != 2) {
+                        rt_error(vm, vm->cur_line, "for k, v needs pairs: got a value of type %s", value_type_name(item));
+                    }
+
+                    key = AS_TUPLE(item)->items[0];
+                    item = AS_TUPLE(item)->items[1];
+                }
+
                 const bool keyed = IS_KIND(it, OBJ_MAP) || IS_KIND(it, OBJ_OBJECT);
                 if (b >= 0) {
                     LOCAL(a) = key;
@@ -1009,6 +1104,49 @@ static Value run(VM* vm, int stop) {
                 vm->stack[scope_top->slot + 1] = d;
                 break;
             }
+            case OP_SUSPEND:
+            case OP_GEN_END: {
+                // the generator's frame leaves the stack: kept in the generator (paused), or dropped (done)
+                ObjGenerator* g = fr->gen;
+                const bool end = op == OP_GEN_END;
+                const bool has_value = !end || READ() == 1;
+                const Value r = has_value ? POP() : void_val();
+                if (end) {
+                    g->state = GEN_DONE;
+                    g->finish = has_value;
+                    free(g->slots);
+                    g->slots = NULL;
+                    g->nslots = 0;
+                    g->closure = NULL;
+                } else {
+                    const int n = vm->sp - fr->base;
+                    g->slots = pp_realloc(g->slots, sizeof(Value) * (size_t)(n + 1));
+                    memcpy(g->slots, &vm->stack[fr->base], sizeof(Value) * (size_t)n);
+                    g->nslots = n;
+                    g->ip = fr->ip;
+                    g->state = GEN_PAUSED;
+                }
+
+                vm->sp = fr->base;
+                vm->cur_file = fr->saved_file;
+                vm->fp--;
+                nframes--;
+                if (nframes != stop) {
+                    rt_error(vm, 0, "internal error: a generator paused below another frame");
+                }
+
+                return r;
+            }
+            case OP_JUMP_ITERABLE: {
+                const int target = READ();
+                const Value v = PEEK(0);
+                if (IS_KIND(v, OBJ_RANGE) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
+                    IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET) || IS_KIND(v, OBJ_INSTANCE) || IS_KIND(v, OBJ_GENERATOR)) {
+                    fr->ip = target;
+                }
+
+                break;
+            }
             default: rt_error(vm, 0, "internal error: bad opcode %d", op);
         }
     }
@@ -1018,6 +1156,7 @@ int bc_run(BcProgram* p) {
     prog = p;
     VM* vm = p->vm;
     vm->closure_call = bc_call_closure;
+    vm->gen_resume = gen_resume;
     jmp_buf jb;
     jmp_buf* prev = vm->err_jmp;
     vm->err_jmp = &jb;

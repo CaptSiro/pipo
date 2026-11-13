@@ -13,19 +13,20 @@ for i in ...10 {
 }
 io:print_nl()
 const fns = []
-for i in ...3 { push(fns, function() { return i }) }
-io:print_nl(fns.map(function(f) { return f() }))
+for i in ...3 { push(fns, function() -> int { return i }) }
+io:print_nl(fns.map(function(f) -> int { return f() }).to_array())
 let arr = [1, 2]
 arr[0] += 10
 io:print_nl(arr)
 function <>(string a, string b) -> string { return a + " <> " + b }
 precedence <> under +
 io:print_nl("a" <> "b" + "c")
-const obj = { hello: function(string n) { return "hi " + n } }
+const obj = { hello: function(string n) -> string { return "hi " + n } }
 io:print_nl(obj:hello("bob"))
 const r = [1, 2, 3, 4, 5, 6]
-    .filter(function(v) { return v % 2 == 0 })
-    .map(function(v) { return v * v })
+    .filter(function(v) -> bool { return v % 2 == 0 })
+    .map(function(v) -> int { return v * v })
+    .to_array()
 io:print_nl(r)
 io:print_nl(#(...10), #(1...=10), range(0, 10, 3))
 for c in range(10, 0, -3) { io:print(c, "") }

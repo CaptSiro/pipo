@@ -21,7 +21,7 @@ io:print_nl(mx[0, 0], mx[0, 1], mx[1, 0], mx:cells)
 <T>function [](T[] items, range<int> r) -> T[] { return items.slice(r:start, r:end) }
 io:print_nl(xs[0...2], xs[1...3], xs[2])
 
-// ---- a type implementing std:Index, from another module: only get and put written there
+// ---- a type implementing Index, from another module: only get and put written there
 const b = board(3, 2)
 b[tuple(0, 0)] = "#"
 b[tuple(2, 1)] = "@"
@@ -32,11 +32,11 @@ io:print_nl(
 )
 
 // an interface parameter takes any Index: a map, a Board
-<K, V>function show(std:Index<K, V> c, K key) -> string { return str(c[key]) }
-io:print_nl(show(std:map({ a: 1 }), "a"), show(b, tuple(0, 0)))
+<K, V>function show(Index<K, V> c, K key) -> string { return str(c[key]) }
+io:print_nl(show(map({ a: 1 }), "a"), show(b, tuple(0, 0)))
 
-// ---- std:Map: [] and []= through its impl of Index
-const counts = std:map()
+// ---- Map: [] and []= through its impl of Index
+const counts = map()
 for w in ["a", "b", "a", "c", "a"] {
     if !counts.has(w) { counts[w] = 0 }
     counts[w] += 1
@@ -50,7 +50,7 @@ io:print_nl(counts, counts["a"])
     return some(s:items[#s:items - 1 - i])
 }
 <T>function put(Stack<T> s, int i, T value) -> void { s:items[#s:items - 1 - i] = value }
-<T>impl std:Index<int, T> for Stack<T>
+<T>impl Index<int, T> for Stack<T>
 const Stack<string> st = { items: ["bottom", "middle", "top"] }
 st[0] = "TOP"
 io:print_nl(st[0], st[2], st.get(7), st:items)

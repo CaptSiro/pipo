@@ -47,17 +47,39 @@ Not global. Printing and reading come from the `io` module
 `push(a, x)`, `pop(a) -> T?`, `insert(a, i, x)`, `remove(a, i) -> item`,
 `concat(a, b)`, `multiply(a, n)` / `repeat(a, n)`, `slice(a, start[, end])`,
 `contains(a, x)`, `index_of(a, x) -> int?`, `reverse(a)`, `sort(a)`,
-`sort(a, compare)`, `join(a, sep)`, `map(a, f)`, `filter(a, f)`,
-`reduce(a, f, initial)`, `copy(x)`.
+`sort(a, compare)`, `join(a, sep)`, `copy(x)`.
 
 `tuple(first, ...)` builds a tuple (`tuple<int, string>` for `tuple(1, "a")`); see
 [LANGUAGE.md](LANGUAGE.md#tuples). `copy` also copies maps and sets, and returns a
-tuple unchanged. The functions of `std:Map` and `std:Set` are in `lib/std.pp`
-([LANGUAGE.md](LANGUAGE.md#maps-and-sets)).
+tuple unchanged. `Map` and `Set`, their constructors `map(...)` / `set(...)` and the `Index` /
+`Length` interfaces are built in (declared in the prelude, C bodies in
+`src/modules/std.c`); see [LANGUAGE.md](LANGUAGE.md#maps-and-sets).
 
-`sort`, `reverse`, `concat`, `slice`, `map` and `filter` return new arrays.
+`sort`, `reverse`, `concat` and `slice` return new arrays.
 A `sort` comparator returns a number (negative means a comes first) or a bool
 (true means a comes first).
+
+## Iteration
+
+Written in the prelude, for any `Iterable<T>` (arrays, ranges, strings, sets, maps
+through `pairs()`, generators, and user types that implement it); see
+[ITER.md](ITER.md).
+
+| function | gives |
+|----------|-------|
+| `map(c, f)`, `filter(c, keep)` | a `Generator` (lazy) |
+| `take(c, n)`, `skip(c, n)`, `chain(a, b)` | a `Generator` (lazy) |
+| `enumerate(c)` | a `Generator<tuple<int, T>>` (`for i, x in c.enumerate()`) |
+| `zip(a, b)` | a `Generator<tuple<A, B>>`, as long as the shorter |
+| `to_array(c)` | `T[]`: reads everything |
+| `reduce(c, f, start)` | the accumulated value (`reduce(xs, +, 0)`) |
+| `join(g, sep)` | a generator's values joined like an array's |
+| `next(g) -> T?` | a generator's next value |
+| `iter(c)`, `pairs(c)` | an `Iter` over the values / the `tuple(key, value)` pairs |
+| `fields(record)` | `Generator<tuple<string, V>>`: a record's fields (`for name, value in fields(r)`) |
+
+`map` and `filter` are lazy: `xs.map(f)` is a generator, and nothing is computed
+until it is read. `xs.map(f).to_array()` gives the array.
 
 ## Objects
 
@@ -148,7 +170,7 @@ function get_stock(string file) -> Error<Item[]> {
 
 `lift` must be called directly in the body of a function (or lambda, which it
 returns from). Calling it at the top level of a file, or passing it as a value
-(`xs.map(lift)`), is a runtime error once it meets `none()` / `fail(...)`.
+(`xs.map(lift).to_array()`), is a runtime error once it meets `none()` / `fail(...)`.
 
 ## Misc
 

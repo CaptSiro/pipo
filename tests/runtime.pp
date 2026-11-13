@@ -6,9 +6,10 @@ const a = vec(3, 4)
 io:print_nl(a.length(), geometry:ORIGIN, g:length(a + vec(1, 1)))
 io:print_nl(1 + 2, "a" + "b")
 // closures
-function counter() {
+type Counter = () -> int
+function counter() -> Counter {
     let n = 0
-    return function() { n += 1; return n }
+    return function() -> int { n += 1; return n }
 }
 const c = counter()
 c(); c()

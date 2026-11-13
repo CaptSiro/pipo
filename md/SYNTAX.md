@@ -16,9 +16,10 @@ float       = digits '.' digits exponent? | digits exponent
 string      = '"' ... '"' | "'" ... "'"             (escapes \n \t \r \0 \\ \" \' \xHH \u{H+})
 op          = run of  + - * / % < > = ! & | ^ ~ # ? @ $ \   and  ..
               ('=' and '->' are reserved; 'op=' is compound assignment)
-keyword     = import export global function return const let if else for in
+              (a declared name never contains '.' or ','; '...' and '...=' are built in)
+keyword     = import export global function return yield emit const let if else for in
               while break continue match enum true false
-contextual  = type interface impl precedence over under as
+contextual  = type interface impl precedence over under as scope generator
 ```
 
 Statements end at a newline. `;` is optional.
@@ -33,11 +34,17 @@ statement   = let
             | type_decl | enum_decl | interface | impl | precedence
             | for | while
             | 'return' expression? | 'break' | 'continue'
+            | 'yield' expression
+            | 'emit' expression                                  in a generator's body only
             | block
             | assignment | expression
 
 block       = '{' statement* '}'
 ```
+
+`yield expression` is allowed only as the **last** statement written directly in the
+block of a match arm or a scope call; it is that block's value. A block of an `if` /
+`else` gives its last expression instead (like a ternary), and takes no `yield`.
 
 ### Modules
 
@@ -58,9 +65,11 @@ name        = ident | op | '[]' | '[]='                  '[]' only in name posit
 
 ```
 let         = ('let' | 'const') type? ident ('=' expression)?
-function_decl = 'global'? generics? 'function' name params ('->' type)? block     'global': top level only
-            | 'global'? generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)?
+function_decl = 'global'? generics? 'function' name params '->' type block       'global': top level only; the return type is required
+            | 'global'? generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' '->' type
                                                             declaration: defined later in the same block
+            | 'global'? generics? 'generator' name params '->' type block
+                                                            a generator: a call gives a Generator<type>
 generics    = '<' ident (',' ident)* '>'
 params      = '(' (param (',' param)*)? ')'
 param       = type? ident
@@ -70,7 +79,7 @@ type_def    = type
 fn_params   = postfix_type ('||' postfix_type)*              one parameter: float -> int
             | '(' ((type (',' type)* (',' '...')?) | '...')? ')'
 interface   = generics? 'interface' ident generics? '{' (requirement | extends)* '}'
-requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' ('->' type)? block?
+requirement = generics? 'function' name '(' ((type ident?) (',' type ident?)*)? ')' '->' type block?
                                                             block: default implementation, parameters need names
 extends     = 'impl' type 'for' ident                        ident: the interface's own name
 impl        = generics? 'impl' type 'for' type             <K, V>impl Index<K, V> for Map<K, V>
@@ -78,7 +87,7 @@ enum_decl   = 'enum' type? ident enum_generics? '{' variant (','? variant)* ','?
 enum_generics = '<' ident ('=' type)? (',' ident ('=' type)?)* '>'
 variant     = ident ('(' (type (',' type)*)? ')')? ('=' expression)?
 precedence  = 'precedence' name ('over' | 'under' | 'as') name
-native      = 'native' string? generics? 'function' name '(' ... ')' ('->' type)?   body in C, library modules only
+native      = 'native' string? generics? 'function' name '(' ... ')' '->' type     body in C, library modules and the prelude
             | 'native' 'type' ident generics?                                    a type implemented in C (map, set)
 ```
 
@@ -89,7 +98,7 @@ type        = postfix_type ('||' postfix_type)*
 postfix_type = primary_type ('[' ']' | '?')*
 primary_type = prim
             | 'tuple' '<' type (',' type)* '>'                  type arguments required: tuple<int, string>
-            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, std:Map<K, V>
+            | (ident ':')* ident ('<' type (',' type)* '>')?     e.g. Error<int>, geometry:Vec, Map<K, V>
             | 'function'
             | '{' (type ident ','?)* '}'                         record
             | '(' type ')'
@@ -142,7 +151,7 @@ primary     = literal | ident
             | '(' expression ')'
             | '[' (expression (',' expression)* ','?)? ']'
             | '{' (key (':' expression)? (',' key (':' expression)?)* ','?)? '}'
-            | generics? 'function' name? params ('->' type)? block
+            | generics? 'function' name? params '->' type block
             | lambda
             | if | match
 

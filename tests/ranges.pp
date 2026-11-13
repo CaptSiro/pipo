@@ -8,7 +8,7 @@ io:print_nl()
 // number ranges: any float makes the whole range float
 const quarters = range(0, 1, 0.25)
 io:print_nl(quarters, #quarters)
-for i, v in quarters { io:print(i, ":", v, " ") }
+for i, v in quarters.enumerate() { io:print(i, ":", v, " ") }
 io:print_nl()
 for v in range(1.0, 0.0, -0.3) { io:print(v, " ") }
 io:print_nl()

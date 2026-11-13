@@ -1,0 +1,1 @@
+err_yield_in_if.pp:2:5: syntax error: 'yield' gives the value of a match arm or a scope call block

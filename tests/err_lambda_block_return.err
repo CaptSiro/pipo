@@ -1,0 +1,1 @@
+err_lambda_block_return.pp:4: error: a lambda with a block body returns its value with 'return'

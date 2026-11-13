@@ -1,3 +1,3 @@
-function f() {
+function f() -> void {
     defer { }
 }

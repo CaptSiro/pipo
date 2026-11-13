@@ -429,8 +429,8 @@ void mod_geometry_register(VM* vm) {
   without a declaration are simply unused.
 * `native type Map<K, V>` binds a type implemented in C. `Map` and `Set` are the
   interpreter's own (the containers in `src/collections.c`; the generic
-  parameters must match them), and `lib/std.pp` uses them to export `std:Map` and
-  `std:Set`. Any other name must be a class the module's C half registered, see
+  parameters must match them); the prelude binds them as the built-in `Map`
+  and `Set`. Any other name must be a class the module's C half registered, see
   [Native types](#native-types).
 * Don't register a pure native module (`vm_register_native_module`) under the
   same name. It is found first, and the `.pp` file would be ignored.

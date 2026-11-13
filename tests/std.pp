@@ -27,7 +27,7 @@ io:print_nl(has(range(0, 1, 0.1), 0.3), has(range(0, 1, 0.1), 0.35), has(0...5, 
 io:print_nl(has(0...5, 1.0 / 0.0), has(range(0, -2, -0.25), -0.75), has(range(0, -2, -0.25), -2))
 
 // ---- the operators are ordinary functions
-io:print_nl(std:in(2, 0...3), std:has(0...3, 3), [0, 3, 6].map(x -> x in 0...5))
+io:print_nl(std:in(2, 0...3), std:has(0...3, 3), [0, 3, 6].map(x -> x in 0...5).to_array())
 io:print_nl(in(3, 0...3), in(2, 0...3), in(2, [1, 2]), in("ell", "hello"), in(0.5, range(0, 1, 0.25)))
 const check = in
 io:print_nl(check("a", "cat"), !in(5, 0...5), in(1, 0...3) && in(1, [1]))

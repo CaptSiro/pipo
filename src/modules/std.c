@@ -1,5 +1,5 @@
 // The C half of lib/std.pp (a mixed module): bodies of its `native` functions,
-// including the functions of std:Map and std:Set.
+// including the functions of Map and Set.
 #include <math.h>
 
 #include "vm.h"
@@ -70,12 +70,12 @@ static Value std_in_range(VM* vm, int argc, Value* a) {
     return bool_val(step > 0 ? xf >= start && xf < end : xf <= start && xf > end);
 }
 
-// ------------------------------------------------- std:Map and std:Set
+// ------------------------------------------------- Map and Set
 //
 // The tables themselves are in src/collections.c. Overload resolution has
 // already checked the receiver (Map<K, V> / Set<T>) before these run.
 
-// the constructors: std:map(), std:map(from), std:set(), std:set(from) (see native_type_construct)
+// the constructors: map(), map(from), set(), set(from) (see native_type_construct)
 static Value map_new_fn(VM* vm, int argc, Value* a) {
     return native_type_construct(vm, vm->t_map, argc, a, 0);
 }
@@ -215,6 +215,11 @@ static Value set_difference(VM* vm, int argc, Value* a) {
 static const NativeImpl STD[] = {
     {"std_in_range", std_in_range},
     {"std_range_has", std_range_has},
+    {NULL, NULL},
+};
+
+// Map and Set are built in: the prelude (src/prelude.c) binds these with `native "..." function`
+static const NativeImpl PRELUDE_NATIVES[] = {
     {"std_map_new", map_new_fn},
     {"std_set_new", set_new_fn},
     {"std_map_get", map_get_fn},
@@ -235,4 +240,5 @@ static const NativeImpl STD[] = {
 
 void mod_std_register(VM* vm) {
     vm_register_native_impls(vm, "std", STD);
+    vm_register_native_impls(vm, PP_PRELUDE_NATIVES, PRELUDE_NATIVES);
 }

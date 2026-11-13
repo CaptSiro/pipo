@@ -157,6 +157,25 @@ static void blacken(Obj* o) {
             mark_obj((Obj*)bl->scope_name);
             break;
         }
+        case OBJ_GENERATOR: {
+            const ObjGenerator* g = (ObjGenerator*)o;
+            mark_obj((Obj*)g->name);
+            mark_obj((Obj*)g->fn);
+            mark_obj((Obj*)g->env);
+            mark_obj(g->closure);
+            mark_value(g->data);
+            mark_value(g->value);
+            for (int i = 0; i < g->cap; ++i) {
+                mark_obj((Obj*)g->path[i].env);
+                mark_value(g->path[i].it);
+            }
+
+            for (int i = 0; i < g->nslots; ++i) {
+                mark_value(g->slots[i]);
+            }
+
+            break;
+        }
     }
 }
 
@@ -165,6 +184,10 @@ static void free_obj(Obj* o) {
         case OBJ_ARRAY: free(((ObjArray*)o)->items); break;
         case OBJ_OBJECT: table_free(&((ObjObject*)o)->fields); break;
         case OBJ_OVERLOAD: free(((ObjOverload*)o)->items); break;
+        case OBJ_GENERATOR:
+            free(((ObjGenerator*)o)->path);
+            free(((ObjGenerator*)o)->slots);
+            break;
         case OBJ_MAP:
         case OBJ_SET: map_free((ObjMap*)o); break;
         case OBJ_INSTANCE: {
@@ -220,9 +243,9 @@ void gc_collect(VM* vm) {
     mark_value(vm->bc_roots);
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);
-    // std:Map / std:Set are permanent (never marked themselves), but what impl recorded on them is not
-    ObjNativeType* nts[2] = {vm->t_map, vm->t_set};
-    for (int i = 0; i < 2; ++i) {
+    // Map / Set are permanent (never marked themselves), but what impl recorded on them is not
+    ObjNativeType* nts[3] = {vm->t_map, vm->t_set, vm->t_generator};
+    for (int i = 0; i < 3; ++i) {
         mark_table(&nts[i]->impl_fns);
         mark_obj((Obj*)nts[i]->module);
     }

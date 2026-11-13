@@ -43,6 +43,8 @@ public interface PipoElementTypes {
     IElementType FOR_VAR = new PipoTokenType("FOR_VAR");
     IElementType WHILE_STMT = new PipoTokenType("WHILE_STMT");
     IElementType RETURN_STMT = new PipoTokenType("RETURN_STMT");
+    IElementType YIELD_STMT = new PipoTokenType("YIELD_STMT");
+    IElementType EMIT_STMT = new PipoTokenType("EMIT_STMT");
     IElementType BREAK_STMT = new PipoTokenType("BREAK_STMT");
     IElementType CONTINUE_STMT = new PipoTokenType("CONTINUE_STMT");
     IElementType ASSIGN_STMT = new PipoTokenType("ASSIGN_STMT");

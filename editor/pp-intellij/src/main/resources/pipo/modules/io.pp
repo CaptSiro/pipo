@@ -5,13 +5,13 @@
 export const string nl = "\n"
 
 // prints the arguments separated by spaces, without a newline; objects as pretty JSON
-export native function print(...)
+export native function print(...) -> void
 // prints the arguments separated by spaces, then a newline
-export native function print_nl(...)
+export native function print_nl(...) -> void
 // like print, to stderr
-export native function eprint(...)
+export native function eprint(...) -> void
 // like print_nl, to stderr
-export native function eprint_nl(...)
+export native function eprint_nl(...) -> void
 // prints the arguments as a prompt, then reads one line from stdin (without the newline)
 export native function input(...) -> string
 // the whole contents of a file

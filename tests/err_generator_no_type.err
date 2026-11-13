@@ -1,0 +1,1 @@
+generator 'g' needs the type of its values: generator g(...) -> T

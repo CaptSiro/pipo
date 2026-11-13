@@ -1,0 +1,1 @@
+err_generator_scope_emit.pp:7:9: syntax error: a generator cannot emit from the block of a scope call

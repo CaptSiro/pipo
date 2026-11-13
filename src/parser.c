@@ -18,6 +18,10 @@ typedef struct {
     int lift_uses;   // `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift
     int scope_blocks;   // nesting inside the blocks of scope calls: `scope` names the value of the innermost one
     bool in_scope_body; // directly in the body of a scope declaration, where `defer` is allowed
+    bool next_block_yields; // the next parse_block is an if / match arm / scope call block: it may end with `yield`
+    bool block_yields;      // directly in such a block
+    bool gen_body;          // in the body of a generator (not of a function or lambda nested in it)
+    int gen_scope_base;     // scope_blocks when the generator's body started: deeper is a scope call's block
 } Parser;
 
 // ---------------------------------------------------------------- helpers
@@ -151,6 +155,44 @@ static bool at_fn_name(Parser* p, int at) {
     const Token* c = peek_at(p, at + 1);
 
     return t->kind == T_LBRACKET && c->kind == T_RBRACKET && !c->space_before && !c->nl_before;
+}
+
+// A name being declared (function, generator, interface requirement, export
+// alias). '.' is reserved for dot calls anywhere in a name: with an operator
+// `..`, `x..f()` would read as `x .. f()`. `...` and `...=` are built in.
+// ',' separates arguments and elements, so it can never be a name.
+static void check_declared_fn_name(Parser* p, Token* t, const char* what) {
+    if (t->kind == T_COMMA || t->kind == T_DOT) {
+        perr(p, t, "'%c' cannot be %s: it is reserved (%s)", t->start[0], what,
+             t->kind == T_COMMA ? "',' separates arguments and elements" : "'.' calls a function: x.f()");
+    }
+
+    if (t->kind == T_OP && memchr(t->start, '.', (size_t)t->len)) {
+        perr(p, t, "'%.*s' cannot be %s: names cannot contain '.', which is reserved for dot calls (x.f())",
+             t->len, t->start, what);
+    }
+}
+
+// Every function states what it returns: `-> void` when it returns nothing.
+// Lambdas (`x -> ...`) are exempt: their type comes from where they are used.
+static void require_return_type(Parser* p, Signature* sig, const char* what) {
+    if (sig->ret) {
+        return;
+    }
+
+    const bool anon = strcmp(sig->name->chars, "anonymous") == 0;
+    perr(p, peek(p), "%s%s%s%s needs a return type: write '-> T' after its parameters ('-> void' when it returns nothing)",
+         what, anon ? "" : " '", anon ? "" : sig->name->chars, anon ? "" : "'");
+}
+
+// `<` and `>` with one parameter would be prefix operators; a `<` in operand
+// position starts a tag call, and `>` is reserved with it so the two stay a pair.
+static void check_angle_arity(Parser* p, Signature* sig, int line) {
+    const char* nm = sig->name->chars;
+    if ((strcmp(nm, "<") == 0 || strcmp(nm, ">") == 0) && (sig->nparams == 1 || (sig->nparams == 0 && sig->variadic))) {
+        perr_line(p, line, "'%s' cannot take one parameter: a prefix '<' / '>' is reserved ('<' in operand position starts a tag call)",
+                  nm);
+    }
 }
 
 // consumes the name at_fn_name accepted
@@ -678,14 +720,25 @@ static void note_lift(Parser* p, ObjString* name) {
     }
 }
 
+// `generator name(`: a generator declaration (`generator` is contextual, like `scope`)
+static bool at_generator(Parser* p, int k) {
+    const Token* a = peek_at(p, k + 1);
+    const Token* b = peek_at(p, k + 2);
+
+    return tok_is(peek_at(p, k), T_IDENT, "generator") && a->kind == T_IDENT && !a->nl_before && b->kind == T_LPAREN;
+}
+
 static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool statement) {
-    Token* kw = expect(p, T_FUNCTION, "'function'");
+    const bool gen = at_generator(p, 0);
+    Token* kw = gen ? advance(p) : expect(p, T_FUNCTION, "'function'");
     Signature* sig = pp_calloc(1, sizeof(Signature));
+    sig->generator = gen;
     sig->generics = generics;
     sig->ngenerics = ngenerics;
     sig->file = p->file;
     sig->line = kw->line;
     bool named = false;
+    check_declared_fn_name(p, peek(p), "a function name");
     if (at_fn_name(p, 0)) {
         if (is_scope_name(peek(p))) {
             perr(p, peek(p), "function names cannot start with '_': names starting with '_' are scopes (scope %.*s(Block<T> code, ...) { ... })",
@@ -702,6 +755,31 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     parse_params(p, sig, statement && named ? &unnamed : NULL);
     if (accept(p, T_ARROW)) {
         sig->ret = parse_type(p);
+    }
+
+    if (!gen) {
+        require_return_type(p, sig, "function");
+    }
+
+    check_angle_arity(p, sig, kw->line);
+
+    if (gen) {
+        // the declared type is the type of the values; a call gives a Generator<T>
+        if (!sig->ret) {
+            perr(p, peek(p), "generator '%s' needs the type of its values: generator %s(...) -> T", sig->name->chars,
+                 sig->name->chars);
+        }
+
+        if (!check(p, T_LBRACE)) {
+            perr(p, peek(p), "generator '%s' needs a body", sig->name->chars);
+        }
+
+        Type* g = new_type(TY_NAME, kw->line);
+        g->name = str_cintern(p->vm, "Generator");
+        g->args = pp_malloc(sizeof(Type*));
+        g->args[0] = sig->ret;
+        g->nargs = 1;
+        sig->ret = g;
     }
 
     if (p->in_native && check(p, T_LBRACE)) {
@@ -745,10 +823,20 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
 
     int lifts = p->lift_uses;
     const bool saved_body = p->in_scope_body;
+    const bool saved_gen = p->gen_body;
+    const int saved_gen_base = p->gen_scope_base;
     p->in_scope_body = false;
+    p->gen_body = gen;
+    p->gen_scope_base = p->scope_blocks;
     Node* body = parse_block(p);
     p->in_scope_body = saved_body;
+    p->gen_body = saved_gen;
+    p->gen_scope_base = saved_gen_base;
     sig->uses_lift = p->lift_uses != lifts;
+    if (gen && sig->uses_lift) {
+        perr_line(p, kw->line, "a generator cannot use lift(): it would return from next(); use match");
+    }
+
     Node* n = new_node(statement && named ? S_FUNCDECL : N_FUNC, kw->line);
     n->as.func.sig = sig;
     n->as.func.body = body;
@@ -757,8 +845,8 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
 }
 
 // Lambdas: x -> expr, (x, y) -> expr, () -> expr, (int x) -> { block }.
-// The current token is the parameter name or the '('. A block body works like
-// a match arm: its last expression is the result unless `return` is used.
+// The current token is the parameter name or the '('. An expression body is the
+// result (parsed as `yield expr`); a block body is a function body and uses `return`.
 static Node* parse_lambda(Parser* p) {
     Token* start = peek(p);
     Signature* sig = pp_calloc(1, sizeof(Signature));
@@ -779,7 +867,9 @@ static Node* parse_lambda(Parser* p) {
     bool saved_nl = p->no_lambda;
     p->no_lambda = false;
     const bool saved_body = p->in_scope_body;
+    const bool saved_gen = p->gen_body;
     p->in_scope_body = false;
+    p->gen_body = false;
     int lifts = p->lift_uses;
     Node* body;
     if (check(p, T_LBRACE)) {
@@ -790,12 +880,14 @@ static Node* parse_lambda(Parser* p) {
         p->depth = saved_depth;
         Node* st = new_node(S_EXPR, e->line);
         st->as.expr.expr = e;
+        st->as.expr.yield = true; // an expression body is the result
         body = new_node(N_BLOCK, e->line);
         nl_push(&body->as.block.stmts, st);
     }
 
     p->no_lambda = saved_nl;
     p->in_scope_body = saved_body;
+    p->gen_body = saved_gen;
     sig->uses_lift = p->lift_uses != lifts;
     Node* n = new_node(N_FUNC, start->line);
     n->as.func.sig = sig;
@@ -831,6 +923,16 @@ static bool at_lambda(Parser* p) {
     return false;
 }
 
+// the blocks of an `if` are exempt from `yield`: like a ternary, a branch's value is its last expression
+// (`if c { 1 } else { 2 }`). Marking that statement as yielded gives it the same meaning everywhere else.
+static void implicit_value(Node* block) {
+    const int count = block->as.block.stmts.count;
+    Node* last = count ? block->as.block.stmts.items[count - 1] : NULL;
+    if (last && last->kind == S_EXPR) {
+        last->as.expr.yield = true;
+    }
+}
+
 static Node* parse_if(Parser* p) {
     Token* kw = advance(p);
     Node* n = new_node(N_IF, kw->line);
@@ -854,11 +956,13 @@ static Node* parse_if(Parser* p) {
 
     n->as.if_.cond = cond;
     n->as.if_.then_b = parse_block(p);
+    implicit_value(n->as.if_.then_b);
     if (accept(p, T_ELSE)) {
         if (check(p, T_IF)) {
             n->as.if_.else_b = parse_if(p);
         } else {
             n->as.if_.else_b = parse_block(p);
+            implicit_value(n->as.if_.else_b);
         }
     }
 
@@ -896,6 +1000,7 @@ static Node* parse_match(Parser* p) {
         p->no_lambda = saved_nl;
         expect(p, T_ARROW, "'->' after the match pattern");
         if (check(p, T_LBRACE)) {
+            p->next_block_yields = true;
             arm.body = parse_block(p);
             arm.body_is_block = true;
         } else {
@@ -963,6 +1068,7 @@ static Node* parse_scope_call(Parser* p) {
     p->in_scope_body = false;
     p->scope_blocks++;
     const int lifts = p->lift_uses;
+    p->next_block_yields = true;
     n->as.scall.body = parse_block(p);
     n->as.scall.uses_lift = p->lift_uses != lifts;
     p->scope_blocks--;
@@ -999,6 +1105,7 @@ static Node* parse_scope_decl(Parser* p, ObjString** generics, int ngenerics) {
         sig->ret = parse_type(p);
     }
 
+    require_return_type(p, sig, "scope");
     if (sig->nparams == 0 || !is_block_type(sig->params[0].type)) {
         perr_line(p, kw->line, "the first parameter of scope '%s' must be its block: Block<T> or Callback<T>", sig->name->chars);
     }
@@ -1474,6 +1581,9 @@ static Node* parse_block(Parser* p) {
     int saved = p->depth;
     p->depth = 0;
     p->block_depth++;
+    const bool saved_yields = p->block_yields;
+    p->block_yields = p->next_block_yields;
+    p->next_block_yields = false;
     Node* b = new_node(N_BLOCK, open->line);
     while (!check(p, T_RBRACE)) {
         if (check(p, T_EOF)) {
@@ -1486,6 +1596,14 @@ static Node* parse_block(Parser* p) {
 
         Node* s = parse_statement(p);
         nl_push(&b->as.block.stmts, s);
+        if (s->kind == S_EXPR && s->as.expr.yield) {
+            while (accept(p, T_SEMI)) {}
+
+            if (!check(p, T_RBRACE)) {
+                perr(p, peek(p), "'yield' must be the last statement of its block, but %s follows it", tok_desc(peek(p)));
+            }
+        }
+
         switch (s->kind) {
             case S_LET:
             case S_FUNCDECL:
@@ -1500,6 +1618,7 @@ static Node* parse_block(Parser* p) {
     advance(p);
     p->depth = saved;
     p->block_depth--;
+    p->block_yields = saved_yields;
     check_declarations(p, &b->as.block.stmts);
 
     return b;
@@ -1652,7 +1771,7 @@ static bool at_exported_decl(Parser* p) {
         case T_OP: return is_generic_prefix(p);
         case T_IDENT: {
             const Token* a = peek_at(p, 1);
-            if (at_native(p)) {
+            if (at_native(p) || at_generator(p, 0)) {
                 return true;
             }
 
@@ -1726,6 +1845,7 @@ static Node* parse_export(Parser* p) {
         ObjString* alias = name;
         if (accept(p, T_ARROW)) {
             Token* a = peek(p);
+            check_declared_fn_name(p, a, "an export alias");
             if (!at_fn_name(p, 0)) {
                 perr(p, a, "expected an export alias but found %s", tok_desc(a));
             }
@@ -1842,7 +1962,7 @@ static bool is_generic_prefix(Parser* p) {
         Token* after = peek_at(p, i + 2);
 
         return after->kind == T_FUNCTION || tok_is(after, T_IDENT, "type") || tok_is(after, T_IDENT, "interface") ||
-               tok_is(after, T_IDENT, "impl") || tok_is(after, T_IDENT, "scope");
+               tok_is(after, T_IDENT, "impl") || tok_is(after, T_IDENT, "scope") || tok_is(after, T_IDENT, "generator");
     }
 }
 
@@ -1933,6 +2053,7 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
         Token* kw = expect(p, T_FUNCTION, "'function' (an interface lists the functions a type must have)");
         sig->line = kw->line;
         Token* fname = peek(p);
+        check_declared_fn_name(p, fname, "a function name");
         if (!at_fn_name(p, 0)) {
             perr(p, fname, "expected a function name but found %s", tok_desc(fname));
         }
@@ -1963,6 +2084,8 @@ static Node* parse_interface(Parser* p, int line, ObjString** gens, int ngen) {
             sig->ret = parse_type(p);
         }
 
+        require_return_type(p, sig, "function");
+        check_angle_arity(p, sig, kw->line);
         Node* body = NULL;
         if (check(p, T_LBRACE)) {
             for (int i = 0; i < sig->nparams; ++i) {
@@ -2037,7 +2160,7 @@ static bool at_native(Parser* p) {
 
 // native type Map<K, V>
 //
-// Binds a type that is implemented in C (std:Map, std:Set). Only the types the
+// Binds a type that is implemented in C (Map, Set). Only the types the
 // interpreter itself provides exist; the generic parameters must match them.
 static Node* parse_native_type(Parser* p, Token* kw) {
     advance(p); // type
@@ -2105,7 +2228,7 @@ static Node* parse_native(Parser* p) {
     return fn;
 }
 
-// impl Iface for Type, <K, V>impl Index<K, V> for std:Map<K, V>; the current token is `impl`
+// impl Iface for Type, <K, V>impl Index<K, V> for Map<K, V>; the current token is `impl`
 static Node* parse_impl(Parser* p, ObjString** gens, int ngen) {
     Token* kw = advance(p);
     Node* n = new_node(S_IMPL, kw->line);
@@ -2146,7 +2269,7 @@ static Node* parse_statement(Parser* p) {
                 int ngen = 0;
                 parse_generic_params(p, &gens, NULL, &ngen, false);
                 fn = parse_function(p, gens, ngen, true);
-            } else if (check(p, T_FUNCTION) && at_fn_name(p, 1)) {
+            } else if ((check(p, T_FUNCTION) && at_fn_name(p, 1)) || at_generator(p, 0)) {
                 fn = parse_function(p, NULL, 0, true);
             } else {
                 perr(p, peek(p), "expected a named function declaration after 'global' but found %s", tok_desc(peek(p)));
@@ -2195,7 +2318,7 @@ static Node* parse_statement(Parser* p) {
                     break;
                 }
 
-                if (!check(p, T_FUNCTION)) {
+                if (!check(p, T_FUNCTION) && !at_generator(p, 0)) {
                     perr(p, peek(p), "expected 'function' after the generic parameter list");
                 }
 
@@ -2204,12 +2327,40 @@ static Node* parse_statement(Parser* p) {
 
             break;
         case T_RETURN:
-            advance(p);
-            n = new_node(S_RETURN, t->line);
-            if (!is_terminator(peek(p))) {
-                n->as.ret.value = parse_expression(p);
+        case T_EMIT:
+            if (t->kind == T_EMIT && !p->gen_body) {
+                perr(p, t, "'emit' can only be used in the body of a generator (generator name(...) -> T { ... })");
             }
 
+            if (p->gen_body && p->scope_blocks > p->gen_scope_base) {
+                perr(p, t, "a generator cannot %s from the block of a scope call: it would have to pause the scope "
+                           "function too", t->kind == T_EMIT ? "emit" : "return");
+            }
+
+            advance(p);
+            n = new_node(S_RETURN, t->line);
+            n->as.ret.emit = t->kind == T_EMIT;
+            if (!is_terminator(peek(p))) {
+                n->as.ret.value = parse_expression(p);
+            } else if (t->kind == T_EMIT) {
+                perr(p, peek(p), "expected the value after 'emit'");
+            }
+
+            break;
+        case T_YIELD:
+            if (!p->block_yields) {
+                perr(p, t, "'yield' gives the value of a match arm or a scope call block and must be written directly in "
+                           "one (an if gives its last expression; a function or lambda returns with 'return')");
+            }
+
+            advance(p);
+            if (is_terminator(peek(p))) {
+                perr(p, peek(p), "expected the value after 'yield'");
+            }
+
+            n = new_node(S_EXPR, t->line);
+            n->as.expr.expr = parse_expression(p);
+            n->as.expr.yield = true;
             break;
         case T_BREAK:
             advance(p);
@@ -2239,6 +2390,10 @@ static Node* parse_statement(Parser* p) {
                 n = new_node(S_EXPR, e->line);
                 n->as.expr.expr = e;
                 break;
+            }
+
+            if (at_generator(p, 0)) {
+                return parse_function(p, NULL, 0, true);
             }
 
             if (tok_is(t, T_IDENT, "scope") && a->kind == T_IDENT && !a->nl_before && b->kind == T_LPAREN) {

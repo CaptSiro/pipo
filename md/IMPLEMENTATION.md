@@ -36,7 +36,7 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/interp.c` | evaluator: scopes, calls, overload resolution, match, modules, entry points |
 | `src/types.c` | runtime type matching and scoring, type-vs-type checks for callbacks and interfaces, type printing |
 | `src/value.c` | values, objects, hash tables, equality, formatting |
-| `src/collections.c` | tuples, value hashing, the hash table behind `std:Map` / `std:Set` and their constructors |
+| `src/collections.c` | tuples, value hashing, the hash table behind `Map` / `Set` and their constructors |
 | `src/gc.c` | mark & sweep collector |
 | `src/builtins.c` | internal (global) functions |
 | `src/modules/io.c` | the native `io` module |
@@ -45,7 +45,7 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/modules/types.c` | C half of `lib/types.pp`: the typed arrays (`Int8Array` ... `Float64Array`) |
 | `src/modules/math.c` | C half of `lib/math.pp`: rounding, roots, logarithms, trigonometry, random numbers |
 | `src/modules/pp.c` | the native `pp` module: location of the running script |
-| `src/modules/std.c` | C half of `lib/std.pp`: `in(number, range)`, `has(range, number)`, the `std:Map` / `std:Set` functions and constructors |
+| `src/modules/std.c` | C half of `lib/std.pp` (`in(number, range)`, `has(range, number)`), and the bodies of the built-in `Map` / `Set` functions the prelude binds (registered as `<prelude>`) |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
 | `lib/` | library modules written in the language (`std`, `fs`, `math`, `types`), copied next to `pp` by the build |

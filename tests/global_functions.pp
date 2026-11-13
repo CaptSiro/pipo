@@ -32,4 +32,4 @@ print_nl(first([7, 8, 9]))
 
 // globals are visible inside functions and closures too
 function same(shapes:Rect a, shapes:Rect b) -> bool { return a == b }
-print_nl(same(r, r), [r, s].map(function(x) { return x == s }))
+print_nl(same(r, r), [r, s].map(function(x) -> bool { return x == s }).to_array())

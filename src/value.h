@@ -95,12 +95,13 @@ typedef enum {
     OBJ_MODULE,
     OBJ_ENV,          // scope
     OBJ_TUPLE,        // fixed size, immutable: tuple(1, "a")
-    OBJ_MAP,          // std:Map<K, V>, an ObjMap
-    OBJ_SET,          // std:Set<T>, an ObjMap without values
-    OBJ_NATIVE_TYPE,  // a type implemented in C (std:Map, std:Set, types:Int8Array, ...), bound by `native type`
+    OBJ_MAP,          // Map<K, V>, an ObjMap
+    OBJ_SET,          // Set<T>, an ObjMap without values
+    OBJ_NATIVE_TYPE,  // a type implemented in C (Map, Set, types:Int8Array, ...), bound by `native type`
     OBJ_INSTANCE,     // a value of a NativeClass type: ObjInstance followed by the class's own fields
     OBJ_BLOCK,        // the body of a scope call (Block<T> / Callback<T>), or a deferred block
-    OBJ_CLOSURE       // a function compiled to bytecode, with the values it captured (bytecode.c)
+    OBJ_CLOSURE,      // a function compiled to bytecode, with the values it captured (bytecode.c)
+    OBJ_GENERATOR     // Generator<T>: what a call of a `generator` function gives (ObjGenerator)
 } ObjKind;
 
 struct Obj {
@@ -189,7 +190,7 @@ typedef struct {
     int index_cap; // power of two, or 0
 } ObjMap;
 
-typedef enum { NT_MAP, NT_SET, NT_CLASS } NativeTypeKind;
+typedef enum { NT_MAP, NT_SET, NT_CLASS, NT_GENERATOR } NativeTypeKind;
 
 typedef struct ObjNativeType ObjNativeType;
 typedef struct ObjInstance ObjInstance;
@@ -219,7 +220,7 @@ typedef struct NativeClass {
     const char* element; // the static type of x[i] and of `for x in a` ("int", "float"), NULL = not known
 } NativeClass;
 
-// std:Map / std:Set (or a NativeClass) as a type: matches OBJ_MAP / OBJ_SET (OBJ_INSTANCE) values. It is not callable.
+// Map / Set (or a NativeClass) as a type: matches OBJ_MAP / OBJ_SET (OBJ_INSTANCE) values. It is not callable.
 struct ObjNativeType {
     Obj obj;
     ObjString* name;
@@ -268,14 +269,15 @@ typedef struct Signature {
     Param* params;
     int nparams;
     bool variadic;
-    bool implicit_result; // lambda: the value of the body's last expression is returned
+    bool implicit_result; // lambda: an expression body (its block ends with `yield expr`) gives its value
     bool uses_lift;       // the body names `lift`: calls install a LiftTarget
+    bool generator;       // `generator name(...) -> T`: ret is Generator<T>; a call builds the generator
     Type* ret;
     const char* file;
     int line;
 } Signature;
 
-typedef struct {
+typedef struct ObjFunction {
     Obj obj;
     Signature* sig;
     Node* body;
@@ -318,6 +320,53 @@ typedef struct {
     int ncaps;
     Value caps[];
 } ObjClosure;
+
+// One statement the interpreter paused in while running a generator's body, outermost first:
+// a block (pos: the statement it runs), a loop, an if / match (pos: the branch or arm taken).
+typedef struct {
+    Node* node;
+    ObjEnv* env;      // the scope the statement runs in (a block's own scope, an arm's bindings)
+    int pos;
+    Value it;         // for: the value it iterates
+    int64_t i;        // for: the position in it
+    int64_t idx;      // for: the number of items seen
+} GenFrame;
+
+typedef enum { GEN_INTERP, GEN_BYTECODE, GEN_NATIVE } GenKind;
+typedef enum { GEN_NEW, GEN_PAUSED, GEN_RUNNING, GEN_DONE } GenState;
+
+typedef struct ObjGenerator ObjGenerator;
+typedef Value (*GenStep)(VM* vm, ObjGenerator* g, bool* done);
+
+// A generator (Generator<T>). Calling a `generator` function binds the arguments and builds one
+// without running the body; next() runs the body until the next `emit` (or `return value`), and
+// gives none() once the body ended. The interpreter keeps the statements it paused in (path), the
+// bytecode VM the paused frame (slots, ip), a native generator (fields(), ...) a C step function.
+struct ObjGenerator {
+    Obj obj;
+    GenKind kind;
+    GenState state;
+    ObjString* name;
+    // GEN_INTERP
+    struct ObjFunction* fn;
+    ObjEnv* env;          // the parameters
+    GenFrame* path;
+    int depth;            // frames of path that are valid while paused
+    int cap;
+    bool resuming;        // set by next(): the statements of path are entered again, not started
+    bool finish;          // `return value`: the value is the last one
+    // GEN_BYTECODE
+    void* bcfn;           // the BcFunc of the body
+    Obj* closure;         // the ObjClosure it was called through, or NULL
+    Value* slots;         // the frame's locals and temporaries while paused
+    int nslots;
+    int ip;
+    // GEN_NATIVE
+    GenStep step;
+    Value data;
+    int64_t pos;
+    Value value;          // the value the last emit gave
+};
 
 // The C half of a mixed library module: its .pp file in lib/ declares
 // `native function name(...) -> T`, and the body comes from a table of these
@@ -393,7 +442,7 @@ struct ObjTypeDef {
     Table impl_fns;    // name -> ObjOverload: functions `impl` found for this type, searched by dot calls
 };
 
-// `impl Iface<args> for target`, `<K, V>impl Index<K, V> for std:Map<K, V>`
+// `impl Iface<args> for target`, `<K, V>impl Index<K, V> for Map<K, V>`
 typedef struct {
     Type* target;
     ObjEnv* env; // where target and args resolve

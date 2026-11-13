@@ -306,6 +306,10 @@ static Table* receiver_impl_table(Value recv) {
         return &AS_INSTANCE(recv)->type->impl_fns;
     }
 
+    if (IS_KIND(recv, OBJ_GENERATOR)) {
+        return &the_vm->t_generator->impl_fns;
+    }
+
     return NULL;
 }
 
@@ -820,6 +824,17 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
         env_define(vm, env, sig->params[i].name, a, 0, sig->ngenerics ? NULL : pt);
     }
 
+    if (sig->generator) {
+        // the call only binds the arguments: next() runs the body
+        ObjGenerator* g = gen_new(vm, GEN_INTERP, sig->name);
+        g->fn = fn;
+        g->env = env;
+        pop_env(vm);
+        vm->fp--;
+
+        return obj_val(g);
+    }
+
     vm->cur_file = sig->file;
     Value last = void_val();
     ExecStatus st;
@@ -845,7 +860,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
 }
 
 // code() / code(value) in a scope function: runs the block of the scope call in a fresh scope
-// whose `scope` is the value. Its last expression is the result. When the block leaves early
+// whose `scope` is the value. What it yields is the result. When the block leaves early
 // (return, break, continue, a failing lift), the exit is recorded in the scope call and the
 // scope function is unwound by a longjmp to it (exec_scope_call runs its defer block).
 static Value call_block(VM* vm, ObjBlock* bl, int argc, Value* args, int line) {
@@ -1009,9 +1024,9 @@ static Value call_value_adl(VM* vm, Value callee, int argc, Value* args, int lin
             return args[0];
         }
         case OBJ_NATIVE_TYPE: {
-            // std:Map(), types:Int8Array(4), types:Int8Array{}: types are not constructors
+            // Map(), types:Int8Array(4), types:Int8Array{}: types are not constructors
             ObjNativeType* t = (ObjNativeType*)o;
-            const char* ctor = t->which == NT_MAP ? "std:map" : t->which == NT_SET ? "std:set" : t->cls->constructor;
+            const char* ctor = t->which == NT_MAP ? "map" : t->which == NT_SET ? "set" : t->cls ? t->cls->constructor : NULL;
             if (ctor) {
                 rt_error(vm, line, "type '%s' cannot be called; make a value with %s(...)", t->name->chars, ctor);
             }
@@ -1338,7 +1353,7 @@ static Value lookup_operator(VM* vm, ObjEnv* env, ObjString* op, int line, ObjOv
 
 // x[a, b] calls [](x, a, b) and x[a, b] = v calls []=(x, a, b, v). Like a binary
 // operator, the call also sees the functions of the receiver's module and the
-// ones `impl` recorded for its type, so a type that implements std:Index can be
+// ones `impl` recorded for its type, so a type that implements Index can be
 // indexed anywhere. args[0] is the receiver; all of args is on the value stack.
 static Value call_bracket(VM* vm, ObjEnv* env, ObjString* name, int argc, Value* args, int line, InlineCache* ic) {
     const Value recv = args[0];
@@ -2065,7 +2080,12 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
     ObjString* impl = n->as.func.native;
     ObjModule* m = vm->cur_module;
-    if (!m || !m->natives) {
+    const NativeImpl* natives = m ? m->natives : NULL;
+    if (!m && env == vm->builtins) {
+        natives = vm_native_impls(vm, PP_PRELUDE_NATIVES); // the prelude: Map, Set
+    }
+
+    if (!natives) {
         rt_error(vm, n->line,
                  "native function '%s' needs a C implementation, but %s has none registered\n"
                  "  (native functions are declared in library modules whose C half calls vm_register_native_impls)",
@@ -2073,14 +2093,15 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     }
 
     NativeFn fn = NULL;
-    for (const NativeImpl* it = m->natives; it->name && !fn; ++it) {
+    for (const NativeImpl* it = natives; it->name && !fn; ++it) {
         if (strcmp(it->name, impl->chars) == 0) {
             fn = it->fn;
         }
     }
 
     if (!fn) {
-        rt_error(vm, n->line, "module '%s' has no native implementation named '%s'", m->name->chars, impl->chars);
+        rt_error(vm, n->line, "module '%s' has no native implementation named '%s'", m ? m->name->chars : "<prelude>",
+                 impl->chars);
     }
 
     ObjNative* nf = native_new(vm, sig, fn);
@@ -2099,11 +2120,27 @@ static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
 static void exec_native_type(VM* vm, Node* n, ObjEnv* env) {
     ObjString* name = n->as.type_decl.name;
     ObjModule* m = vm->cur_module;
+
+    ObjNativeType* t = NULL;
+    if (!m && env == vm->builtins) {
+        // the prelude's `native type Generator<T>`, `Map<K, V>` and `Set<T>`
+        t = str_equals(name, "Generator") ? vm->t_generator
+            : str_equals(name, "Map")     ? vm->t_map
+            : str_equals(name, "Set")     ? vm->t_set
+                                          : NULL;
+        if (!t) {
+            rt_error(vm, n->line, "the prelude has no native type named '%s'", name->chars);
+        }
+
+        env_define(vm, env, name, obj_val(t), VAR_CONST, NULL);
+
+        return;
+    }
+
     if (!m || !m->lib_path) {
         rt_error(vm, n->line, "native type '%s' can only be declared in a library module with a C half", name->chars);
     }
 
-    ObjNativeType* t = NULL;
     if (str_equals(name, "Map")) {
         t = vm->t_map;
     } else if (str_equals(name, "Set")) {
@@ -2188,8 +2225,8 @@ static ExecStatus exec_block(VM* vm, Node* b, ObjEnv* env, bool new_scope, Value
     const NodeList* sl = &b->as.block.stmts;
     for (int i = 0; i < sl->count; ++i) {
         Node* s = sl->items[i];
-        if (out && i == sl->count - 1 && s->kind == S_EXPR) {
-            // last expression of a block used as a value
+        if (out && i == sl->count - 1 && s->kind == S_EXPR && s->as.expr.yield) {
+            // `yield expr` at the end of a block used as a value
             vm->cur_line = s->line;
             gc_maybe(vm);
             Node* e = s->as.expr.expr;
@@ -2815,20 +2852,6 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
         }
     }
 
-    // `impl Equals for Comparator` inside Comparator: implementing Comparator implements Equals too
-    for (int i = 0; i < it->nparents; ++i) {
-        Type* pt = it->parent_types[i];
-        Type** pargs = NULL;
-        if (pt->nargs) {
-            pargs = pp_malloc(sizeof(Type*) * (size_t)pt->nargs);
-            for (int k = 0; k < pt->nargs; ++k) {
-                pargs[k] = concrete_type(vm, pt->args[k], it->env, &b);
-            }
-        }
-
-        impl_interface(vm, it->parents[i], pargs, pt->nargs, target, env, line, it, gens, ngens);
-    }
-
     GROW(it->impls, it->nimpls, it->capimpls);
     Impl* im = &it->impls[it->nimpls++];
     im->target = target;
@@ -2860,6 +2883,21 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
 
     free(found);
     free(defaults);
+    // `impl Equals for Comparator` inside Comparator: implementing Comparator implements Equals too. After the
+    // functions above are recorded, so a default of the child (Iter's iter) can meet a requirement of the parent.
+    for (int i = 0; i < it->nparents; ++i) {
+        Type* pt = it->parent_types[i];
+        Type** pargs = NULL;
+        if (pt->nargs) {
+            pargs = pp_malloc(sizeof(Type*) * (size_t)pt->nargs);
+            for (int k = 0; k < pt->nargs; ++k) {
+                pargs[k] = concrete_type(vm, pt->args[k], it->env, &b);
+            }
+        }
+
+        impl_interface(vm, it->parents[i], pargs, pt->nargs, target, env, line, it, gens, ngens);
+    }
+
     sb_free(&tname);
     // overload choices cached at call sites may change now that values of the type fit the interface
     for (int i = 0; i < vm->ncaches; ++i) {
@@ -3034,6 +3072,567 @@ static void exec_import(VM* vm, Node* n, ObjEnv* env) {
     }
 }
 
+// ---------------------------------------------------------------- generators
+
+static int utf8_len(unsigned char c);
+
+ObjGenerator* gen_new(VM* vm, GenKind kind, ObjString* name) {
+    ObjGenerator* g = (ObjGenerator*)alloc_obj(vm, sizeof(ObjGenerator), OBJ_GENERATOR);
+    g->kind = kind;
+    g->state = GEN_NEW;
+    g->name = name;
+    g->data = void_val();
+    g->value = void_val();
+
+    return g;
+}
+
+static bool is_builtin_iterable(Value v) {
+    return IS_KIND(v, OBJ_RANGE) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
+           IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET) || IS_KIND(v, OBJ_INSTANCE) || IS_KIND(v, OBJ_GENERATOR);
+}
+
+// what `for` iterates: built-in collections and generators as they are; any other value (a type that
+// implements Iterable, Iter or KeyIterable) through the prelude's iterate() / iterate_pairs()
+static Value for_prepare(VM* vm, Node* n, Value it) {
+    if (is_builtin_iterable(it)) {
+        return it;
+    }
+
+    Table* impls = IS_OBJ(it) ? receiver_impl_table(it) : NULL;
+    const bool pairs = n->as.for_.var2 && impls && table_find(impls, str_cintern(vm, "pairs"));
+    const bool iter = impls && (table_find(impls, str_cintern(vm, "iter")) || table_find(impls, str_cintern(vm, "next")));
+    if (!pairs && !iter) {
+        if (IS_KIND(it, OBJ_OBJECT)) {
+            rt_error(vm, n->line, "cannot iterate over a value of type %s: use fields(x) to go through its fields",
+                     value_type_name(it));
+        }
+
+        rt_error(vm, n->line, "cannot iterate over a value of type %s", value_type_name(it));
+    }
+
+    const Entry* e = table_find(&vm->builtins->vars, str_cintern(vm, pairs ? "iterate_pairs" : "iterate"));
+    vm_push(vm, it);
+    const Value g = vm_call(vm, e->value, 1, &vm->stack[vm->sp - 1]);
+    vm->sp--;
+
+    return g;
+}
+
+// one step of `for` over what for_prepare gave: false when it is done
+static bool for_step(VM* vm, Value it, int64_t* pos, int64_t* idx, Value* key, Value* item, int line) {
+    *key = int_val(*idx);
+    if (IS_KIND(it, OBJ_GENERATOR)) {
+        if (!gen_next(vm, (ObjGenerator*)it.as.o, item, line)) {
+            return false;
+        }
+
+        (*idx)++;
+
+        return true;
+    }
+
+    if (IS_KIND(it, OBJ_RANGE)) {
+        ObjRange* r = AS_RANGE(it);
+        if (range_is_float(r)) {
+            if (*pos >= range_length(r)) {
+                return false;
+            }
+
+            *item = range_at(r, *pos);
+        } else {
+            const int64_t v = r->start.as.i + *pos * r->step.as.i;
+            if (r->step.as.i > 0 ? v >= r->end.as.i : v <= r->end.as.i) {
+                return false;
+            }
+
+            *item = int_val(v);
+        }
+
+        (*pos)++;
+        (*idx)++;
+
+        return true;
+    }
+
+    if (IS_KIND(it, OBJ_ARRAY) || IS_KIND(it, OBJ_TUPLE)) {
+        const int count = IS_KIND(it, OBJ_ARRAY) ? AS_ARRAY(it)->count : AS_TUPLE(it)->count;
+        if (*pos >= count) {
+            return false;
+        }
+
+        *item = IS_KIND(it, OBJ_ARRAY) ? AS_ARRAY(it)->items[*pos] : AS_TUPLE(it)->items[*pos];
+        (*pos)++;
+        (*idx)++;
+
+        return true;
+    }
+
+    if (IS_KIND(it, OBJ_STRING)) {
+        ObjString* s = AS_STR(it);
+        if (*pos >= s->len) {
+            return false;
+        }
+
+        int len = utf8_len((unsigned char)s->chars[*pos]);
+        if (*pos + len > s->len) {
+            len = s->len - (int)*pos;
+        }
+
+        *item = obj_val(str_new(vm, s->chars + *pos, len));
+        *pos += len;
+        (*idx)++;
+
+        return true;
+    }
+
+    if (IS_KIND(it, OBJ_MAP) || IS_KIND(it, OBJ_SET)) {
+        const ObjMap* m = AS_MAP(it);
+        while (*pos < m->count && !m->entries[*pos].live) {
+            (*pos)++;
+        }
+
+        if (*pos >= m->count) {
+            return false;
+        }
+
+        if (IS_KIND(it, OBJ_MAP)) {
+            *key = m->entries[*pos].key;
+            *item = m->entries[*pos].value;
+        } else {
+            *item = m->entries[*pos].key;
+        }
+
+        (*pos)++;
+        (*idx)++;
+
+        return true;
+    }
+
+    if (IS_KIND(it, OBJ_INSTANCE)) {
+        ObjInstance* inst = AS_INSTANCE(it);
+        const NativeClass* cls = inst->type->cls;
+        if (!cls->length || !cls->get || *pos >= cls->length(inst)) {
+            return false;
+        }
+
+        *item = cls->get(vm, inst, int_val(*pos), line);
+        (*pos)++;
+        (*idx)++;
+
+        return true;
+    }
+
+    rt_error(vm, line, "cannot iterate over a value of type %s", value_type_name(it));
+}
+
+// `for k, v in g` over a generator of tuples (an Iter of pairs is a KeyIterable): the tuple's two elements
+static void for_pair(VM* vm, Value* key, Value* item, int line) {
+    if (!IS_KIND(*item, OBJ_TUPLE) || AS_TUPLE(*item)->count != 2) {
+        rt_error(vm, line, "for k, v needs pairs: got a value of type %s (use .enumerate() to count the items)",
+                 value_type_name(*item));
+    }
+
+    *key = AS_TUPLE(*item)->items[0];
+    *item = AS_TUPLE(*item)->items[1];
+}
+
+// does the statement contain a return / emit of the generator (not of a function nested in it)
+static bool gen_pauses(Node* s) {
+    if (!s) {
+        return false;
+    }
+
+    if (s->gen_pause) {
+        return s->gen_pause > 0;
+    }
+
+    bool r = false;
+    switch (s->kind) {
+        case S_RETURN: r = true; break;
+        case N_BLOCK:
+            for (int i = 0; i < s->as.block.stmts.count && !r; ++i) {
+                r = gen_pauses(s->as.block.stmts.items[i]);
+            }
+
+            break;
+        case S_WHILE: r = gen_pauses(s->as.while_.body); break;
+        case S_FOR: r = gen_pauses(s->as.for_.body); break;
+        case N_IF: r = gen_pauses(s->as.if_.then_b) || gen_pauses(s->as.if_.else_b); break;
+        case N_MATCH:
+            for (int i = 0; i < s->as.match.narms && !r; ++i) {
+                r = s->as.match.arms[i].body_is_block && gen_pauses(s->as.match.arms[i].body);
+            }
+
+            break;
+        case S_EXPR: {
+            const Node* e = s->as.expr.expr;
+            r = (e->kind == N_IF || e->kind == N_MATCH) && gen_pauses(s->as.expr.expr);
+            break;
+        }
+        default: break;
+    }
+
+    s->gen_pause = r ? 1 : -1;
+
+    return r;
+}
+
+static GenFrame* gen_frame(ObjGenerator* g, int depth) {
+    if (depth >= g->cap) {
+        const int old = g->cap;
+        g->cap = g->cap ? g->cap * 2 : 8;
+        while (g->cap <= depth) {
+            g->cap *= 2;
+        }
+
+        g->path = pp_realloc(g->path, sizeof(GenFrame) * (size_t)g->cap);
+        memset(g->path + old, 0, sizeof(GenFrame) * (size_t)(g->cap - old));
+    }
+
+    return &g->path[depth];
+}
+
+// next() enters the statements of the path again (resuming) down to the block it paused in
+static bool gen_resuming(ObjGenerator* g, int depth) {
+    return g->resuming && depth < g->depth;
+}
+
+static ExecStatus gexec_stmt(VM* vm, ObjGenerator* g, Node* s, ObjEnv* env, int depth);
+
+static ExecStatus gexec_block(VM* vm, ObjGenerator* g, Node* b, ObjEnv* env, bool new_scope, int depth) {
+    int start = 0;
+    ObjEnv* be;
+    if (gen_resuming(g, depth)) {
+        start = g->path[depth].pos;
+        be = g->path[depth].env;
+        if (depth == g->depth - 1) {
+            g->resuming = false; // the block that paused: it continues after the emit
+        }
+    } else {
+        be = new_scope && b->as.block.scoped ? env_new(vm, env) : env;
+        GenFrame* f = gen_frame(g, depth);
+        f->node = b;
+        f->env = be;
+        f->pos = 0;
+        f->it = void_val();
+    }
+
+    push_env(vm, be);
+    ExecStatus st = EX_NORMAL;
+    const NodeList* sl = &b->as.block.stmts;
+    for (int i = start; i < sl->count; ++i) {
+        Node* s = sl->items[i];
+        g->path[depth].pos = i;
+        if (s->kind == S_RETURN) {
+            vm->cur_line = s->line;
+            gc_maybe(vm);
+            if (s->as.ret.value) {
+                Value v = eval(vm, s->as.ret.value, be);
+                Signature* sig = g->fn->sig;
+                Type* elem = sig->ret && sig->ret->nargs ? sig->ret->args[0] : NULL;
+                if (elem && !sig->ngenerics) {
+                    char what[160];
+                    snprintf(what, sizeof what, "value of generator '%s'", sig->name->chars);
+                    v = coerce_to(vm, elem, v, g->fn->closure, NULL, false, what, s->line, NULL);
+                }
+
+                g->value = v;
+            }
+
+            if (s->as.ret.emit) {
+                g->path[depth].pos = i + 1;
+                g->depth = depth + 1;
+                st = EX_SUSPEND;
+            } else {
+                g->finish = s->as.ret.value != NULL;
+                st = EX_RETURN;
+            }
+
+            break;
+        }
+
+        st = gen_pauses(s) ? gexec_stmt(vm, g, s, be, depth + 1) : exec(vm, s, be);
+        if (st != EX_NORMAL) {
+            break;
+        }
+    }
+
+    pop_env(vm);
+
+    return st;
+}
+
+static ExecStatus gexec_branch(VM* vm, ObjGenerator* g, Node* n, ObjEnv* env, int depth) {
+    int branch;
+    ObjEnv* be = env;
+    if (gen_resuming(g, depth)) {
+        branch = g->path[depth].pos;
+        be = g->path[depth].env;
+    } else if (n->kind == N_IF) {
+        if (n->as.if_.pat) {
+            const int base = vm->sp;
+            const Value v = eval(vm, n->as.if_.cond, env);
+            vm_push(vm, v);
+            ObjEnv* pe = env_new(vm, env);
+            push_env(vm, pe);
+            const bool matched = match_pattern(vm, n->as.if_.pat, v, pe, n->as.if_.pat_mut ? 0 : VAR_CONST);
+            pop_env(vm);
+            vm->sp = base;
+            branch = matched ? 0 : 1;
+            be = matched ? pe : env;
+        } else {
+            branch = require_bool(vm, eval(vm, n->as.if_.cond, env), "if condition", n->line) ? 0 : 1;
+        }
+    } else {
+        const int base = vm->sp;
+        const Value v = eval(vm, n->as.match.subject, env);
+        vm_push(vm, v);
+        branch = -1;
+        for (int i = 0; i < n->as.match.narms && branch < 0; ++i) {
+            MatchArm* arm = &n->as.match.arms[i];
+            ObjEnv* ae = pattern_binds(arm->pat) ? env_new(vm, env) : env;
+            push_env(vm, ae);
+            bool ok = match_pattern(vm, arm->pat, v, ae, VAR_CONST);
+            if (ok && arm->guard) {
+                ok = require_bool(vm, eval(vm, arm->guard, ae), "match guard", arm->guard->line);
+            }
+
+            pop_env(vm);
+            if (ok) {
+                branch = i;
+                be = ae;
+            }
+        }
+
+        vm->sp = base;
+        if (branch < 0) {
+            StrBuf sb;
+            sb_init(&sb);
+            value_format(&sb, v, false, 0);
+            rt_error(vm, n->line, "no match arm matched the value %s", sb.data);
+        }
+    }
+
+    if (!gen_resuming(g, depth)) {
+        GenFrame* f = gen_frame(g, depth);
+        f->node = n;
+        f->env = be;
+        f->pos = branch;
+        f->it = void_val();
+    }
+
+    push_env(vm, be);
+    ExecStatus st = EX_NORMAL;
+    if (n->kind == N_IF) {
+        Node* e = n->as.if_.else_b;
+        if (branch == 0) {
+            st = gexec_block(vm, g, n->as.if_.then_b, be, true, depth + 1);
+        } else if (e && e->kind == N_IF) {
+            st = gexec_branch(vm, g, e, env, depth + 1);
+        } else if (e) {
+            st = gexec_block(vm, g, e, env, true, depth + 1);
+        }
+    } else {
+        MatchArm* arm = &n->as.match.arms[branch];
+        if (arm->body_is_block) {
+            st = gexec_block(vm, g, arm->body, be, true, depth + 1);
+        } else {
+            eval(vm, arm->body, be);
+        }
+    }
+
+    pop_env(vm);
+
+    return st;
+}
+
+static ExecStatus gexec_loop(VM* vm, ObjGenerator* g, Node* n, ObjEnv* env, int depth) {
+    bool resume = gen_resuming(g, depth);
+    if (!resume) {
+        GenFrame* f = gen_frame(g, depth);
+        f->node = n;
+        f->env = env;
+        f->it = void_val();
+        f->i = 0;
+        f->idx = 0;
+        if (n->kind == S_FOR) {
+            const Value it = for_prepare(vm, n, eval(vm, n->as.for_.iter, env));
+            g->path[depth].it = it;
+        }
+    }
+
+    const uint8_t flags = n->kind == S_FOR && n->as.for_.mut ? 0 : VAR_CONST;
+    for (;;) {
+        ExecStatus st;
+        if (resume) {
+            resume = false;
+            st = gexec_block(vm, g, n->kind == S_FOR ? n->as.for_.body : n->as.while_.body, env, true, depth + 1);
+        } else if (n->kind == S_WHILE) {
+            vm->cur_line = n->line;
+            if (!require_bool(vm, eval(vm, n->as.while_.cond, env), "while condition", n->line)) {
+                break;
+            }
+
+            st = gexec_block(vm, g, n->as.while_.body, env, true, depth + 1);
+        } else {
+            int64_t pos = g->path[depth].i;
+            int64_t idx = g->path[depth].idx;
+            Value key, item;
+            const bool more = for_step(vm, g->path[depth].it, &pos, &idx, &key, &item, n->line);
+            g->path[depth].i = pos;
+            g->path[depth].idx = idx;
+            if (!more) {
+                break;
+            }
+
+            if (n->as.for_.var2 && IS_KIND(g->path[depth].it, OBJ_GENERATOR)) {
+                for_pair(vm, &key, &item, n->line);
+            }
+
+            ObjEnv* ie = env_new(vm, env);
+            push_env(vm, ie);
+            if (n->as.for_.var2) {
+                env_define(vm, ie, n->as.for_.var1, key, flags, NULL);
+                env_define(vm, ie, n->as.for_.var2, item, flags, NULL);
+            } else {
+                env_define(vm, ie, n->as.for_.var1, item, flags, NULL);
+            }
+
+            st = gexec_block(vm, g, n->as.for_.body, ie, false, depth + 1);
+            pop_env(vm);
+        }
+
+        if (st == EX_BREAK) {
+            break;
+        }
+
+        if (st == EX_RETURN || st == EX_SUSPEND) {
+            return st;
+        }
+    }
+
+    return EX_NORMAL;
+}
+
+static ExecStatus gexec_stmt(VM* vm, ObjGenerator* g, Node* s, ObjEnv* env, int depth) {
+    vm->cur_line = s->line;
+    switch (s->kind) {
+        case N_BLOCK: return gexec_block(vm, g, s, env, true, depth);
+        case S_WHILE:
+        case S_FOR: return gexec_loop(vm, g, s, env, depth);
+        case S_EXPR: return gexec_branch(vm, g, s->as.expr.expr, env, depth);
+        default: return exec(vm, s, env);
+    }
+}
+
+// runs an interpreted generator's body until its next value
+static bool gen_run(VM* vm, ObjGenerator* g, Value* out, int line) {
+    Signature* sig = g->fn->sig;
+    g->resuming = g->state == GEN_PAUSED;
+    g->state = GEN_RUNNING;
+    g->finish = false;
+    push_frame(vm, sig->name->chars, line);
+    const char* saved_file = vm->cur_file;
+    const int saved_line = vm->cur_line;
+    vm->cur_file = sig->file;
+    ExecStatus st = gexec_block(vm, g, g->fn->body, g->env, false, 0);
+    vm->fp--;
+    vm->cur_file = saved_file;
+    vm->cur_line = saved_line;
+    if (st == EX_BREAK || st == EX_CONTINUE) {
+        rt_error(vm, 0, "'%s' used outside of a loop", st == EX_BREAK ? "break" : "continue");
+    }
+
+    *out = g->value;
+    g->value = void_val();
+    if (st == EX_SUSPEND) {
+        g->state = GEN_PAUSED;
+
+        return true;
+    }
+
+    // the body ended: `return value` gives its value as the last one
+    g->state = GEN_DONE;
+    free(g->path);
+    g->path = NULL;
+    g->cap = g->depth = 0;
+    g->env = NULL;
+
+    return st == EX_RETURN && g->finish;
+}
+
+bool gen_next(VM* vm, ObjGenerator* g, Value* out, int line) {
+    if (g->state == GEN_DONE) {
+        return false;
+    }
+
+    if (g->state == GEN_RUNNING) {
+        rt_error(vm, line, "generator '%s' is already running (next() called from its own body)", g->name->chars);
+    }
+
+    if (g->kind == GEN_NATIVE) {
+        bool done = false;
+        g->state = GEN_RUNNING;
+        *out = g->step(vm, g, &done);
+        g->state = done ? GEN_DONE : GEN_PAUSED;
+
+        return !done;
+    }
+
+    if (g->kind == GEN_BYTECODE) {
+        bool done = false;
+        *out = vm->gen_resume(vm, g, &done);
+
+        return !done;
+    }
+
+    return gen_run(vm, g, out, line);
+}
+
+// next(g): the generator's next value, some(v), or none() once it is done
+static Value n_generator_next(VM* vm, int argc, Value* a) {
+    if (argc != 1 || !IS_KIND(a[0], OBJ_GENERATOR)) {
+        rt_error(vm, 0, "generator_next() takes a Generator");
+    }
+
+    Value v;
+    if (gen_next(vm, (ObjGenerator*)a[0].as.o, &v, vm->cur_line)) {
+        return make_some(vm, v);
+    }
+
+    return make_none(vm);
+}
+
+static Value fields_step(VM* vm, ObjGenerator* g, bool* done) {
+    const ObjObject* o = AS_OBJECT(g->data);
+    if (g->pos >= o->fields.count) {
+        *done = true;
+
+        return void_val();
+    }
+
+    const Entry* e = &o->fields.entries[g->pos++];
+    ObjTuple* t = tuple_new(vm, 2);
+    t->items[0] = obj_val(e->key);
+    t->items[1] = e->value;
+
+    return obj_val(t);
+}
+
+// fields(record): its fields as tuple(name, value), in order
+static Value n_fields(VM* vm, int argc, Value* a) {
+    if (argc != 1 || !IS_KIND(a[0], OBJ_OBJECT)) {
+        rt_error(vm, 0, "fields() takes a record or an object, got %s", argc ? value_type_name(a[0]) : "nothing");
+    }
+
+    ObjGenerator* g = gen_new(vm, GEN_NATIVE, str_cintern(vm, "fields"));
+    g->step = fields_step;
+    g->data = a[0];
+
+    return obj_val(g);
+}
+
 static ExecStatus run_iteration(VM* vm, Node* n, ObjEnv* env, Value a, Value b, uint8_t flags) {
     ObjEnv* ie = env_new(vm, env);
     push_env(vm, ie);
@@ -3072,8 +3671,9 @@ static int utf8_len(unsigned char c) {
 
 static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
     const int base = vm->sp;
-    const Value it = eval(vm, n->as.for_.iter, env);
-    vm_push(vm, it);
+    vm_push(vm, eval(vm, n->as.for_.iter, env));
+    const Value it = for_prepare(vm, n, vm->stack[base]);
+    vm->stack[base] = it;
     const uint8_t flags = n->as.for_.mut ? 0 : VAR_CONST;
     ExecStatus result = EX_NORMAL;
     ExecStatus st;
@@ -3155,16 +3755,16 @@ static ExecStatus exec_for(VM* vm, Node* n, ObjEnv* env) {
             st = run_iteration(vm, n, env, int_val(i), cls->get(vm, inst, int_val(i), n->line), flags);
             HANDLE_STATUS()
         }
-    } else if (IS_KIND(it, OBJ_OBJECT)) {
-        const ObjObject* o = AS_OBJECT(it);
-        for (int i = 0; i < o->fields.count; ++i) {
-            const Entry* e = &o->fields.entries[i];
+    } else if (IS_KIND(it, OBJ_GENERATOR)) {
+        ObjGenerator* g = (ObjGenerator*)it.as.o;
+        Value item;
+        for (int64_t idx = 0; gen_next(vm, g, &item, n->line); ++idx) {
+            Value key = int_val(idx);
             if (n->as.for_.var2) {
-                st = run_iteration(vm, n, env, obj_val(e->key), e->value, flags);
-            } else {
-                st = run_iteration(vm, n, env, void_val(), obj_val(e->key), flags);
+                for_pair(vm, &key, &item, n->line);
             }
 
+            st = run_iteration(vm, n, env, key, item, flags);
             HANDLE_STATUS()
         }
     } else {
@@ -3768,13 +4368,13 @@ VM* vm_new(int argc, char** argv) {
         table_set(&vm->prec, str_cintern(vm, precs[i].op), float_val(precs[i].prec));
     }
 
-    // std:Map and std:Set are permanent: outside the object list, never collected
+    // Map and Set are permanent: outside the object list, never collected
     static const struct {
         const char* name;
         NativeTypeKind which;
         int ngenerics;
-    } ntypes[] = {{"Map", NT_MAP, 2}, {"Set", NT_SET, 1}};
-    for (int i = 0; i < 2; ++i) {
+    } ntypes[] = {{"Map", NT_MAP, 2}, {"Set", NT_SET, 1}, {"Generator", NT_GENERATOR, 1}};
+    for (int i = 0; i < 3; ++i) {
         ObjNativeType* t = pp_calloc(1, sizeof(ObjNativeType));
         t->obj.kind = OBJ_NATIVE_TYPE;
         t->obj.permanent = true;
@@ -3784,8 +4384,10 @@ VM* vm_new(int argc, char** argv) {
         table_init(&t->impl_fns);
         if (t->which == NT_MAP) {
             vm->t_map = t;
-        } else {
+        } else if (t->which == NT_SET) {
             vm->t_set = t;
+        } else {
+            vm->t_generator = t;
         }
     }
 
@@ -3799,6 +4401,8 @@ VM* vm_new(int argc, char** argv) {
     def_native(vm, vm->builtins, "[]=", "(any[] array, int index, any value) -> void", n_index_set);
     def_native(vm, vm->builtins, "[]=", "(object o, string key, any value) -> void", n_index_set);
     def_native(vm, vm->builtins, "[]=", "(any value, any key, any new_value) -> void", n_index_set_any);
+    def_native(vm, vm->builtins, "generator_next", "(Generator g)", n_generator_next);
+    def_native(vm, vm->builtins, "fields", "(object o)", n_fields);
     vm->index_builtin = table_find(&vm->builtins->vars, vm->s_index)->value.as.o;
     vm->index_set_builtin = table_find(&vm->builtins->vars, vm->s_index_set)->value.as.o;
     mod_io_register(vm);

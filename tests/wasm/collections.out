@@ -1,0 +1,16 @@
+Map{"ann": 32, "bob": 40, "cid": 25, "dan": 52} 4 40 none() some(25) true false
+["ann", "bob", "cid", "dan"] [32, 40, 25, 52] [tuple("ann", 32), tuple("bob", 40), tuple("cid", 25), tuple("dan", 52)]
+ann 32 bob 40 cid 25 dan 52 
+some(40) none() Map{"ann": 32, "cid": 25, "dan": 52}
+Map{"ann": 32, "cid": 25, "dan": 52, "bob": 1} Map Map{"ann": 32, "cid": 25, "dan": 52, "bob": 1}
+Map{tuple(0, 1): "c", tuple(2, 3): "b"} b
+Map{Color.red: 2, Color.blue: 1}
+1000 332833500 998001
+Map{990: 980100, 991: 982081, 992: 984064, 993: 986049, 994: 988036, 995: 990025, 996: 992016, 997: 994009, 998: 996004, 999: 998001}
+Set{3, 2, 7} 3 true false true false true false Set{3, 2, 7}
+Set{3, 2, 7, 4, 5} Set{3, 2} Set{7} [3, 2, 7] true false
+b a 
+32 0 false true
+[30, 20, 70] ["ann", "dan", "bob"]
+ann=32 cid=25 dan=52 bob=1 
+true false

@@ -5,7 +5,7 @@
 // The static checker: scopes, type resolution, modules and the entry points.
 // Expressions and statements are in check_expr.c. See md/STATIC_TYPING.md.
 
-extern bool (*st_implements_hook)(TDecl* iface, SType** args, int nargs, SType* got);
+extern bool (*st_implements_hook)(TDecl* iface, SType** args, int nargs, SType* got, SBindings* b);
 extern bool (*st_callable_fits_hook)(SType* want, SType* got);
 extern SType* (*st_fill_hook)(SType* t);
 
@@ -313,6 +313,24 @@ SType* enum_type(Checker* c, TDecl* en, SType** args, int nargs) {
     }
 
     return t;
+}
+
+SType* generator_of(Checker* c, SType* elem) {
+    if (!c->generator) {
+        return st_prim(ST_DYN);
+    }
+
+    SType* t = st_new(ST_NATIVE);
+    t->decl = c->generator;
+    t->nargs = 1;
+    t->args = pp_calloc(2, sizeof(SType*));
+    t->args[0] = elem;
+
+    return t;
+}
+
+bool is_generator(Checker* c, const SType* t) {
+    return t && t->kind == ST_NATIVE && t->decl && t->decl->which == NT_GENERATOR;
 }
 
 SType* option_of(Checker* c, SType* t) {
@@ -691,19 +709,47 @@ SType* subst(SType* t, SBindings* b) {
 
 // ---------------------------------------------------------------- interfaces
 
-bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got) {
+// the wanted type arguments of an interface against the ones an impl (or a parent) gives: binds generics in b.
+// A side the impl leaves open (an unbound parameter of the impl) accepts anything.
+static bool iface_args_fit(SType** want, int nwant, SType** have, int nhave, SBindings* b) {
+    for (int i = 0; i < nwant && i < nhave; ++i) {
+        if (!want[i] || !have[i] || st_has_param(have[i])) {
+            continue;
+        }
+
+        if (b) {
+            if (!st_fit(want[i], have[i], b)) {
+                return false;
+            }
+        } else if (!st_has_param(want[i]) && !st_fit(want[i], have[i], NULL)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got, SBindings* b) {
     if (got->kind == ST_IFACE) {
         // an interface value fits a parent interface
         if (got->decl == iface) {
-            return true;
+            return iface_args_fit(args, nargs, got->args, got->nargs, b);
         }
 
         for (int i = 0; i < got->decl->nparents; ++i) {
             Ctx x = {0};
             x.c = c;
-            const SType* p = resolve_type(&x, got->decl->parents[i], got->decl->scope, NULL);
+            SBindings gb;
+            memset(&gb, 0, sizeof gb);
+            gb.count = got->decl->ngenerics < PP_MAX_BINDINGS ? got->decl->ngenerics : PP_MAX_BINDINGS;
+            for (int k = 0; k < gb.count; ++k) {
+                gb.names[k] = got->decl->generics[k];
+                gb.types[k] = k < got->nargs ? got->args[k] : NULL;
+            }
+
+            const SType* p = resolve_type(&x, got->decl->parents[i], got->decl->scope, &gb);
             if (p->kind == ST_IFACE && p->decl == iface) {
-                return true;
+                return iface_args_fit(args, nargs, p->args, p->nargs, b);
             }
         }
 
@@ -716,23 +762,40 @@ bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got
             continue;
         }
 
-        SBindings b;
-        memset(&b, 0, sizeof b);
-        b.count = im->ngenerics;
+        SBindings ib;
+        memset(&ib, 0, sizeof ib);
+        ib.count = im->ngenerics;
         for (int k = 0; k < im->ngenerics && k < PP_MAX_BINDINGS; ++k) {
-            b.names[k] = im->generics[k];
+            ib.names[k] = im->generics[k];
         }
 
-        if (st_fit(im->target, got, &b) >= 2 || (im->target->kind != ST_UNKNOWN && st_equal(im->target, got))) {
-            return true;
+        if (st_fit(im->target, got, &ib) >= 2 || (im->target->kind != ST_UNKNOWN && st_equal(im->target, got))) {
+            SType** have = pp_calloc((size_t)(im->nargs + 1), sizeof(SType*));
+            for (int k = 0; k < im->nargs; ++k) {
+                have[k] = im->args[k] ? subst(im->args[k], &ib) : NULL;
+            }
+
+            // a trial on a copy: a failed impl must not leave bindings behind
+            SBindings trial;
+            if (b) {
+                trial = *b;
+            }
+
+            if (iface_args_fit(args, nargs, have, im->nargs, b ? &trial : NULL)) {
+                if (b) {
+                    *b = trial;
+                }
+
+                return true;
+            }
         }
     }
 
     return false;
 }
 
-static bool implements_hook(TDecl* iface, SType** args, int nargs, SType* got) {
-    return st_implements(the_checker, iface, args, nargs, got);
+static bool implements_hook(TDecl* iface, SType** args, int nargs, SType* got, SBindings* b) {
+    return st_implements(the_checker, iface, args, nargs, got, b);
 }
 
 
@@ -1086,6 +1149,10 @@ const char* module_lib_path(CModule* m) {
         return NULL;
     }
 
+    if (strcmp(m->path, "<prelude>") == 0) {
+        return PP_PRELUDE_NATIVES; // Map and Set: the prelude's natives
+    }
+
     const char* rel = NULL;
     for (const char* s = m->path; *s; ++s) {
         if ((s[0] == '/' || s[0] == '\\') && strncmp(s + 1, "lib", 3) == 0 && (s[4] == '/' || s[4] == '\\')) {
@@ -1153,6 +1220,12 @@ Checker* checker_new(VM* vm) {
     const CSym* err = scope_lookup(c->builtins, str_cintern(vm, "Error"));
     c->option = opt && opt->kind == SYM_TYPE ? opt->tdecl : NULL;
     c->error = err && err->kind == SYM_TYPE ? err->tdecl : NULL;
+    static const char* names[] = {"Generator", "Iterable", "Iter", "KeyIterable"};
+    TDecl** slots[] = {&c->generator, &c->iterable, &c->iter, &c->key_iterable};
+    for (int i = 0; i < 4; ++i) {
+        const CSym* s = scope_lookup(c->builtins, str_cintern(vm, names[i]));
+        *slots[i] = s && s->kind == SYM_TYPE ? s->tdecl : NULL;
+    }
 
     return c;
 }

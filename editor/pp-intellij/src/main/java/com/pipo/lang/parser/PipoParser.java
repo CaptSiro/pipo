@@ -68,6 +68,11 @@ public final class PipoParser implements PsiParser {
         private boolean sawLoneParamName;
         private int scopeBlocks;        // nesting inside the blocks of scope calls: `scope` is their value
         private boolean inScopeBody;    // directly in the body of a scope declaration, where `defer` is allowed
+        private boolean nextBlockYields; // the next block is a match arm's or a scope call's: it may end with `yield`
+        private boolean blockYields;     // directly in such a block
+        private boolean lastWasYield;    // the statement just parsed was a `yield`
+        private boolean genBody;         // in a generator's own body (not of a function or lambda nested in it)
+        private int genScopeBase;        // scopeBlocks where the generator's body started
 
         private int cachedOffset = -1;
         private int cachedPos;
@@ -589,7 +594,7 @@ public final class PipoParser implements PsiParser {
                 }
                 IElementType after = at(i + 2);
                 return after == FUNCTION || word(i + 2, "type") || word(i + 2, "interface") || word(i + 2, "impl")
-                        || word(i + 2, "scope");
+                        || word(i + 2, "scope") || word(i + 2, "generator");
             }
         }
 
@@ -662,9 +667,79 @@ public final class PipoParser implements PsiParser {
          * function name(params) -> T { ... } / a declaration without a body.
          * m starts the node (before `global`, `native` or the generic parameters).
          */
+        /** `generator name(`: a generator declaration (`generator` is contextual, like `scope`) */
+        private boolean atGenerator(int n) {
+            return word(n, "generator") && at(n + 1) == IDENT && !nl(n + 1) && at(n + 2) == LPAREN;
+        }
+
+        /** '.' and ',' are never part of a declared name: '.' is reserved for dot calls, ',' separates */
+        private void checkDeclaredFnName(String what) {
+            IElementType t = at(0);
+            if (t == COMMA || t == DOT) {
+                error("'" + text(0) + "' cannot be " + what + ": it is reserved");
+            } else if (t == OP && text(0).contains(".") && !inNative) { // the stubs declare the built-in ... / ...=
+                error("'" + text(0) + "' cannot be " + what
+                        + ": names cannot contain '.', which is reserved for dot calls (x.f())");
+            }
+        }
+
+        /** the number of parameters of the list starting at the '(' at lookahead 0, -1 for `...` */
+        private int countParams() {
+            if (at(0) != LPAREN) {
+                return 0;
+            }
+            int depth = 0;
+            int angles = 0;
+            int commas = 0;
+            boolean any = false;
+            for (int i = 1; ; i++) {
+                IElementType k = at(i);
+                if (k == null) {
+                    return 0;
+                }
+                if (k == LPAREN || k == LBRACKET || k == LBRACE) {
+                    depth++;
+                } else if (k == RPAREN || k == RBRACKET || k == RBRACE) {
+                    if (depth == 0) {
+                        break;
+                    }
+                    depth--;
+                } else if (k == OP && text(i).matches("[<>]+")) {
+                    for (char ch : text(i).toCharArray()) {
+                        angles += ch == '<' ? 1 : -1;
+                    }
+                } else if (k == OP && text(i).equals("...") && depth == 0 && angles <= 0 && !any) {
+                    return -1;
+                } else if (k == COMMA && depth == 0 && angles <= 0) {
+                    commas++;
+                }
+                any = true;
+            }
+            return any ? commas + 1 : 0;
+        }
+
+        /** `<` / `>` with one parameter would be prefix operators: '<' in operand position starts a tag call */
+        private void checkAngleArity(String name, int params) {
+            if ((name.equals("<") || name.equals(">")) && (params == 1 || params == -1)) {
+                error("'" + name + "' cannot take one parameter: a prefix '<' / '>' is reserved"
+                        + " ('<' in operand position starts a tag call)");
+            }
+        }
+
+        private void requireReturnType(String what) {
+            error(what + " needs a return type: write '-> T' after its parameters ('-> void' when it returns nothing)");
+        }
+
         private IElementType parseFunction(PsiBuilder.Marker m, boolean statement) {
-            expect(FUNCTION, "'function'");
+            boolean gen = atGenerator(0);
+            if (gen) {
+                advAs(GENERATOR_KW);
+            } else {
+                expect(FUNCTION, "'function'");
+            }
+            checkDeclaredFnName("a function name");
             boolean named = atFnName(0);
+            String fname = named ? text(0) : "";
             if (named) {
                 if (isScopeName(0)) {
                     error("function names cannot start with '_': names starting with '_' are scopes (scope " + text(0)
@@ -676,11 +751,20 @@ public final class PipoParser implements PsiParser {
             PsiBuilder.Marker paramsStart = mark();
             boolean savedLone = sawLoneParamName;
             sawLoneParamName = false;
+            checkAngleArity(fname, countParams());
             parseParams(statement && named ? ParamMode.DECL : ParamMode.STRICT);
             boolean lone = sawLoneParamName;
             sawLoneParamName = savedLone;
             if (accept(ARROW)) {
                 parseType();
+            } else if (gen) {
+                error("a generator needs the type of its values: generator name(...) -> T");
+            } else {
+                requireReturnType(named ? "function '" + fname + "'" : "function");
+            }
+
+            if (gen && !is(LBRACE)) {
+                error("a generator needs a body");
             }
 
             if (inNative && is(LBRACE)) {
@@ -705,9 +789,15 @@ public final class PipoParser implements PsiParser {
 
             paramsStart.drop();
             boolean savedBody = inScopeBody;
+            boolean savedGen = genBody;
+            int savedGenBase = genScopeBase;
             inScopeBody = false;
+            genBody = gen;
+            genScopeBase = scopeBlocks;
             parseBlock();
             inScopeBody = savedBody;
+            genBody = savedGen;
+            genScopeBase = savedGenBase;
             IElementType kind = statement && named ? FUNCTION_DECL : FUNCTION_EXPR;
             m.done(kind);
             return kind;
@@ -726,9 +816,11 @@ public final class PipoParser implements PsiParser {
             boolean savedNl = noLambda;
             boolean savedPattern = inPattern;
             boolean savedBody = inScopeBody;
+            boolean savedGen = genBody;
             noLambda = false;
             inPattern = false;
             inScopeBody = false;
+            genBody = false;
             if (is(LBRACE)) {
                 parseBlock();
             } else {
@@ -739,6 +831,7 @@ public final class PipoParser implements PsiParser {
             noLambda = savedNl;
             inPattern = savedPattern;
             inScopeBody = savedBody;
+            genBody = savedGen;
             m.done(LAMBDA_EXPR);
             return new Res(m, LAMBDA_EXPR);
         }
@@ -826,6 +919,7 @@ public final class PipoParser implements PsiParser {
                 }
                 if (expect(ARROW, "'->' after the match pattern")) {
                     if (is(LBRACE)) {
+                        nextBlockYields = true;
                         parseBlock();
                     } else {
                         parseExpression();
@@ -888,6 +982,9 @@ public final class PipoParser implements PsiParser {
                 return new Res(m, SCOPE_EXPR);
             }
             if (t == IDENT) {
+                if (genBody && text(0).equals("lift")) {
+                    error("a generator cannot use lift(): it would return from next(); use match");
+                }
                 PsiBuilder.Marker m = mark();
                 if (inPattern &&!(at(1) == LPAREN && !nl(1)) && !(at(1) == COLON && !nl(1))) {
                     if (text(0).equals("_")) {
@@ -1197,6 +1294,9 @@ public final class PipoParser implements PsiParser {
             int saved = depth;
             depth = 0;
             blockDepth++;
+            boolean savedYields = blockYields;
+            blockYields = nextBlockYields;
+            nextBlockYields = false;
             while (!is(RBRACE)) {
                 if (eof()) {
                     error("unterminated block (missing '}')");
@@ -1206,14 +1306,25 @@ public final class PipoParser implements PsiParser {
                     continue;
                 }
                 int before = b.getCurrentOffset();
+                lastWasYield = false;
                 parseStatement();
                 if (b.getCurrentOffset() == before) {
                     errorAdvance("unexpected " + desc(0));
+                }
+                if (lastWasYield) {
+                    lastWasYield = false;
+                    while (accept(SEMI)) {
+                        // skip
+                    }
+                    if (!is(RBRACE) && !eof()) {
+                        error("'yield' must be the last statement of its block, but " + desc(0) + " follows it");
+                    }
                 }
             }
             accept(RBRACE);
             depth = saved;
             blockDepth--;
+            blockYields = savedYields;
             m.done(BLOCK);
         }
 
@@ -1339,6 +1450,7 @@ public final class PipoParser implements PsiParser {
             boolean savedBody = inScopeBody;
             inScopeBody = false;
             scopeBlocks++;
+            nextBlockYields = true;
             parseBlock();
             scopeBlocks--;
             inScopeBody = savedBody;
@@ -1390,14 +1502,19 @@ public final class PipoParser implements PsiParser {
             parseParams(ParamMode.STRICT);
             if (accept(ARROW)) {
                 parseType();
+            } else {
+                requireReturnType("scope '" + name + "'");
             }
             boolean savedBody = inScopeBody;
             int savedBlocks = scopeBlocks;
+            boolean savedGen = genBody;
             inScopeBody = true;
             scopeBlocks = 0;
+            genBody = false;
             parseBlock();
             inScopeBody = savedBody;
             scopeBlocks = savedBlocks;
+            genBody = savedGen;
             m.done(FUNCTION_DECL);
         }
 
@@ -1461,7 +1578,7 @@ public final class PipoParser implements PsiParser {
                 return isGenericPrefix();
             }
             if (t == IDENT) {
-                if (atNative()) {
+                if (atNative() || atGenerator(0)) {
                     return true;
                 }
                 return (word(0, "type") || word(0, "interface") || word(0, "scope")) && at(1) == IDENT && !nl(1);
@@ -1631,10 +1748,15 @@ public final class PipoParser implements PsiParser {
                     continue;
                 }
                 adv();
+                checkDeclaredFnName("a function name");
+                String rname = text(0);
                 fnName();
+                checkAngleArity(rname, countParams());
                 parseParams(ParamMode.TYPES);
                 if (accept(ARROW)) {
                     parseType();
+                } else {
+                    requireReturnType("function '" + rname + "'");
                 }
                 if (is(LBRACE)) {
                     parseBlock();
@@ -1751,7 +1873,7 @@ public final class PipoParser implements PsiParser {
                 if (isGenericPrefix()) {
                     parseGenericParams(false);
                 }
-                if (is(FUNCTION) && atFnName(1)) {
+                if ((is(FUNCTION) && atFnName(1)) || atGenerator(0)) {
                     parseFunction(m, true);
                 } else {
                     m.done(FUNCTION_DECL);
@@ -1791,7 +1913,7 @@ public final class PipoParser implements PsiParser {
                     endStatement();
                     return;
                 }
-                if (!is(FUNCTION)) {
+                if (!is(FUNCTION) && !atGenerator(0)) {
                     error("expected 'function' after the generic parameter list");
                     m.done(FUNCTION_DECL);
                     return;
@@ -1799,13 +1921,33 @@ public final class PipoParser implements PsiParser {
                 parseFunction(m, true);
                 return;
             }
-            if (t == RETURN) {
+            if (t == RETURN || t == EMIT) {
+                if (t == EMIT && !genBody) {
+                    error("'emit' can only be used in the body of a generator (generator name(...) -> T { ... })");
+                } else if (genBody && scopeBlocks > genScopeBase) {
+                    error("a generator cannot " + (t == EMIT ? "emit" : "return")
+                            + " from the block of a scope call: it would have to pause the scope function too");
+                }
                 adv();
                 if (!isTerminator(0)) {
                     parseExpression();
+                } else if (t == EMIT) {
+                    error("expected the value after 'emit'");
                 }
-                m.done(RETURN_STMT);
+                m.done(t == EMIT ? EMIT_STMT : RETURN_STMT);
                 endStatement();
+                return;
+            }
+            if (t == YIELD) {
+                if (!blockYields) {
+                    error("'yield' gives the value of a match arm or a scope call block and must be written directly in "
+                            + "one (an if gives its last expression; a function or lambda returns with 'return')");
+                }
+                adv();
+                parseExpression();
+                m.done(YIELD_STMT);
+                endStatement();
+                lastWasYield = true;
                 return;
             }
             if (t == BREAK || t == CONTINUE) {
@@ -1844,6 +1986,10 @@ public final class PipoParser implements PsiParser {
                 }
                 if (word(0, "scope") && a == IDENT && !nl(1) && at(2) == LPAREN) {
                     parseScopeDecl(m);
+                    return;
+                }
+                if (atGenerator(0)) {
+                    parseFunction(m, true);
                     return;
                 }
                 if (word(0, "defer") && a == LBRACE && !nl(1)) {

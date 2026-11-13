@@ -42,7 +42,7 @@ io:print_nl((o:a as int).unwrap() + 1, o:b, keys(o))
 // ---- empty literals take their type from their first use
 let xs = []
 xs.push(1.5)
-let m = std:map()
+let m = map()
 m.put("a", 1)
 io:print_nl(type_of(xs), type_of(m), m["a"] + 1)
 

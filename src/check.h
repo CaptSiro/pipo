@@ -24,7 +24,7 @@ typedef enum {
     ST_RECORD,  // fields; decl != NULL: nominal (declared with `type X = { ... }`)
     ST_OBJECT,  // `object`: a record whose fields are not known statically
     ST_ENUM,    // decl, args
-    ST_NATIVE,  // decl (std:Map, std:Set, types:Int8Array, fs:File, ...), args
+    ST_NATIVE,  // decl (Map, Set, types:Int8Array, fs:File, ...), args
     ST_IFACE,   // decl, args: any value whose type implements the interface
     ST_FUNC,    // args: parameter types, elem: return type (NULL = not known), variadic
     ST_FUNCTION,// `function`: any callable whose signature is not known statically

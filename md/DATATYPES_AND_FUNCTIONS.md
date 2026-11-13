@@ -125,8 +125,8 @@ The difference in scores makes this work as expected:
 type Named = { string name }
 type Person = { string name, number age }
 
-function hello(Named n)  { io:print("named", n:name) }
-function hello(Person p) { io:print("person", p:name) }
+function hello(Named n) -> void { io:print("named", n:name) }
+function hello(Person p) -> void { io:print("person", p:name) }
 
 const Person john = { name: "John", age: 22 }
 hello(john)              // person - nominal match beats structural
@@ -179,7 +179,7 @@ onto the binding model above:
   child's `impl` run the parent's `impl` for the same type, so the type ends
   up recorded in both interfaces, and `Comparator` is accepted wherever
   `Equals` is expected.
-* **Generic impls** (`<T>impl std:Index<int, T> for Stack<T>`) leave the impl's
+* **Generic impls** (`<T>impl Index<int, T> for Stack<T>`) leave the impl's
   generics unbound while the requirements are checked, and bind them from the
   value when a parameter typed with the interface is matched.
 * **Not implemented yet:** generic bounds (`<T: Shape>function largest(T[] items)`).

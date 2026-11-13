@@ -43,7 +43,7 @@ const unknown[] bag = [1, "two", 3.0]
   work on it directly.
 * `object` is a record whose fields are not known: reading `o:name` gives an
   `unknown`, and storing any field is allowed. It is the typed way to have an
-  open bag of fields; a `std:Map` is the other one.
+  open bag of fields; a `Map` is the other one.
 
 ## `type_of` and `get_type`
 
@@ -53,7 +53,7 @@ const unknown[] bag = [1, "two", 3.0]
 | `const unknown u = 42` | `"unknown"` | `"int"` |
 | `const number n = 3` | `"int \|\| float"` | `"int"` |
 | `[[1], [2, 3]]` | `"int[][]"` | `"array"` |
-| `std:map()` used as a `Map<string, int>` | `"Map<string, int>"` | `"Map"` |
+| `map()` used as a `Map<string, int>` | `"Map<string, int>"` | `"Map"` |
 | evaluates `x` | no, it is known when the program is checked | yes |
 
 `type_of` is a compile time constant: the checker replaces the call with the
@@ -65,7 +65,7 @@ not instantiate, answers with the value's type there.
 ## What the checker infers
 
 * **Variables** take the type of their initializer: `let total = 0` is an `int`,
-  and `total = "zero"` is an error. An empty `[]`, `none()` or `std:map()` gets
+  and `total = "zero"` is an error. An empty `[]`, `none()` or `map()` gets
   its element types from its first use (`xs.push(1.5)` makes `xs` a `float[]`,
   `m.put("a", 1)` makes `m` a `Map<string, int>`).
 * **Untyped parameters** (`function f(x)`) are implicit generics: each call with

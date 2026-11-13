@@ -60,7 +60,7 @@ the IDE. JetBrains caches TextMate bundles.
 | `string.*`, `constant.character.escape` | `"..."` and `'...'` with escapes |
 | `constant.numeric` | `42`, `1_000`, `0xFF`, `0b101`, `3.14`, `1e9` |
 | `constant.language` | `true`, `false` |
-| `keyword.control` | `if else for in while break continue return match defer` |
+| `keyword.control` | `if else for in while break continue return yield emit match defer` |
 | `keyword.other` | `import export global native function const let enum type interface impl precedence over under as`, and `scope` in `scope _name(` |
 | `variable.language` | `scope`, the value inside the block of a scope call |
 | `storage.type` | `int float string bool void any range object number tuple Block Callback` |

@@ -536,7 +536,7 @@ bool is_callable(Value v) {
         case OBJ_TYPEDEF: return true;
         case OBJ_BLOCK: return !((ObjBlock*)v.as.o)->is_defer;
         case OBJ_CLOSURE: return true;
-        default: return false; // a native type (std:Map, ...) is not callable: its module has a constructor function
+        default: return false; // a native type (Map, ...) is not callable: its module has a constructor function
     }
 }
 
@@ -575,6 +575,7 @@ const char* value_type_name(Value v) {
         case OBJ_NATIVE_TYPE: return "type";
         case OBJ_INSTANCE: return AS_INSTANCE(v)->type->name->chars;
         case OBJ_BLOCK: return ((ObjBlock*)v.as.o)->callback ? "Callback" : "Block";
+        case OBJ_GENERATOR: return "Generator";
     }
 
     return "?";
@@ -766,6 +767,7 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
             break;
         }
         case OBJ_CLOSURE: sb_printf(sb, "<function %s>", ((ObjClosure*)o)->name->chars); break;
+        case OBJ_GENERATOR: sb_printf(sb, "<generator %s>", ((ObjGenerator*)o)->name->chars); break;
         case OBJ_FUNCTION: sb_printf(sb, "<function %s>", ((ObjFunction*)o)->sig->name->chars); break;
         case OBJ_NATIVE: sb_printf(sb, "<native function %s>", ((ObjNative*)o)->sig->name->chars); break;
         case OBJ_OVERLOAD: {
@@ -798,7 +800,7 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
             if (t->which == NT_CLASS) {
                 sb_printf(sb, "<type %s:%s>", t->module ? t->module->name->chars : t->lib_module, t->name->chars);
             } else {
-                sb_printf(sb, "<type std:%s>", t->name->chars);
+                sb_printf(sb, "<type %s>", t->name->chars);
             }
 
             break;

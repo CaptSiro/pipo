@@ -3,7 +3,7 @@
 
 
 // interfaces and callables need the checker to decide whether a type fits; check.c sets these
-bool (*st_implements_hook)(TDecl* iface, SType** args, int nargs, SType* got) = NULL;
+bool (*st_implements_hook)(TDecl* iface, SType** args, int nargs, SType* got, SBindings* b) = NULL;
 bool (*st_callable_fits_hook)(SType* want, SType* got) = NULL;
 SType* (*st_fill_hook)(SType* t) = NULL;
 
@@ -705,7 +705,7 @@ int st_fit(SType* want, SType* got, SBindings* b) {
                 return 3;
             }
 
-            return st_implements_hook && st_implements_hook(want->decl, want->args, want->nargs, got) ? 2 : 0;
+            return st_implements_hook && st_implements_hook(want->decl, want->args, want->nargs, got, b) ? 2 : 0;
         case ST_FUNC:
             if (got->kind == ST_FUNCTION) {
                 if (got->arity && !want->variadic && want->nargs != got->arity - 1) {
@@ -721,6 +721,11 @@ int st_fit(SType* want, SType* got, SBindings* b) {
 
             if (got->kind != ST_OVERLOAD) {
                 return 0;
+            }
+
+            if (st_has_param(want)) {
+                // reduce(xs, +, 0): the callback's generics are bound by later arguments; any set may fit then
+                return 3;
             }
 
             return st_callable_fits_hook && st_callable_fits_hook(want, got) ? 3 : 0;

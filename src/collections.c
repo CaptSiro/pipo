@@ -1,4 +1,4 @@
-// Tuples and the hash table behind std:Map and std:Set.
+// Tuples and the hash table behind Map and Set.
 //
 // Keys are compared with values_equal, so the hash must agree with it:
 // 1 == 1.0, so an integral float hashes like the int it equals. Only values
@@ -262,7 +262,7 @@ static void set_add_all(VM* vm, ObjMap* s, Value from, int line) {
             map_put(s, x, hash_key(vm, x, line), void_val());
         }
     } else {
-        rt_error(vm, line, "std:set(...) takes an array, a set or a range, got %s", value_type_name(from));
+        rt_error(vm, line, "set(...) takes an array, a set or a range, got %s", value_type_name(from));
     }
 }
 
@@ -272,7 +272,7 @@ static void map_add_all(VM* vm, ObjMap* m, Value from, int line) {
         for (int i = 0; i < a->count; ++i) {
             const Value p = a->items[i];
             if (!IS_KIND(p, OBJ_TUPLE) || AS_TUPLE(p)->count != 2) {
-                rt_error(vm, line, "std:map(...) takes an array of tuple(key, value) pairs, but element %d is a %s", i,
+                rt_error(vm, line, "map(...) takes an array of tuple(key, value) pairs, but element %d is a %s", i,
                          value_type_name(p));
             }
 
@@ -292,15 +292,15 @@ static void map_add_all(VM* vm, ObjMap* m, Value from, int line) {
             map_put(m, obj_val(f->entries[i].key), f->entries[i].key->hash, f->entries[i].value);
         }
     } else {
-        rt_error(vm, line, "std:map(...) takes an array of tuple(key, value) pairs, a map or an object, got %s",
+        rt_error(vm, line, "map(...) takes an array of tuple(key, value) pairs, a map or an object, got %s",
                  value_type_name(from));
     }
 }
 
-// std:map(), std:map([tuple("a", 1)]), std:set(), std:set([1, 2, 2])
+// map(), map([tuple("a", 1)]), set(), set([1, 2, 2])
 Value native_type_construct(VM* vm, ObjNativeType* t, int argc, Value* args, int line) {
     if (argc > 1) {
-        rt_error(vm, line, "std:%s(...) takes at most one value to copy from, got %d", t->which == NT_MAP ? "map" : "set", argc);
+        rt_error(vm, line, "%s(...) takes at most one value to copy from, got %d", t->which == NT_MAP ? "map" : "set", argc);
     }
 
     ObjMap* m = map_new(vm, t->which == NT_MAP ? OBJ_MAP : OBJ_SET);

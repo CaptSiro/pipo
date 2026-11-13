@@ -21,11 +21,11 @@ type Pair = (int, int) -> int
 const Pair add = (a, b) -> a + b
 const Pair mul = (int a, int b) -> {
     const product = a * b
-    product            // a block body gives its last expression, like a match arm
+    return product     // a block body returns like a function body
 }
 const Pair early = (a, b) -> {
     if a > b { return a }
-    b
+    return b
 }
 io:print_nl(add(2, 3), mul(4, 5), early(7, 1), early(1, 7))
 
@@ -77,7 +77,7 @@ io:print_nl(total)
 // callbacks in records, built-ins taking functions
 type Button = { string label, Thunk on_click }
 const Button b = { label: "ok", on_click: () -> "clicked " + "ok" }
-io:print_nl(b:on_click(), [3, 1, 2].sort((a, b) -> a < b), [1, 2, 3].map(x -> x * x))
+io:print_nl(b:on_click(), [3, 1, 2].sort((a, b) -> a < b), [1, 2, 3].map(x -> x * x).to_array())
 io:print_nl(type_of(cb), cb == cb)
 
 // `->` in a match arm still separates the pattern from the body

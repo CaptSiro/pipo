@@ -40,6 +40,8 @@ typedef enum {
     T_ENUM,
     T_EXPORT,
     T_GLOBAL,
+    T_YIELD,
+    T_EMIT,
     T_TRUE,
     T_FALSE
 } TokKind;

@@ -95,7 +95,7 @@ const x = match var {
     10 -> var * 5
     5 -> {
         const doubled = var * 2
-        doubled + 1
+        yield doubled + 1
     }
     _ -> 0
 }
@@ -177,7 +177,7 @@ for p in people {
 function greet(Person p) -> string {
     return "Hello, " + p:name + "!"
 }
-function birthday(Person p) {
+function birthday(Person p) -> void {
     p:age += 1
 }
 

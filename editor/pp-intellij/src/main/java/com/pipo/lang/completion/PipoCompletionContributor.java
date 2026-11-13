@@ -41,7 +41,7 @@ import java.util.Set;
  */
 public final class PipoCompletionContributor extends CompletionContributor {
     private static final List<String> STATEMENT_KEYWORDS = List.of("let", "const", "function", "if", "for", "while",
-            "match", "return", "break", "continue", "enum", "type", "interface", "impl", "import", "export", "global",
+            "match", "return", "yield", "emit", "generator", "break", "continue", "enum", "type", "interface", "impl", "import", "export", "global",
             "native", "precedence", "scope", "defer");
     private static final List<String> EXPRESSION_KEYWORDS = List.of("true", "false", "function", "if", "match", "scope");
 

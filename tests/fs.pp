@@ -55,7 +55,7 @@ io:print_nl(whole.is_open(), text.delete())
 // ---- Directory
 io:print_nl(f.copy_to(root.file("copy.txt")), root.file("copy.txt").read_text() == f.read_text())
 io:print_nl(root.list())
-io:print_nl(root.files().unwrap().map(x -> x.name()), root.dirs().unwrap().map(x -> x.name()))
+io:print_nl(root.files().unwrap().map(x -> x.name()).to_array(), root.dirs().unwrap().map(x -> x.name()).to_array())
 io:print_nl(root.file("copy.txt").rename(root.file("moved.txt")), root.list())
 io:print_nl(root.dir("a").delete(), root.dir("a").dir("b").delete(), root.dir("a").delete())
 io:print_nl(fs:directory(root.path(), "missing").list().is_fail(), root.file("missing").delete())

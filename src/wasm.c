@@ -151,6 +151,7 @@ enum {
     W_I32_SUB = 0x6B,
     W_I32_MUL = 0x6C,
     W_I32_AND = 0x71,
+    W_I32_OR = 0x72,
     W_I32_SHL = 0x74,
     W_I32_SHR_U = 0x76,
     W_I64_ADD = 0x7C,
@@ -363,6 +364,11 @@ static int func_type(const char* params, const char* result) {
     return G->ntypes++;
 }
 
+// Map<K, V> / Set<T>
+static bool is_collection_type(const SType* t) {
+    return t && t->kind == ST_NATIVE && t->decl && (t->decl->which == NT_MAP || t->decl->which == NT_SET);
+}
+
 // the value type of a static type, 0 for void / never; an error for types this target has no representation for
 static uint8_t valtype(const SType* t, int line, const char* file) {
     switch (t->kind) {
@@ -384,7 +390,49 @@ static uint8_t valtype(const SType* t, int line, const char* file) {
         case ST_OVERLOAD: return T_I32;
         case ST_VOID:
         case ST_NEVER: return 0;
-        default: wfail(line, file, "the wasm target has no representation for values of type %s yet", st_name(t));
+        default:
+            if (t->kind == ST_NATIVE && t->decl && t->decl->which == NT_GENERATOR) {
+                return T_I32; // the address of [step][state][value][frame]
+            }
+
+            if (is_collection_type(t)) {
+                return T_I32; // the address of a Map / Set (see JS_HOST)
+            }
+
+            wfail(line, file, "the wasm target has no representation for values of type %s yet", st_name(t));
+    }
+}
+
+// can this target make values of type t (valtype would not fail): what a box can hold
+static bool representable(const SType* t) {
+    switch (t->kind) {
+        case ST_RANGE: return !(t->elem && t->elem->kind == ST_FLOAT);
+        case ST_INT:
+        case ST_FLOAT:
+        case ST_BOOL:
+        case ST_STRING:
+        case ST_RECORD:
+        case ST_ENUM:
+        case ST_FUNC:
+        case ST_BLOCK:
+        case ST_UNKNOWN:
+        case ST_UNION:
+        case ST_IFACE:
+        case ST_FUNCTION:
+        case ST_OVERLOAD:
+        case ST_VOID:
+        case ST_NEVER: return true;
+        case ST_ARRAY: return !t->elem || representable(t->elem);
+        case ST_TUPLE:
+            for (int i = 0; i < t->nargs; ++i) {
+                if (!representable(t->args[i])) {
+                    return false;
+                }
+            }
+
+            return true;
+        default:
+            return t->kind == ST_NATIVE && t->decl && (t->decl->which == NT_GENERATOR || is_collection_type(t));
     }
 }
 
@@ -444,6 +492,11 @@ static void js_string(StrBuf* sb, const char* s) {
     }
 
     sb_putc(sb, '"');
+}
+
+// a type argument that says what a collection holds (map() is a Map<never, never> until used)
+static bool known_arg(const SType* t) {
+    return t && t->kind != ST_NEVER && t->kind != ST_DYN && !st_has_param(t);
 }
 
 // the id of a type descriptor the host formats values with
@@ -522,7 +575,18 @@ static int type_desc(SType* t) {
         case ST_BLOCK:
         case ST_FUNCTION:
         case ST_OVERLOAD: sb_puts(&d, "{k:'function',p:[],r:-1}"); break;
-        default: sb_printf(&d, "{k:'other',n:'%s'}", st_name(t)); break;
+        default:
+            if (is_collection_type(t)) {
+                // the key / item and value types: -1 when the static type does not say (map() -> Map)
+                const bool map = t->decl->which == NT_MAP;
+                const int kt = t->nargs > 0 && known_arg(t->args[0]) ? type_desc(t->args[0]) : -1;
+                const int vt = !map ? -2 : t->nargs > 1 && known_arg(t->args[1]) ? type_desc(t->args[1]) : -1;
+                sb_printf(&d, "{k:'%s',kt:%d,vt:%d}", map ? "map" : "set", kt, vt);
+                break;
+            }
+
+            sb_printf(&d, "{k:'other',n:'%s'}", st_name(t));
+            break;
     }
 
     sb_printf(&G->typejs, "T[%d]=%s;\n", id, d.data);
@@ -678,6 +742,15 @@ typedef struct WCtx {
     WKind kind;
     uint8_t result_vt;    // the wasm result of the function being compiled
     ObjString* scope;     // a block: the name of its scope
+    int closure_local;    // the local with the function value (its captures): 0, or a generator's own
+    // a generator's step function (see compile_generator)
+    bool gen;
+    int gen_resume;       // the local: the pause being resumed at, 0 while running normally
+    int gen_exit;         // the label of the block a pause leaves
+    SType* gen_elem;      // the type of its values
+    Node** pauses;        // its emits, in the order of the source: pause k is pauses[k - 1]
+    int npauses;
+    int cappauses;
 } WCtx;
 
 static void wexpr(WCtx* w, Node* n);
@@ -884,7 +957,7 @@ static int find_capture(WCtx* w, ObjString* name) {
 
 // the address of capture k's cell: the function value is parameter 0
 static void cap_cell(WCtx* w, int k) {
-    op_u(w, W_LOCAL_GET, 0);
+    op_u(w, W_LOCAL_GET, (uint64_t)w->closure_local);
     mem(w, W_I32_LOAD, 2, 8 + 8 * k);
 }
 
@@ -1370,7 +1443,10 @@ static const char* JS_NATIVES[] = {
     "math_trunc", "math_sign", "math_fround", "math_cbrt", "math_exp", "math_expm1", "math_log1p", "math_log",
     "math_log2", "math_log10", "math_sin", "math_cos", "math_tan", "math_asin", "math_acos", "math_atan", "math_atan2",
     "math_sinh", "math_cosh", "math_tanh", "math_asinh", "math_acosh", "math_atanh", "math_hypot2", "math_hypot3",
-    "math_hypot_array", "math_clz32", "math_imul", "math_random", "math_random_int", NULL,
+    "math_hypot_array", "math_clz32", "math_imul", "math_random", "math_random_int", "std_map_new", "std_set_new",
+    "std_map_get", "std_map_put", "std_map_has", "std_map_remove", "std_map_keys", "std_map_values", "std_map_entries",
+    "std_map_clear", "std_set_add", "std_set_remove", "std_set_union", "std_set_intersection", "std_set_difference",
+    "std_in_range", "std_range_has", NULL,
 };
 
 static const char* native_key(const CFunc* f) {
@@ -1442,6 +1518,10 @@ static bool is_module_fn(CFunc* f, const char* module, const char* name) {
     return f->module && f->module->name && str_equals(f->module->name, module) && str_equals(f->name, name);
 }
 
+static bool is_generator_type(const SType* t);
+static void gen_advance(WCtx* w, int g);
+static void variant_value(WCtx* w, int variant, SType* pt, int line);
+
 static void native_call(WCtx* w, Node* n, CFunc* f, Node* recv, NodeList* args) {
     const int argc = args->count + (recv ? 1 : 0);
     const char* name = f->name->chars;
@@ -1468,6 +1548,42 @@ static void native_call(WCtx* w, Node* n, CFunc* f, Node* recv, NodeList* args) 
 
         i32c(w, name[5] == '_' ? 1 : 0);
         host(w, H_OUT_END);
+
+        return;
+    }
+
+    if (strcmp(name, "generator_next") == 0 && argc == 1) {
+        // the generator's next value: some(value), or none() once it ended
+        SType* rt = wtype(w, n);
+        int some = -1;
+        int none = -1;
+        for (int i = 0; rt->kind == ST_ENUM && i < rt->decl->nvariants; ++i) {
+            if (str_equals(rt->decl->variants[i].name, "some")) {
+                some = i;
+            } else if (str_equals(rt->decl->variants[i].name, "none")) {
+                none = i;
+            }
+        }
+
+        Node* a = arg_at(recv, args, 0);
+        SType* gt = wtype(w, a);
+        if (some < 0 || none < 0 || !is_generator_type(gt) || gt->nargs < 1) {
+            unsupported(w, n, "generator_next() of a value that is not a typed Generator");
+        }
+
+        SType* pt = variant_payload(G->ch, rt, some, 0);
+        const int g = new_local(w, T_I32);
+        wexpr(w, a);
+        op_u(w, W_LOCAL_SET, (uint64_t)g);
+        gen_advance(w, g);
+        open_block(w, W_IF, T_I32);
+        op_u(w, W_LOCAL_GET, (uint64_t)g);
+        load_slot(w, gt->args[0], 8, n->line);
+        convert(w, gt->args[0], pt);
+        variant_value(w, some, pt, n->line);
+        op(w, W_ELSE);
+        variant_value(w, none, NULL, n->line);
+        close_block(w);
 
         return;
     }
@@ -1662,6 +1778,18 @@ static void native_call(WCtx* w, Node* n, CFunc* f, Node* recv, NodeList* args) 
         }
 
         op_u(w, W_LOCAL_GET, p);
+
+        return;
+    }
+
+    if (strcmp(name, "[]=") == 0 && argc == 3 && wtype(w, arg_at(recv, args, 0))->kind == ST_ARRAY) {
+        // xs.[]=(i, v), written as a call
+        const SType* ot = wtype(w, arg_at(recv, args, 0));
+        wexpr(w, arg_at(recv, args, 0));
+        wexpr(w, arg_at(recv, args, 1));
+        host(w, H_ARR_SLOT);
+        wexpr_to(w, arg_at(recv, args, 2), ot->elem);
+        store_slot(w, ot->elem, 0, n->line);
 
         return;
     }
@@ -2023,11 +2151,75 @@ static void dispatch_values(WCtx* w, Node* n, const CCall* call, SType** sargs, 
         CFunc* f = cands[c];
         SType** params = NULL;
         int nparams = 0;
-        if (f->kind != CF_USER) {
+        const char* host_key = f->kind == CF_NATIVE && !f->builtin ? native_key(f) : NULL;
+        if (f->kind != CF_USER && !host_key) {
             wfail(n->line, w->file, "the wasm target cannot dispatch the call of '%s' to a native function", f->name->chars);
         }
 
         CInstance* inst = checker_declared_instance(ch, f, sargs, argc, &params, &nparams);
+        // a value of an interface type is one of the types that implement it with its arguments:
+        // iter(string) is no candidate for an Iterable<int>
+        bool possible = nparams == argc;
+        for (int i = 0; possible && i < argc; ++i) {
+            if (sargs[i]->kind == ST_IFACE && params[i] && !is_boxed(params[i]) && !st_has_param(params[i]) &&
+                st_fit(sargs[i], params[i], NULL) <= 0) {
+                possible = false;
+            }
+
+            if (params[i] && !representable(params[i])) {
+                possible = false; // no value of that type exists in this target (yet), so no box holds one
+            }
+        }
+
+        if (!possible) {
+            continue;
+        }
+
+        if (host_key) {
+            // a native the host runs (get of a Map through Index): the values, unboxed to its
+            // parameter types, go to the host, the result comes back as the call's type
+            bool concrete = nparams == argc && !(f->sig && f->sig->variadic);
+            for (int i = 0; concrete && i < argc; ++i) {
+                concrete = params[i] && !st_has_param(params[i]) && representable(params[i]);
+            }
+
+            if (!concrete) {
+                continue;
+            }
+
+            tried++;
+            open_block(w, W_BLOCK, 0);
+            const int next = w->labels;
+            for (int i = 0; i < argc; ++i) {
+                const bool other_iface = params[i]->kind == ST_IFACE && !st_equal(params[i], sargs[i]);
+                if (is_boxed(sargs[i]) && (!is_boxed(params[i]) || other_iface)) {
+                    op_u(w, W_LOCAL_GET, locals[i]);
+                    mem(w, W_I32_LOAD, 2, 0);
+                    op_u(w, W_CALL, (uint64_t)type_test(params[i]));
+                    op(w, W_I32_EQZ);
+                    op_u(w, W_BR_IF, (uint64_t)(w->labels - next));
+                }
+            }
+
+            const int buf = bridge_buf(w, argc);
+            for (int i = 0; i < argc; ++i) {
+                op_u(w, W_LOCAL_GET, locals[i]);
+                if (is_boxed(sargs[i]) && !is_boxed(params[i])) {
+                    unbox(w, params[i], n->line);
+                } else {
+                    convert(w, sargs[i], params[i]);
+                }
+
+                bridge_store(w, buf, i, params[i], n->line);
+            }
+
+            bridge_call(w, buf, host_key, params, argc, rvt ? rt : NULL, n->line);
+            op_u(w, W_BR, (uint64_t)(w->labels - out));
+            close_block(w);
+
+            continue;
+        }
+
         if (!inst || is_nested_fn(f) || nparams != argc || (f->sig && f->sig->variadic)) {
             wfail(n->line, w->file, "the wasm target cannot dispatch the call of '%s' to %s", f->name->chars,
                   f->kind == CF_NATIVE ? "a native function" : "a generic or local function");
@@ -2037,7 +2229,8 @@ static void dispatch_values(WCtx* w, Node* n, const CCall* call, SType** sargs, 
         open_block(w, W_BLOCK, 0);
         const int next = w->labels;
         for (int i = 0; i < argc; ++i) {
-            if (is_boxed(sargs[i]) && !is_boxed(params[i])) {
+            const bool other_iface = params[i]->kind == ST_IFACE && !st_equal(params[i], sargs[i]);
+            if (is_boxed(sargs[i]) && (!is_boxed(params[i]) || other_iface)) {
                 op_u(w, W_LOCAL_GET, locals[i]);
                 mem(w, W_I32_LOAD, 2, 0);
                 op_u(w, W_CALL, (uint64_t)type_test(params[i]));
@@ -2740,12 +2933,236 @@ static bool chain_bridge(WCtx* w, Node* n, const ChainInfo* ci, int k, const STy
 
 static void branchy(WCtx* w, Node* n, bool value);
 
+// ---------------------------------------------------------------- generators: pausing and resuming
+//
+// A generator is [i32 step][i32 state][8 value][frame: 8 per local of step]. step is the table slot
+// of its step function, (generator) -> i32, which runs the body to its next value: 1 when it gave
+// one (in the value slot), 0 when the body ended. state: 0 not started, k > 0 paused at pause k,
+// -1 done, -2 running. The step function's locals live in the frame between steps: loaded when
+// it starts, stored when it pauses.
+//
+// The pauses are the emits of the body (not of functions nested in it), numbered in the order of
+// the source. Resuming at pause k enters the statements on the way to that emit again without
+// running anything else: in a block that contains pauses every statement is guarded (run it when
+// not resuming, or when the pause is in it), a loop skips its test and its next item, an if or a
+// match takes the branch with the pause without testing anything. The emit itself clears the
+// resume and the body goes on after it.
+
+#define GEN_DONE_STATE (-1)
+#define GEN_RUNNING_STATE (-2)
+
+static int frame_slot(int local) {
+    return 16 + 8 * (local - 1); // local 0 is the generator
+}
+
+static bool is_generator_type(const SType* t) {
+    return t && t->kind == ST_NATIVE && t->decl && t->decl->which == NT_GENERATOR;
+}
+
+// the generator (its address in local g) runs to its next value: i32 1 when it gave one
+static void gen_advance(WCtx* w, int g) {
+    op_u(w, W_LOCAL_GET, (uint64_t)g);
+    op_u(w, W_LOCAL_GET, (uint64_t)g);
+    mem(w, W_I32_LOAD, 2, 0);
+    op_u(w, W_CALL_INDIRECT, (uint64_t)func_type("i", "i"));
+    put(w->b, 0);
+}
+
+// the statements that can hold a pause: the ones a resume enters (an emit elsewhere, in a value,
+// cannot be resumed at)
+static void pauses_walk(Node* s, void (*fn)(Node*, void*), void* data) {
+    if (!s) {
+        return;
+    }
+
+    switch (s->kind) {
+        case S_RETURN:
+            if (s->as.ret.emit) {
+                fn(s, data);
+            }
+
+            return;
+        case N_BLOCK:
+            for (int i = 0; i < s->as.block.stmts.count; ++i) {
+                pauses_walk(s->as.block.stmts.items[i], fn, data);
+            }
+
+            return;
+        case S_WHILE: pauses_walk(s->as.while_.body, fn, data); return;
+        case S_FOR: pauses_walk(s->as.for_.body, fn, data); return;
+        case N_IF:
+            pauses_walk(s->as.if_.then_b, fn, data);
+            pauses_walk(s->as.if_.else_b, fn, data);
+
+            return;
+        case N_MATCH:
+            for (int i = 0; i < s->as.match.narms; ++i) {
+                if (s->as.match.arms[i].body_is_block) {
+                    pauses_walk(s->as.match.arms[i].body, fn, data);
+                }
+            }
+
+            return;
+        case S_EXPR:
+            if (s->as.expr.expr->kind == N_IF || s->as.expr.expr->kind == N_MATCH) {
+                pauses_walk(s->as.expr.expr, fn, data);
+            }
+
+            return;
+        default: return;
+    }
+}
+
+static void pause_collect(Node* s, void* data) {
+    WCtx* w = data;
+    GROW(w->pauses, w->npauses, w->cappauses);
+    w->pauses[w->npauses++] = s;
+}
+
+static int pause_id(const WCtx* w, const Node* s) {
+    for (int i = 0; i < w->npauses; ++i) {
+        if (w->pauses[i] == s) {
+            return i + 1;
+        }
+    }
+
+    return 0;
+}
+
+typedef struct {
+    const WCtx* w;
+    int lo;
+    int hi;
+} PauseSpan;
+
+static void span_add(Node* s, void* data) {
+    PauseSpan* sp = data;
+    const int k = pause_id(sp->w, s);
+    if (k) {
+        if (!sp->lo || k < sp->lo) {
+            sp->lo = k;
+        }
+
+        if (k > sp->hi) {
+            sp->hi = k;
+        }
+    }
+}
+
+// the pauses in s (they are consecutive): false when it has none (or w is no generator)
+static bool pause_span(const WCtx* w, Node* s, int* lo, int* hi) {
+    if (!w->gen || !s) {
+        return false;
+    }
+
+    PauseSpan sp = {w, 0, 0};
+    pauses_walk(s, span_add, &sp);
+    *lo = sp.lo;
+    *hi = sp.hi;
+
+    return sp.lo > 0;
+}
+
+// i32: not resuming
+static void gen_running(WCtx* w) {
+    op_u(w, W_LOCAL_GET, (uint64_t)w->gen_resume);
+    op(w, W_I32_EQZ);
+}
+
+// i32: resuming at a pause in s
+static void gen_resumes_in(WCtx* w, Node* s) {
+    int lo, hi;
+    if (!pause_span(w, s, &lo, &hi)) {
+        i32c(w, 0);
+
+        return;
+    }
+
+    op_u(w, W_LOCAL_GET, (uint64_t)w->gen_resume);
+    i32c(w, lo);
+    op(w, W_I32_SUB);
+    i32c(w, hi - lo);
+    op(w, W_I32_LE_U);
+}
+
+// a statement of a block with pauses: if (not resuming || resuming in it) { ... }
+static void gen_guard(WCtx* w, Node* s) {
+    gen_running(w);
+    int lo, hi;
+    if (pause_span(w, s, &lo, &hi)) {
+        gen_resumes_in(w, s);
+        op(w, W_I32_OR);
+    }
+
+    open_block(w, W_IF, 0);
+}
+
+// the generator's value slot <- the value of e
+static void gen_store_value(WCtx* w, Node* e) {
+    op_u(w, W_LOCAL_GET, 0);
+    wexpr_to(w, e, w->gen_elem);
+    store_slot(w, w->gen_elem, 8, e->line);
+}
+
+static void gen_set_state(WCtx* w, int state) {
+    op_u(w, W_LOCAL_GET, 0);
+    i32c(w, state);
+    mem(w, W_I32_STORE, 2, 4);
+}
+
+// emit v: pauses (unless resumed here, then it goes on); return v: the last value; return: done
+static void gen_return(WCtx* w, Node* n) {
+    if (n->as.ret.emit) {
+        const int k = pause_id(w, n);
+        if (!k) {
+            unsupported(w, n, "an emit inside an expression (an if or a match whose value is used)");
+        }
+
+        gen_running(w);
+        open_block(w, W_IF, 0);
+        gen_store_value(w, n->as.ret.value);
+        gen_set_state(w, k);
+        op_u(w, W_BR, (uint64_t)(w->labels - w->gen_exit));
+        close_block(w);
+        i32c(w, 0);
+        op_u(w, W_LOCAL_SET, (uint64_t)w->gen_resume);
+
+        return;
+    }
+
+    if (n->as.ret.value) {
+        gen_store_value(w, n->as.ret.value);
+        gen_set_state(w, GEN_DONE_STATE);
+        op_u(w, W_BR, (uint64_t)(w->labels - w->gen_exit));
+
+        return;
+    }
+
+    gen_set_state(w, GEN_DONE_STATE);
+    i32c(w, 0);
+    op(w, W_RETURN);
+}
+
 static void block_body(WCtx* w, Node* block, bool value, const SType* want) {
+    int lo, hi;
+    const bool routed = pause_span(w, block, &lo, &hi);
     begin(w);
     const int count = block->as.block.stmts.count;
     for (int i = 0; i < count; ++i) {
         Node* s = block->as.block.stmts.items[i];
-        if (value && i == count - 1 && s->kind == S_EXPR) {
+        if (routed) {
+            if (value && i == count - 1 && s->kind == S_EXPR && s->as.expr.yield) {
+                unsupported(w, s, "a block that gives a value and holds an emit");
+            }
+
+            gen_guard(w, s);
+            wstmt(w, s);
+            close_block(w);
+
+            continue;
+        }
+
+        if (value && i == count - 1 && s->kind == S_EXPR && s->as.expr.yield) {
             Node* e = s->as.expr.expr;
             if (e->kind == N_IF || e->kind == N_MATCH) {
                 branchy(w, e, true);
@@ -3046,6 +3463,12 @@ static void pattern(WCtx* w, Pattern* p, int slot, SType* t, int fail) {
         case P_VARIANT: {
             Node* cn = p->ctor;
             if (cn->kind == N_IDENT && str_equals(cn->as.str, "tuple")) {
+                if (t->kind == ST_TUPLE && p->nsubs != t->nargs) {
+                    op_u(w, W_BR, (uint64_t)(w->labels - fail)); // another length: it never matches
+
+                    return;
+                }
+
                 for (int i = 0; i < p->nsubs && t->kind == ST_TUPLE; ++i) {
                     const uint8_t vt = valtype(t->args[i], p->line, w->file);
                     const int s = new_local(w, vt);
@@ -3112,8 +3535,21 @@ static void branch_body(WCtx* w, Node* body, bool is_block, bool value, const ST
 static void branchy(WCtx* w, Node* n, bool value) {
     const SType* t = value ? wtype(w, n) : NULL;
     const uint8_t rt = value ? valtype(t, n->line, w->file) : 0;
+    int lo, hi;
+    // in a generator, resuming at a pause in it: the branch with the pause, nothing tested
+    const bool routed = !value && pause_span(w, n, &lo, &hi);
     if (n->kind == N_IF && !n->as.if_.pat) {
-        wexpr(w, n->as.if_.cond);
+        if (routed) {
+            gen_running(w);
+            open_block(w, W_IF, T_I32);
+            wexpr(w, n->as.if_.cond);
+            op(w, W_ELSE);
+            gen_resumes_in(w, n->as.if_.then_b);
+            close_block(w);
+        } else {
+            wexpr(w, n->as.if_.cond);
+        }
+
         open_block(w, W_IF, rt);
         block_body(w, n->as.if_.then_b, value, t);
         op(w, W_ELSE);
@@ -3138,12 +3574,33 @@ static void branchy(WCtx* w, Node* n, bool value) {
     if (n->kind == N_IF) {
         SType* st = wtype(w, n->as.if_.cond);
         const int s = new_local(w, valtype(st, n->line, w->file));
+        if (routed) {
+            gen_running(w);
+            open_block(w, W_IF, 0);
+        }
+
         wexpr(w, n->as.if_.cond);
         op_u(w, W_LOCAL_SET, s);
+        if (routed) {
+            close_block(w);
+        }
+
         open_block(w, W_BLOCK, 0);
         const int fail = w->labels;
         begin(w);
-        pattern(w, n->as.if_.pat, s, st, fail);
+        if (routed) {
+            gen_running(w);
+            open_block(w, W_IF, 0);
+            pattern(w, n->as.if_.pat, s, st, fail);
+            op(w, W_ELSE);
+            gen_resumes_in(w, n->as.if_.then_b);
+            op(w, W_I32_EQZ);
+            op_u(w, W_BR_IF, (uint64_t)(w->labels - fail));
+            close_block(w);
+        } else {
+            pattern(w, n->as.if_.pat, s, st, fail);
+        }
+
         block_body(w, n->as.if_.then_b, value, t);
         finish(w);
         op_u(w, W_BR, (uint64_t)(w->labels - end));
@@ -3159,18 +3616,45 @@ static void branchy(WCtx* w, Node* n, bool value) {
     } else {
         SType* st = wtype(w, n->as.match.subject);
         const int s = new_local(w, valtype(st, n->line, w->file));
+        if (routed) {
+            gen_running(w);
+            open_block(w, W_IF, 0);
+        }
+
         wexpr(w, n->as.match.subject);
         op_u(w, W_LOCAL_SET, s);
+        if (routed) {
+            close_block(w);
+        }
+
         for (int i = 0; i < n->as.match.narms; ++i) {
             MatchArm* arm = &n->as.match.arms[i];
             open_block(w, W_BLOCK, 0);
             const int fail = w->labels;
             begin(w);
+            if (routed) {
+                gen_running(w);
+                open_block(w, W_IF, 0);
+            }
+
             pattern(w, arm->pat, s, st, fail);
             if (arm->guard) {
                 wexpr(w, arm->guard);
                 op(w, W_I32_EQZ);
                 op_u(w, W_BR_IF, (uint64_t)(w->labels - fail));
+            }
+
+            if (routed) {
+                op(w, W_ELSE);
+                if (arm->body_is_block) {
+                    gen_resumes_in(w, arm->body);
+                } else {
+                    i32c(w, 0);
+                }
+
+                op(w, W_I32_EQZ);
+                op_u(w, W_BR_IF, (uint64_t)(w->labels - fail));
+                close_block(w);
             }
 
             branch_body(w, arm->body, arm->body_is_block, value, t);
@@ -3192,22 +3676,89 @@ static void branchy(WCtx* w, Node* n, bool value) {
 
 // ---------------------------------------------------------------- statements
 
+// for over an array, an int range or a generator; a value of a type that implements Iterable is
+// iterated through the generator the prelude's iterate($for) makes of it
 static void for_loop(WCtx* w, Node* n) {
     SType* it = wtype(w, n->as.for_.iter);
-    begin(w);
-    const int coll = new_local(w, T_I32);
-    const int pos = new_local(w, T_I64);
-    wexpr(w, n->as.for_.iter);
-    op_u(w, W_LOCAL_SET, coll);
-    int end = -1;
-    int step = -1;
-    if (it->kind == ST_RANGE) {
-        if (it->elem && it->elem->kind == ST_FLOAT) {
+    const bool over_gen = n->as.for_.proto || is_generator_type(it);
+    if (!over_gen) {
+        if (it->kind == ST_RANGE && it->elem && it->elem->kind == ST_FLOAT) {
             unsupported(w, n, "a for loop over a float range");
         }
 
-        end = new_local(w, T_I64);
-        step = new_local(w, T_I64);
+        if (it->kind != ST_RANGE && it->kind != ST_ARRAY && it->kind != ST_STRING && !is_collection_type(it)) {
+            unsupported(w, n, "a for loop over this kind of value");
+        }
+    }
+
+    int lo, hi;
+    const bool routed = pause_span(w, n, &lo, &hi); // a generator resumed in the body skips the start and the test
+    begin(w);
+    const int coll = new_local(w, T_I32);
+    const int pos = new_local(w, T_I64);
+    const int idx = new_local(w, T_I64);
+    const bool range = !over_gen && it->kind == ST_RANGE;
+    const int end = range ? new_local(w, T_I64) : -1;
+    const int step = range ? new_local(w, T_I64) : -1;
+    SType* gt = it;
+    if (routed) {
+        gen_running(w);
+        open_block(w, W_IF, 0);
+    }
+
+    wexpr(w, n->as.for_.iter);
+    if (!over_gen && it->kind == ST_STRING) {
+        // its characters, as an array of strings
+        const int buf = bridge_buf(w, 1);
+        bridge_store(w, buf, 0, it, n->line);
+        SType* ts[1] = {it};
+        bridge_call(w, buf, "chars", ts, 1, st_array(st_prim(ST_STRING)), n->line);
+    }
+
+    SType* entries = NULL; // a map: its entries, tuple(key, value)
+    if (!over_gen && is_collection_type(it)) {
+        // a snapshot: the items of a set, the entries of a map, as an array
+        const bool map = it->decl->which == NT_MAP;
+        if (it->nargs < (map ? 2 : 1)) {
+            unsupported(w, n, "a for loop over a Map / Set whose types are not known");
+        }
+
+        SType* et = it->args[0];
+        if (map) {
+            SType** kv = pp_calloc(2, sizeof(SType*));
+            kv[0] = it->args[0];
+            kv[1] = it->args[1];
+            entries = st_new(ST_TUPLE);
+            entries->args = kv;
+            entries->nargs = 2;
+            et = entries;
+        }
+
+        const int buf = bridge_buf(w, 1);
+        bridge_store(w, buf, 0, it, n->line);
+        SType* ts[1] = {it};
+        bridge_call(w, buf, map ? "std_map_entries" : "std_map_keys", ts, 1, st_array(et), n->line);
+    }
+
+    if (n->as.for_.proto) {
+        begin(w);
+        declare(w, str_cintern(G->vm, "$for"), it, n->line);
+        wexpr(w, n->as.for_.proto);
+        gt = wtype(w, n->as.for_.proto);
+        finish(w);
+        if (!is_generator_type(gt)) {
+            unsupported(w, n, "iterating through a protocol call that does not give a Generator");
+        }
+    }
+
+    op_u(w, W_LOCAL_SET, coll);
+    op(w, W_I64_CONST);
+    sleb(w->b, 0);
+    op_u(w, W_LOCAL_SET, pos);
+    op(w, W_I64_CONST);
+    sleb(w->b, 0);
+    op_u(w, W_LOCAL_SET, idx);
+    if (range) {
         op_u(w, W_LOCAL_GET, coll);
         mem(w, W_I64_LOAD, 3, 0);
         op_u(w, W_LOCAL_SET, pos);
@@ -3217,17 +3768,40 @@ static void for_loop(WCtx* w, Node* n) {
         op_u(w, W_LOCAL_GET, coll);
         mem(w, W_I64_LOAD, 3, 16);
         op_u(w, W_LOCAL_SET, step);
-    } else if (it->kind != ST_ARRAY) {
-        unsupported(w, n, "a for loop over this kind of value");
     }
 
-    const int idx = new_local(w, T_I64);
+    if (routed) {
+        close_block(w);
+    }
+
+    SType* item = over_gen ? (gt->nargs ? gt->args[0] : NULL)
+                  : range                    ? st_prim(ST_INT)
+                  : it->kind == ST_STRING    ? it
+                  : entries                  ? entries
+                  : is_collection_type(it)   ? it->args[0]
+                                             : it->elem;
+    if (!item) {
+        unsupported(w, n, "iterating a generator whose values have no type");
+    }
+
+    if (over_gen && n->as.for_.var2 && (item->kind != ST_TUPLE || item->nargs != 2)) {
+        unsupported(w, n, "for k, v over a generator whose values are not tuple(key, value)");
+    }
+
     open_block(w, W_BLOCK, 0);
     const int exit = w->labels;
     open_block(w, W_LOOP, 0);
     const int top = w->labels;
-    // the end: step > 0 ? pos >= end : pos <= end, or pos >= #array
-    if (it->kind == ST_RANGE) {
+    if (routed) {
+        gen_running(w);
+        open_block(w, W_IF, 0);
+    }
+
+    // the end: the generator gave nothing, step > 0 ? pos >= end : pos <= end, or pos >= #array
+    if (over_gen) {
+        gen_advance(w, coll);
+        op(w, W_I32_EQZ);
+    } else if (range) {
         op_u(w, W_LOCAL_GET, step);
         op(w, W_I64_CONST);
         sleb(w->b, 0);
@@ -3251,26 +3825,59 @@ static void for_loop(WCtx* w, Node* n) {
 
     op_u(w, W_BR_IF, (uint64_t)(w->labels - exit));
     begin(w);
-    SType* item = it->kind == ST_RANGE ? st_prim(ST_INT) : it->elem;
-    if (n->as.for_.var2) {
-        op_u(w, W_LOCAL_GET, idx);
-        declare(w, n->as.for_.var1, st_prim(ST_INT), n->line);
-    }
+    if ((over_gen || entries) && n->as.for_.var2) {
+        // tuple(key, value)
+        const int tup = new_local(w, T_I32);
+        if (over_gen) {
+            op_u(w, W_LOCAL_GET, coll);
+            mem(w, W_I32_LOAD, 2, 8);
+        } else {
+            op_u(w, W_LOCAL_GET, coll);
+            mem(w, W_I32_LOAD, 2, 8);
+            op_u(w, W_LOCAL_GET, pos);
+            op(w, W_I32_WRAP_I64);
+            i32c(w, 3);
+            op(w, W_I32_SHL);
+            op(w, W_I32_ADD);
+            mem(w, W_I32_LOAD, 2, 0);
+        }
 
-    if (it->kind == ST_RANGE) {
-        op_u(w, W_LOCAL_GET, pos);
-    } else {
+        op_u(w, W_LOCAL_TEE, tup);
+        load_slot(w, item->args[0], 0, n->line);
+        declare(w, n->as.for_.var1, item->args[0], n->line);
+        op_u(w, W_LOCAL_GET, tup);
+        load_slot(w, item->args[1], 8, n->line);
+        declare(w, n->as.for_.var2, item->args[1], n->line);
+    } else if (over_gen) {
         op_u(w, W_LOCAL_GET, coll);
-        mem(w, W_I32_LOAD, 2, 8);
-        op_u(w, W_LOCAL_GET, pos);
-        op(w, W_I32_WRAP_I64);
-        i32c(w, 3);
-        op(w, W_I32_SHL);
-        op(w, W_I32_ADD);
-        load_slot(w, item, 0, n->line);
+        load_slot(w, item, 8, n->line);
+        declare(w, n->as.for_.var1, item, n->line);
+    } else {
+        if (n->as.for_.var2) {
+            op_u(w, W_LOCAL_GET, idx);
+            declare(w, n->as.for_.var1, st_prim(ST_INT), n->line);
+        }
+
+        if (range) {
+            op_u(w, W_LOCAL_GET, pos);
+        } else {
+            op_u(w, W_LOCAL_GET, coll);
+            mem(w, W_I32_LOAD, 2, 8);
+            op_u(w, W_LOCAL_GET, pos);
+            op(w, W_I32_WRAP_I64);
+            i32c(w, 3);
+            op(w, W_I32_SHL);
+            op(w, W_I32_ADD);
+            load_slot(w, item, 0, n->line);
+        }
+
+        declare(w, n->as.for_.var2 ? n->as.for_.var2 : n->as.for_.var1, item, n->line);
     }
 
-    declare(w, n->as.for_.var2 ? n->as.for_.var2 : n->as.for_.var1, item, n->line);
+    if (routed) {
+        close_block(w);
+    }
+
     open_block(w, W_BLOCK, 0);
     w->loops[w->nloops].exit_depth = exit;
     w->loops[w->nloops].cont_depth = w->labels;
@@ -3279,25 +3886,101 @@ static void for_loop(WCtx* w, Node* n) {
     w->nloops--;
     close_block(w);
     finish(w);
-    // the next one
-    op_u(w, W_LOCAL_GET, pos);
-    if (it->kind == ST_RANGE) {
-        op_u(w, W_LOCAL_GET, step);
-    } else {
+    if (!over_gen) {
+        // the next one
+        op_u(w, W_LOCAL_GET, pos);
+        if (range) {
+            op_u(w, W_LOCAL_GET, step);
+        } else {
+            op(w, W_I64_CONST);
+            sleb(w->b, 1);
+        }
+
+        op(w, W_I64_ADD);
+        op_u(w, W_LOCAL_SET, pos);
+        op_u(w, W_LOCAL_GET, idx);
         op(w, W_I64_CONST);
         sleb(w->b, 1);
+        op(w, W_I64_ADD);
+        op_u(w, W_LOCAL_SET, idx);
     }
 
-    op(w, W_I64_ADD);
-    op_u(w, W_LOCAL_SET, pos);
-    op_u(w, W_LOCAL_GET, idx);
-    op(w, W_I64_CONST);
-    sleb(w->b, 1);
-    op(w, W_I64_ADD);
-    op_u(w, W_LOCAL_SET, idx);
     op_u(w, W_BR, (uint64_t)(w->labels - top));
     close_block(w);
     close_block(w);
+    finish(w);
+}
+
+// the value on the stack (of type t) in a new hidden variable, and a name node that reads it: a
+// call made of values computed once (c[k] op= v reads and stores c[k] with the same c and k)
+static Node* temp_value(WCtx* w, SType* t, int line) {
+    static int count = 0;
+    char name[32];
+    snprintf(name, sizeof name, "\x01tmp%d", ++count);
+    Node* id = pp_calloc(1, sizeof(Node));
+    id->kind = N_IDENT;
+    id->line = line;
+    id->as.str = str_cintern(G->vm, name);
+    info_put(w->inst, id)->type = t;
+    const uint8_t vt = valtype(t, line, w->file);
+    const int idx = add_named(w, id->as.str, vt ? vt : T_I32);
+    w->locals[w->nlocals - 1].type = t;
+    op_u(w, W_LOCAL_SET, (uint64_t)idx);
+
+    return id;
+}
+
+static void list_add(NodeList* l, Node* n) {
+    GROW(l->items, l->count, l->cap);
+    l->items[l->count++] = n;
+}
+
+// c[k] = v / c[k] op= v on a value that is not an array: calls of [] and []= (Index)
+static void index_assign(WCtx* w, Node* n) {
+    Node* target = n->as.assign.target;
+    Node* value = n->as.assign.value;
+    const NodeInfo* ni = winfo(w, n);
+    NodeList args = {0};
+    if (!n->as.assign.op) {
+        for (int i = 0; i < target->as.index.args.count; ++i) {
+            list_add(&args, target->as.index.args.items[i]);
+        }
+
+        list_add(&args, value);
+        wcall(w, n, &ni->call, target->as.index.obj, &args, NULL);
+        free(args.items);
+
+        return;
+    }
+
+    const CCall* op_call = &ni->call;
+    const CCall* store = &ni->call2;
+    if (!store->func && !store->target && !store->dispatch) {
+        unsupported(w, n, "this compound assignment");
+    }
+
+    // c, k once; the current value through [], then op, then []=
+    begin(w);
+    const SType* tt = wtype(w, target);
+    wexpr(w, target->as.index.obj);
+    Node* obj = temp_value(w, wtype(w, target->as.index.obj), n->line);
+    for (int i = 0; i < target->as.index.args.count; ++i) {
+        Node* k = target->as.index.args.items[i];
+        wexpr(w, k);
+        list_add(&args, temp_value(w, wtype(w, k), n->line));
+    }
+
+    wcall(w, target, &winfo(w, target)->call, obj, &args, NULL);
+    Node* cur = temp_value(w, (SType*)tt, n->line);
+    NodeList opargs = {0};
+    list_add(&opargs, value);
+    wcall(w, n, op_call, cur, &opargs, NULL);
+    free(opargs.items);
+    SType* rt = op_call->target ? op_call->target->ret : (SType*)tt;
+    convert(w, rt, tt);
+    list_add(&args, temp_value(w, (SType*)tt, n->line));
+    wcall(w, n, store, obj, &args, NULL);
+    free(args.items);
     finish(w);
 }
 
@@ -3305,6 +3988,17 @@ static void assign(WCtx* w, Node* n) {
     Node* target = n->as.assign.target;
     Node* value = n->as.assign.value;
     const NodeInfo* ni = winfo(w, n);
+    if (target->kind == N_INDEX && wtype(w, target->as.index.obj)->kind != ST_ARRAY) {
+        // a []= of the program or of a library (Map through Index), not the built-in one
+        const CCall* store = n->as.assign.op ? &ni->call2 : &ni->call;
+        const bool builtin = store->func && store->func->kind == CF_NATIVE && store->func->builtin && !store->dispatch;
+        if (!builtin && (store->target || store->dispatch || store->func)) {
+            index_assign(w, n);
+
+            return;
+        }
+    }
+
     if (n->as.assign.op) {
         // target op= value: only on variables and fields, with a built-in operation
         const CCall* call = &ni->call;
@@ -3531,13 +4225,25 @@ static void wstmt(WCtx* w, Node* n) {
             return;
         case S_FOR: for_loop(w, n); return;
         case S_WHILE: {
+            int lo, hi;
+            const bool routed = pause_span(w, n, &lo, &hi);
             open_block(w, W_BLOCK, 0);
             const int exit = w->labels;
             open_block(w, W_LOOP, 0);
             const int top = w->labels;
+            if (routed) {
+                // resumed in the body: no test
+                gen_running(w);
+                open_block(w, W_IF, 0);
+            }
+
             wexpr(w, n->as.while_.cond);
             op(w, W_I32_EQZ);
             op_u(w, W_BR_IF, (uint64_t)(w->labels - exit));
+            if (routed) {
+                close_block(w);
+            }
+
             open_block(w, W_BLOCK, 0);
             w->loops[w->nloops].exit_depth = exit;
             w->loops[w->nloops].cont_depth = w->labels;
@@ -3554,6 +4260,12 @@ static void wstmt(WCtx* w, Node* n) {
         case S_BREAK: emit_leave_loop(w, false, n->line); return;
         case S_CONTINUE: emit_leave_loop(w, true, n->line); return;
         case S_RETURN:
+            if (w->gen) {
+                gen_return(w, n);
+
+                return;
+            }
+
             if (n->as.ret.value) {
                 wexpr_to(w, n->as.ret.value, w->inst->ret);
                 if (!w->inst->fn || !valtype(w->inst->ret, n->line, w->file)) {
@@ -3592,6 +4304,158 @@ static void wstmt(WCtx* w, Node* n) {
 
 // ---------------------------------------------------------------- functions and modules
 
+// A generator function: its function makes the generator (the closure and the arguments go into
+// the frame); its body is a step function (see "generators: pausing and resuming").
+static void compile_generator(WFunc* wf, CModule* m, WCtx* outer) {
+    CInstance* inst = wf->inst;
+    CFunc* fn = inst->fn;
+    const char* file = fn->sig && fn->sig->file ? fn->sig->file : m->path;
+    const int line = fn->sig ? fn->sig->line : 0;
+    SType* gt = inst->ret;
+    if (!is_generator_type(gt) || gt->nargs < 1) {
+        wfail(line, file, "generator '%s' without the type of its values", fn->name->chars);
+    }
+
+    WFunc* step = wfunc_add(func_type("i", "i"));
+    step->nested = true; // compiled here, with its generator function
+    WCtx w = {0};
+    w.inst = inst;
+    w.wf = step;
+    w.module = m;
+    w.b = &step->body;
+    w.file = file;
+    w.outer = outer;
+    w.kind = WK_FUNCTION;
+    w.result_vt = T_I32;
+    w.nparams = 1;
+    w.gen = true;
+    w.gen_elem = gt->args[0];
+    names_used_nested(&w.boxnames, fn->body, false);
+    w.closure_local = new_local(&w, T_I32);
+    w.gen_resume = new_local(&w, T_I32);
+    int* plocal = pp_calloc((size_t)inst->nparams + 1, sizeof(int));
+    for (int i = 0; i < inst->nparams; ++i) {
+        const uint8_t vt = valtype(inst->params[i], line, file);
+        plocal[i] = new_local(&w, vt ? vt : T_I32);
+        GROW(w.locals, w.nlocals, w.caplocals);
+        WLocal* l = &w.locals[w.nlocals++];
+        memset(l, 0, sizeof *l);
+        l->name = fn->sig->params[i].name ? fn->sig->params[i].name : str_cintern(G->vm, "\x01p");
+        l->index = plocal[i];
+        l->vt = vt;
+        l->type = inst->params[i];
+    }
+
+    pauses_walk(fn->body, pause_collect, &w);
+    // block $pause { body; done: return 0 } the locals into the frame; return 1
+    open_block(&w, W_BLOCK, 0);
+    w.gen_exit = w.labels;
+    // the first step: a parameter a nested function uses moves into a cell
+    gen_running(&w);
+    open_block(&w, W_IF, 0);
+    for (int i = 0; i < inst->nparams; ++i) {
+        ObjString* pname = fn->sig->params[i].name;
+        if (pname && names_has(&w.boxnames, pname) && valtype(inst->params[i], line, file)) {
+            op_u(&w, W_LOCAL_GET, (uint64_t)plocal[i]);
+            declare(&w, pname, inst->params[i], line);
+        }
+    }
+
+    close_block(&w);
+    block_body(&w, fn->body, false, NULL);
+    gen_set_state(&w, GEN_DONE_STATE);
+    i32c(&w, 0);
+    op(&w, W_RETURN);
+    close_block(&w);
+    const int nlocals = w.nlocal_types;
+    for (int l = 1; l <= nlocals; ++l) {
+        op_u(&w, W_LOCAL_GET, 0);
+        op_u(&w, W_LOCAL_GET, (uint64_t)l);
+        switch (w.local_types[l - 1]) {
+            case T_I64: mem(&w, W_I64_STORE, 3, frame_slot(l)); break;
+            case T_F64: mem(&w, W_F64_STORE, 3, frame_slot(l)); break;
+            default: mem(&w, W_I32_STORE, 2, frame_slot(l)); break;
+        }
+    }
+
+    i32c(&w, 1);
+    // in front: the locals from the frame, then the state: done gives nothing, running is an error
+    Bytes body = step->body;
+    memset(&step->body, 0, sizeof step->body);
+    for (int l = 1; l <= nlocals; ++l) {
+        op_u(&w, W_LOCAL_GET, 0);
+        switch (w.local_types[l - 1]) {
+            case T_I64: mem(&w, W_I64_LOAD, 3, frame_slot(l)); break;
+            case T_F64: mem(&w, W_F64_LOAD, 3, frame_slot(l)); break;
+            default: mem(&w, W_I32_LOAD, 2, frame_slot(l)); break;
+        }
+
+        op_u(&w, W_LOCAL_SET, (uint64_t)l);
+    }
+
+    op_u(&w, W_LOCAL_GET, 0);
+    mem(&w, W_I32_LOAD, 2, 4);
+    op_u(&w, W_LOCAL_TEE, (uint64_t)w.gen_resume);
+    i32c(&w, GEN_DONE_STATE);
+    op(&w, W_I32_EQ);
+    open_block(&w, W_IF, 0);
+    i32c(&w, 0);
+    op(&w, W_RETURN);
+    close_block(&w);
+    op_u(&w, W_LOCAL_GET, (uint64_t)w.gen_resume);
+    i32c(&w, GEN_RUNNING_STATE);
+    op(&w, W_I32_EQ);
+    open_block(&w, W_IF, 0);
+    {
+        StrBuf sb;
+        sb_init(&sb);
+        sb_printf(&sb, "generator '%s' is already running (next() called from its own body)", fn->name->chars);
+        i32c(&w, str_addr(str_cintern(G->vm, sb.data)));
+        sb_free(&sb);
+    }
+
+    host(&w, H_FAIL);
+    op(&w, W_UNREACHABLE);
+    close_block(&w);
+    gen_set_state(&w, GEN_RUNNING_STATE);
+    put_all(&step->body, body.data, body.len);
+    free(body.data);
+    free(w.pauses);
+    finish_code(&w, step);
+    wf->ncaps = step->ncaps;
+    wf->caps = step->caps;
+
+    // the generator function: [step][state 0][value][frame], the closure and the arguments in the frame
+    Bytes code = {0};
+    uleb(&code, 1);
+    uleb(&code, 1);
+    put(&code, T_I32);
+    WCtx c = {0};
+    c.b = &code;
+    c.file = file;
+    const int p = inst->nparams + 1;
+    alloc(&c, 16 + 8 * nlocals);
+    op_u(&c, W_LOCAL_SET, (uint64_t)p);
+    op_u(&c, W_LOCAL_GET, (uint64_t)p);
+    i32c(&c, table_slot(step));
+    mem(&c, W_I32_STORE, 2, 0);
+    op_u(&c, W_LOCAL_GET, (uint64_t)p);
+    op_u(&c, W_LOCAL_GET, 0);
+    mem(&c, W_I32_STORE, 2, frame_slot(w.closure_local));
+    for (int i = 0; i < inst->nparams; ++i) {
+        op_u(&c, W_LOCAL_GET, (uint64_t)p);
+        op_u(&c, W_LOCAL_GET, (uint64_t)(i + 1));
+        store_slot(&c, inst->params[i], frame_slot(plocal[i]), line);
+    }
+
+    op_u(&c, W_LOCAL_GET, (uint64_t)p);
+    put(&code, W_END);
+    free(plocal);
+    free(wf->body.data);
+    wf->body = code;
+    wf->done = true;
+}
+
 static void compile_body(WFunc* wf, CModule* m, Node* program, WCtx* outer) {
     WCtx w = {0};
     w.inst = wf->inst;
@@ -3605,6 +4469,12 @@ static void compile_body(WFunc* wf, CModule* m, Node* program, WCtx* outer) {
     if (wf->inst->dyn) {
         wfail(wf->inst->dyn_line, w.file, "'%s' is not statically typed (%s)", fn && fn->name ? fn->name->chars : "the top level",
               wf->inst->dyn_reason ? wf->inst->dyn_reason : "dynamic");
+    }
+
+    if (fn && fn->sig && fn->sig->generator) {
+        compile_generator(wf, m, outer);
+
+        return;
     }
 
     if (fn) {
@@ -3632,7 +4502,10 @@ static void compile_body(WFunc* wf, CModule* m, Node* program, WCtx* outer) {
             }
         }
 
-        const bool implicit = fn->sig && fn->sig->implicit_result;
+        // an expression-bodied lambda gives its expression; a block body returns with `return`
+        const int nbody = fn->body->as.block.stmts.count;
+        Node* tail = nbody ? fn->body->as.block.stmts.items[nbody - 1] : NULL;
+        const bool implicit = fn->sig && fn->sig->implicit_result && tail && tail->kind == S_EXPR && tail->as.expr.yield;
         block_body(&w, fn->body, implicit, wf->inst->ret);
         if (!implicit && valtype(wf->inst->ret, fn->sig->line, w.file)) {
             // a function that ends without a return: the checker allows it only when every path returns
@@ -3732,7 +4605,7 @@ static const char* JS_HOST =
     "const NAMES = [%s];\n"
     "const SIGS = [];\n"
     "%s"
-    "const TID = {int: %d, float: %d, string: %d, bool: %d};\n"
+    "const TID = {int: %d, float: %d, string: %d, bool: %d, box: %d};\n"
     "const HEAP_START = %d;\n"
     "const isNode = typeof process !== 'undefined' && !!(process.versions && process.versions.node);\n"
     "let inst = null;\n"
@@ -3829,6 +4702,8 @@ static const char* JS_HOST =
     "      if (!ctor) { return d.n + '.' + name; }\n"
     "      return name + '(' + pays.map((pt, i) => fmt(pt, slot(x + 8 + 8 * i, pt), false, ind)).join(', ') + ')';\n"
     "    }\n"
+    "    case 'map': return mapFmt(x, true, ind);\n"
+    "    case 'set': return mapFmt(x, false, ind);\n"
     "    case 'range': {\n"
     "      const a = v.getBigInt64(x, true), b = v.getBigInt64(x + 8, true), st = v.getBigInt64(x + 16, true);\n"
     "      if (st === 1n || st === -1n) { return a + '...' + b; }\n"
@@ -3935,6 +4810,7 @@ static const char* JS_HOST =
     "      for (let i = 0; i < n; ++i) { const ft = v.getInt32(sa + 8 + 8 * i, true); if (!eqRaw(ft, slot(a + 8 + 8 * i, ft), slot(b + 8 + 8 * i, ft))) { return false; } }\n"
     "      return true; }\n"
     "    case 'box': { const ia = v.getInt32(a, true), ib = v.getInt32(b, true); return ia === ib && eqRaw(ia, slot(a + 8, ia), slot(b + 8, ib)); }\n"
+    "    case 'map': case 'set': return mapEq(a, b);\n"
     "    default: return a === b;\n"
     "  }\n"
     "}\n"
@@ -3944,6 +4820,8 @@ static const char* JS_HOST =
     "    case 'box': { const id = view().getInt32(x, true); return runtimeName(id, slot(x + 8, id)); }\n"
     "    case 'record': return d.n || 'object';\n"
     "    case 'enum': return d.n;\n"
+    "    case 'map': return 'Map';\n"
+    "    case 'set': return 'Set';\n"
     "    default: return d.k;\n"
     "  }\n"
     "}\n"
@@ -3973,6 +4851,207 @@ static const char* JS_HOST =
     "    (s[0] === '-' || s[0] === '+' || s[0] === ' ' ? s[0] + s.slice(1).padStart(w - 1, '0') : s.padStart(w, '0')) : ' '.repeat(w - n) + s; }\n"
     "  return s;\n"
     "}\n"
+    "// ---- Map / Set: objects of the heap (the collector sees through them), so wasm code can\n"
+    "// hold them like any value. [n][cap][keys][vals][index][icap][kt][vt]: n entries in insertion\n"
+    "// order, their keys and values in 8-byte slots of the types kt / vt (a set: vt -2, no values; -1:\n"
+    "// not known yet, taken from the first call that says), an open-addressing index of entry + 1.\n"
+    "// Keys are hashed and compared here; the natives convert between the stored types and the types of\n"
+    "// the call that uses them.\n"
+    "class Raw { constructor(v) { this.v = v; } }\n"
+    "function mapNew(kt, vt) { const m = inst.exports.alloc(32); const v = view(); v.setInt32(m + 24, kt, true); v.setInt32(m + 28, vt, true); return m; }\n"
+    "function mh(m) { const v = view(); return { n: v.getInt32(m, true), cap: v.getInt32(m + 4, true), keys: v.getInt32(m + 8, true),\n"
+    "  vals: v.getInt32(m + 12, true), index: v.getInt32(m + 16, true), icap: v.getInt32(m + 20, true), kt: v.getInt32(m + 24, true),\n"
+    "  vt: v.getInt32(m + 28, true) }; }\n"
+    "const isColl = (t) => t >= 0 && (T[t].k === 'map' || T[t].k === 'set');\n"
+    "function keyError(t, x) {\n"
+    "  const name = runtimeName(t, x), k = T[t].k;\n"
+    "  const why = k === 'array' || k === 'record' || k === 'map' || k === 'set' ? ' (it can change after it is stored; use a tuple instead)' : '';\n"
+    "  fail(`${/^[aeiou]/i.test(name) ? 'an' : 'a'} ${name} cannot be a map key or set element${why}`);\n"
+    "}\n"
+    "const mix = (h, x) => (Math.imul(h ^ x, 16777619) >>> 0);\n"
+    "function hashRaw(t, x) {\n"
+    "  const d = T[t], v = view();\n"
+    "  switch (d.k) {\n"
+    "    case 'int': return Number(BigInt.asUintN(32, x ^ (x >> 32n)));\n"
+    "    case 'float': { if (Number.isInteger(x) && Math.abs(x) < 2 ** 53) { return hashRaw(TID.int, BigInt(x)); }\n"
+    "      const b = new DataView(new ArrayBuffer(8)); b.setFloat64(0, x); return (b.getUint32(0) ^ b.getUint32(4)) >>> 0; }\n"
+    "    case 'bool': return x;\n"
+    "    case 'string': { let h = 2166136261; const n = v.getUint32(x, true), bs = bytes(); for (let i = 0; i < n; ++i) { h = mix(h, bs[x + 4 + i]); } return h; }\n"
+    "    case 'tuple': return d.e.reduce((h, et, i) => mix(h, hashRaw(et, slot(x + 8 * i, et))), 7);\n"
+    "    case 'enum': { const k = v.getInt32(x, true); return d.v[k][2].reduce((h, pt, i) => mix(h, hashRaw(pt, slot(x + 8 + 8 * i, pt))), k + 1); }\n"
+    "    case 'range': return mix(mix(hashRaw(TID.int, v.getBigInt64(x, true)), hashRaw(TID.int, v.getBigInt64(x + 8, true))), hashRaw(TID.int, v.getBigInt64(x + 16, true)));\n"
+    "    case 'box': { const id = v.getInt32(x, true); return hashRaw(id, slot(x + 8, id)); }\n"
+    "    default: keyError(t, x);\n"
+    "  }\n"
+    "}\n"
+    "// a raw value of type `from` as one of type `to` (unboxed, boxed, int to float, or rebuilt)\n"
+    "function conv(from, to, x) {\n"
+    "  if (from === to || from < 0 || to < 0) { return x; }\n"
+    "  const f = T[from], t = T[to];\n"
+    "  if (f.k === 'box' && t.k !== 'box') { const id = view().getInt32(x, true); return conv(id, to, slot(x + 8, id)); }\n"
+    "  if (t.k === 'box') { if (f.k === 'box') { return x; } const b = inst.exports.alloc(16); view().setInt32(b, from, true); store(b + 8, from, x); return b; }\n"
+    "  if (f.k === 'int' && t.k === 'float') { return Number(x); }\n"
+    "  if (f.k === t.k && f.k !== 'array' && f.k !== 'tuple') { return x; }\n"
+    "  return fromJs(to, toJs(from, x));\n"
+    "}\n"
+    "function mapFind(m, x) {\n"
+    "  const h = mh(m);\n"
+    "  if (!h.icap) { return -1; }\n"
+    "  const v = view();\n"
+    "  for (let i = hashRaw(h.kt, x) & (h.icap - 1); ; i = (i + 1) & (h.icap - 1)) {\n"
+    "    const e = v.getInt32(h.index + 4 * i, true);\n"
+    "    if (e === 0) { return -1; }\n"
+    "    if (eqRaw(h.kt, slot(h.keys + 8 * (e - 1), h.kt), x)) { return e - 1; }\n"
+    "  }\n"
+    "}\n"
+    "// the index again, with room for n entries\n"
+    "function mapReindex(m, n) {\n"
+    "  let h = mh(m);\n"
+    "  if (h.icap < 2 * n || !h.icap) { let c = 8; while (c < 2 * n) { c *= 2; } const ix = inst.exports.alloc(4 * c); const v = view();\n"
+    "    v.setInt32(m + 16, ix, true); v.setInt32(m + 20, c, true); h = mh(m); }\n"
+    "  else { bytes().fill(0, h.index, h.index + 4 * h.icap); }\n"
+    "  const v = view();\n"
+    "  for (let k = 0; k < h.n; ++k) {\n"
+    "    let i = hashRaw(h.kt, slot(h.keys + 8 * k, h.kt)) & (h.icap - 1);\n"
+    "    while (v.getInt32(h.index + 4 * i, true)) { i = (i + 1) & (h.icap - 1); }\n"
+    "    v.setInt32(h.index + 4 * i, k + 1, true);\n"
+    "  }\n"
+    "}\n"
+    "// key and value raw in the map's types (value undefined for a set): true when the key is new\n"
+    "function mapPut(m, k, x) {\n"
+    "  const at = mapFind(m, k);\n"
+    "  let h = mh(m);\n"
+    "  if (at >= 0) { if (h.vt >= 0) { store(h.vals + 8 * at, h.vt, x); } return false; }\n"
+    "  if (h.n === h.cap) {\n"
+    "    const nc = h.cap ? h.cap * 2 : 8, nk = inst.exports.alloc(8 * nc), nv = h.vt === -2 ? 0 : inst.exports.alloc(8 * nc);\n"
+    "    if (h.n) { bytes().copyWithin(nk, h.keys, h.keys + 8 * h.n); if (nv) { bytes().copyWithin(nv, h.vals, h.vals + 8 * h.n); } }\n"
+    "    const v = view(); v.setInt32(m + 4, nc, true); v.setInt32(m + 8, nk, true); v.setInt32(m + 12, nv, true); h = mh(m);\n"
+    "  }\n"
+    "  store(h.keys + 8 * h.n, h.kt, k);\n"
+    "  if (h.vt >= 0) { store(h.vals + 8 * h.n, h.vt, x); }\n"
+    "  view().setInt32(m, h.n + 1, true);\n"
+    "  if (2 * (h.n + 1) > h.icap) { mapReindex(m, h.n + 1); return true; }\n"
+    "  const v = view();\n"
+    "  let i = hashRaw(h.kt, k) & (h.icap - 1);\n"
+    "  while (v.getInt32(h.index + 4 * i, true)) { i = (i + 1) & (h.icap - 1); }\n"
+    "  v.setInt32(h.index + 4 * i, h.n + 1, true);\n"
+    "  return true;\n"
+    "}\n"
+    "function mapRemove(m, k) {\n"
+    "  const at = mapFind(m, k);\n"
+    "  if (at < 0) { return null; }\n"
+    "  const h = mh(m), old = h.vt >= 0 ? slot(h.vals + 8 * at, h.vt) : 0;\n"
+    "  bytes().copyWithin(h.keys + 8 * at, h.keys + 8 * (at + 1), h.keys + 8 * h.n);\n"
+    "  if (h.vt >= 0) { bytes().copyWithin(h.vals + 8 * at, h.vals + 8 * (at + 1), h.vals + 8 * h.n); }\n"
+    "  view().setInt32(m, h.n - 1, true);\n"
+    "  mapReindex(m, h.n - 1);\n"
+    "  return { v: old };\n"
+    "}\n"
+    "// the stored types, taken from a call's types while they are not known\n"
+    "function adopt(m, kt, vt) {\n"
+    "  const v = view();\n"
+    "  if (v.getInt32(m + 24, true) < 0 && kt >= 0) { v.setInt32(m + 24, kt, true); }\n"
+    "  if (v.getInt32(m + 28, true) === -1 && vt >= 0) { v.setInt32(m + 28, vt, true); }\n"
+    "}\n"
+    "function mapArg(self, i) { const m = self.raw[i], d = T[self.ts[i]]; if (d.k === 'map' || d.k === 'set') { adopt(m, d.kt, d.vt); } return m; }\n"
+    "function keyIn(self, m, i) { adopt(m, self.ts[i], -1); return conv(self.ts[i], mh(m).kt, self.raw[i]); }\n"
+    "function valIn(self, m, i) { adopt(m, -1, self.ts[i]); return conv(self.ts[i], mh(m).vt, self.raw[i]); }\n"
+    "// putting a key (and value) of the types kt / vt\n"
+    "function putTyped(m, kt, k, vt, x) { adopt(m, kt, vt); const h = mh(m); return mapPut(m, conv(kt, h.kt, k), h.vt === -2 ? undefined : conv(vt, h.vt, x)); }\n"
+    "function optRaw(t, has, x, xt) {\n"
+    "  const d = T[t], k = variantOf(d, has ? 'some' : 'none'), e = inst.exports.alloc(has ? 16 : 8);\n"
+    "  if (has) { const pt = d.v[k][2][0]; x = conv(xt, pt, x); store(e + 8, pt, x); }\n"
+    "  const v = view(); v.setInt32(e, k, true); v.setInt32(e + 4, has ? 1 : 0, true);\n"
+    "  return new Raw(e);\n"
+    "}\n"
+    "// an array of type t from raw values of type xt (each made by f(i))\n"
+    "function arrRaw(t, n, xt, f) {\n"
+    "  const et = T[t].e, a = inst.exports.alloc(16), data = inst.exports.alloc(8 * Math.max(n, 1));\n"
+    "  const v = view(); v.setInt32(a, n, true); v.setInt32(a + 4, Math.max(n, 1), true); v.setInt32(a + 8, data, true);\n"
+    "  for (let i = 0; i < n; ++i) { store(data + 8 * i, et, conv(xt, et, f(i))); }\n"
+    "  return new Raw(a);\n"
+    "}\n"
+    "// map(from) / set(from): from an array, a map or set, a range, a record\n"
+    "function mapFrom(self, isSet) {\n"
+    "  const d = self.rt >= 0 && isColl(self.rt) ? T[self.rt] : { kt: -1, vt: -1 };\n"
+    "  const m = mapNew(d.kt, isSet ? -2 : d.vt);\n"
+    "  if (!self.ts.length) { return m; }\n"
+    "  const t = self.ts[0], s = T[t], x = self.raw[0];\n"
+    "  const add = (kt, k, vt, val) => putTyped(m, kt, k, vt, val);\n"
+    "  switch (s.k) {\n"
+    "    case 'array': { const { n, data } = rawArr(x);\n"
+    "      for (let i = 0; i < n; ++i) { const it = slot(data + 8 * i, s.e);\n"
+    "        if (isSet) { add(s.e, it, -1, 0); }\n"
+    "        else { const tt = T[s.e]; if (tt.k !== 'tuple' || tt.e.length !== 2) { fail('map(...) takes an array of tuple(key, value) pairs'); }\n"
+    "          add(tt.e[0], slot(it, tt.e[0]), tt.e[1], slot(it + 8, tt.e[1])); } }\n"
+    "      break; }\n"
+    "    case 'map': case 'set': { const h = mh(x); for (let i = 0; i < h.n; ++i) { const k = slot(h.keys + 8 * i, h.kt);\n"
+    "        add(h.kt, k, h.vt, h.vt >= 0 ? slot(h.vals + 8 * i, h.vt) : 0); } break; }\n"
+    "    case 'range': { const v = view(), a = v.getBigInt64(x, true), b = v.getBigInt64(x + 8, true), st = v.getBigInt64(x + 16, true);\n"
+    "      for (let i = a; st > 0n ? i < b : i > b; i += st) { add(TID.int, i, -1, 0); } break; }\n"
+    "    case 'record': { const v = view(), shape = v.getInt32(x, true), n = v.getInt32(shape, true);\n"
+    "      const fts = []; for (let i = 0; i < n; ++i) { fts.push(view().getInt32(shape + 8 + 8 * i, true)); }\n"
+    "      if (fts.some((ft) => ft !== fts[0])) { adopt(m, TID.string, TID.box); }\n"
+    "      for (let i = 0; i < n; ++i) { add(TID.string, newStr(NAMES[view().getInt32(shape + 4 + 8 * i, true)]), fts[i], slot(x + 8 + 8 * i, fts[i])); }\n"
+    "      break; }\n"
+    "    default: fail(`${isSet ? 'set' : 'map'}(...) cannot copy from a ${runtimeName(t, x)}`);\n"
+    "  }\n"
+    "  return m;\n"
+    "}\n"
+    "function setCombine(self, mode) {\n"
+    "  const a = mapArg(self, 0), b = mapArg(self, 1), ha = mh(a), hb = mh(b);\n"
+    "  const d = isColl(self.rt) ? T[self.rt] : { kt: -1 };\n"
+    "  const r = mapNew(d.kt >= 0 ? d.kt : ha.kt, -2);\n"
+    "  for (let i = 0; i < ha.n; ++i) { const k = slot(ha.keys + 8 * i, ha.kt); const inB = mapFind(b, conv(ha.kt, hb.kt, k)) >= 0;\n"
+    "    if (mode === 0 || (mode === 1 && inB) || (mode === 2 && !inB)) { putTyped(r, ha.kt, k, -1, 0); } }\n"
+    "  if (mode === 0) { for (let i = 0; i < hb.n; ++i) { putTyped(r, hb.kt, slot(hb.keys + 8 * i, hb.kt), -1, 0); } }\n"
+    "  return new Raw(r);\n"
+    "}\n"
+    "function mapEq(a, b) {\n"
+    "  const ha = mh(a), hb = mh(b);\n"
+    "  if (ha.n !== hb.n) { return false; }\n"
+    "  for (let i = 0; i < ha.n; ++i) { const at = mapFind(b, conv(ha.kt, hb.kt, slot(ha.keys + 8 * i, ha.kt)));\n"
+    "    if (at < 0) { return false; }\n"
+    "    if (ha.vt >= 0 && !eqRaw(hb.vt, conv(ha.vt, hb.vt, slot(ha.vals + 8 * i, ha.vt)), slot(hb.vals + 8 * at, hb.vt))) { return false; } }\n"
+    "  return true;\n"
+    "}\n"
+    "function mapFmt(x, isMap, ind) {\n"
+    "  const h = mh(x), parts = [];\n"
+    "  for (let i = 0; i < h.n; ++i) { let s = h.kt >= 0 ? fmt(h.kt, slot(h.keys + 8 * i, h.kt), false, ind) : '?';\n"
+    "    if (isMap) { s += ': ' + (h.vt >= 0 ? fmt(h.vt, slot(h.vals + 8 * i, h.vt), false, ind) : '?'); } parts.push(s); }\n"
+    "  return (isMap ? 'Map{' : 'Set{') + parts.join(', ') + '}';\n"
+    "}\n"
+    "function mapCopy(x) { const h = mh(x), r = mapNew(h.kt, h.vt); for (let i = 0; i < h.n; ++i) {\n"
+    "  mapPut(r, slot(h.keys + 8 * i, h.kt), h.vt >= 0 ? slot(h.vals + 8 * i, h.vt) : undefined); } return r; }\n"
+    "function rangeHas(r, x) {\n"
+    "  const v = view(), a = v.getBigInt64(r, true), b = v.getBigInt64(r + 8, true), st = v.getBigInt64(r + 16, true);\n"
+    "  if (typeof x !== 'bigint') { if (!Number.isInteger(x)) { return false; } x = BigInt(x); }\n"
+    "  if (st > 0n ? x < a || x >= b : x > a || x <= b) { return false; }\n"
+    "  return (x - a) %% st === 0n;\n"
+    "}\n"
+    "const COLLECTIONS = {\n"
+    "  std_map_new() { return new Raw(mapFrom(this, false)); },\n"
+    "  std_set_new() { return new Raw(mapFrom(this, true)); },\n"
+    "  std_map_get() { const m = mapArg(this, 0), at = mapFind(m, keyIn(this, m, 1)), h = mh(m);\n"
+    "    return optRaw(this.rt, at >= 0, at >= 0 ? slot(h.vals + 8 * at, h.vt) : 0, h.vt); },\n"
+    "  std_map_put() { const m = mapArg(this, 0); const k = keyIn(this, m, 1); mapPut(m, k, valIn(this, m, 2)); },\n"
+    "  std_map_has() { const m = mapArg(this, 0); return mapFind(m, keyIn(this, m, 1)) >= 0; },\n"
+    "  std_map_remove() { const m = mapArg(this, 0), vt = mh(m).vt, r = mapRemove(m, keyIn(this, m, 1)); return optRaw(this.rt, r !== null, r ? r.v : 0, vt); },\n"
+    "  std_set_remove() { const m = mapArg(this, 0); return mapRemove(m, keyIn(this, m, 1)) !== null; },\n"
+    "  std_set_add() { const m = mapArg(this, 0); return mapPut(m, keyIn(this, m, 1), undefined); },\n"
+    "  std_map_keys() { const m = mapArg(this, 0), h = mh(m); return arrRaw(this.rt, h.n, h.kt, (i) => slot(mh(m).keys + 8 * i, h.kt)); },\n"
+    "  std_map_values() { const m = mapArg(this, 0), h = mh(m); return arrRaw(this.rt, h.n, h.vt, (i) => slot(mh(m).vals + 8 * i, h.vt)); },\n"
+    "  std_map_entries() { const m = mapArg(this, 0), h = mh(m), tt = T[T[this.rt].e];\n"
+    "    return arrRaw(this.rt, h.n, T[this.rt].e, (i) => { const p = inst.exports.alloc(16), c = mh(m);\n"
+    "      store(p, tt.e[0], conv(h.kt, tt.e[0], slot(c.keys + 8 * i, h.kt)));\n"
+    "      store(p + 8, tt.e[1], conv(h.vt, tt.e[1], slot(mh(m).vals + 8 * i, h.vt))); return p; }); },\n"
+    "  std_map_clear() { const m = mapArg(this, 0); view().setInt32(m, 0, true); mapReindex(m, 0); },\n"
+    "  std_set_union() { return setCombine(this, 0); },\n"
+    "  std_set_intersection() { return setCombine(this, 1); },\n"
+    "  std_set_difference() { return setCombine(this, 2); },\n"
+    "  std_in_range(x, r) { return rangeHas(this.raw[1], this.raw[0]); },\n"
+    "  std_range_has(r, x) { return rangeHas(this.raw[0], this.raw[1]); },\n"
+    "};\n"
     "const NATIVES = {\n"
     "  sort(a, cmp) { const c = cmp ? (x, y) => { const r = cmp(x, y); return typeof r === 'boolean' ? (r ? -1 : cmp(y, x) ? 1 : 0) : num(r); } : jsCmp;\n"
     "    return [...a].sort(c); },\n"
@@ -3990,7 +5069,7 @@ static const char* JS_HOST =
     "  concat: (a, b) => typeof a === 'string' ? a + b : [...a, ...b],\n"
     "  slice(a, s, e) { const xs = typeof a === 'string' ? [...a] : a; const n = xs.length; let i = num(s), j = e === undefined ? n : num(e);\n"
     "    if (i < 0) { i += n; } if (j < 0) { j += n; } const r = xs.slice(Math.max(0, i), Math.max(0, j)); return typeof a === 'string' ? r.join('') : r; },\n"
-    "  copy: (a) => Array.isArray(a) ? [...a] : a,\n"
+    "  copy(a) { return isColl(this.ts[0]) ? new Raw(mapCopy(this.raw[0])) : Array.isArray(a) ? [...a] : a; },\n"
     "  repeat: (a, n) => typeof a === 'string' ? a.repeat(num(n)) : Array.from({ length: num(n) }, () => a).flat(),\n"
     "  multiply: (a, n) => NATIVES.repeat(a, n),\n"
     "  pop() { const a = this.raw[0]; const { n, data } = rawArr(a); if (n === 0) { return null; } view().setInt32(a, n - 1, true);\n"
@@ -4016,7 +5095,7 @@ static const char* JS_HOST =
     "  int(s) { const r = NATIVES.parse_int(s); if (r === null) { fail(`cannot convert \"${s}\" to int`); } return r; },\n"
     "  float(s) { const r = NATIVES.parse_float(s); if (r === null) { fail(`cannot convert \"${s}\" to float`); } return r; },\n"
     "  '[]'(s, i) { const cs = [...s]; let k = num(i); if (k < 0) { k += cs.length; } if (k < 0 || k >= cs.length) { fail(`index ${i} out of range (length ${cs.length})`); } return cs[k]; },\n"
-    "  '#'(x) { if (T[this.ts[0]].k === 'range') { const v = view(), a = v.getBigInt64(x, true), b = v.getBigInt64(x + 8, true), s = v.getBigInt64(x + 16, true);\n"
+    "  '#'(x) { if (isColl(this.ts[0])) { return BigInt(mh(this.raw[0]).n); } if (T[this.ts[0]].k === 'range') { const v = view(), a = v.getBigInt64(x, true), b = v.getBigInt64(x + 8, true), s = v.getBigInt64(x + 16, true);\n"
     "      const n = s > 0n ? (b - a + s - 1n) / s : (a - b - s - 1n) / -s; return n > 0n ? n : 0n; }\n"
     "    return BigInt(typeof x === 'string' ? enc.encode(x).length : x.length); },\n"
     "  '=='(a, b) { return eqRaw(this.ts[0], this.raw[0], this.raw[1]); },\n"
@@ -4047,6 +5126,7 @@ static const char* JS_HOST =
     "  math_random: () => Math.random(),\n"
     "  math_random_int: (a, b) => b === undefined ? BigInt(Math.floor(Math.random() * num(a))) : BigInt(num(a) + Math.floor(Math.random() * (num(b) - num(a)))),\n"
     "};\n"
+    "Object.assign(NATIVES, COLLECTIONS);\n"
     "for (const k of ['sqrt', 'pow', 'fround', 'cbrt', 'exp', 'expm1', 'log1p', 'log', 'log2', 'log10', 'sin', 'cos', 'tan', 'asin', 'acos',\n"
     "  'atan', 'atan2', 'sinh', 'cosh', 'tanh', 'asinh', 'acosh', 'atanh']) { NATIVES['math_' + k] = (...a) => Math[k](...a.map(num)); }\n"
     "const env = {\n"
@@ -4086,7 +5166,7 @@ static const char* JS_HOST =
     "    const [key, ts, rt] = SIGS[id];\n"
     "    const raw = ts.map((t, i) => slot(buf + 8 * i, t));\n"
     "    const r = NATIVES[key].call({ raw, ts, rt }, ...raw.map((x, i) => toJs(ts[i], x)));\n"
-    "    if (rt >= 0) { store(buf + 8 * ts.length, rt, fromJs(rt, r)); }\n"
+    "    if (rt >= 0) { store(buf + 8 * ts.length, rt, r instanceof Raw ? r.v : fromJs(rt, r)); }\n"
     "  },\n"
     "};\n"
     "export async function run(output) {\n"
@@ -4163,6 +5243,7 @@ int wasm_compile(VM* vm, Checker* c, const char* base) {
     const int tid_float = type_desc(st_prim(ST_FLOAT));
     const int tid_string = type_desc(st_prim(ST_STRING));
     const int tid_bool = type_desc(st_prim(ST_BOOL));
+    const int tid_box = type_desc(st_prim(ST_UNKNOWN));
     gen.g_exit = new_global(NULL, str_cintern(vm, "\x01exit"), T_I32)->index;
     gen.g_exit_rec = new_global(NULL, str_cintern(vm, "\x01exit_rec"), T_I32)->index;
     gen.g_ret[0] = new_global(NULL, str_cintern(vm, "\x01ret_i32"), T_I32)->index;
@@ -4394,7 +5475,7 @@ int wasm_compile(VM* vm, Checker* c, const char* base) {
     StrBuf js;
     sb_init(&js);
     sb_printf(&js, JS_HOST, name, name, name, gen.typejs.data, names.data, gen.sigjs.data, tid_int, tid_float, tid_string,
-              tid_bool, (int)((data_end + 7) & ~(size_t)7), name, name);
+              tid_bool, tid_box, (int)((data_end + 7) & ~(size_t)7), name, name);
     path.len = 0;
     sb_printf(&path, "%s.mjs", base);
     if (!write_file(path.data, js.data, js.len)) {

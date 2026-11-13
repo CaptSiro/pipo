@@ -22,16 +22,29 @@ with `pp`.
   64-bit, floats are doubles.
 * Strings: `"..."` or `'...'`, escapes `\n \t \r \0 \\ \" \' \xHH \u{1F600}`.
   Strings may span lines.
-* Keywords: `import export global function return const let if else for in while
-  break continue match enum true false`. `type`, `interface`, `impl`,
-  `precedence`, `over`, `under`, `as` and `native` are contextual and can still
-  be used as names.
+* Keywords: `import export global function return yield emit const let if else for in
+  while break continue match enum true false`. `type`, `interface`, `impl`,
+  `precedence`, `over`, `under`, `as`, `native`, `scope` and `generator` are
+  contextual and can still be used as names.
 
 ### Operators are names
 
 Any run of `+ - * / % < > = ! & | ^ ~ # ? @ $ \` and `..` is a symbolic name.
 `=` (assignment) and `->` are reserved. `&&` and `||` are short-circuiting
 and cannot be overloaded.
+
+`.` and `,` are never part of a declared name. `.` is reserved for dot calls
+anywhere in a name: with a function `..`, `x..f()` would read as `x .. f()`, and
+`a.b` already means `b(a)`. `,` separates arguments and elements, so a function
+`,` would make `[1, 2]` ambiguous. `function ..`, `function +..`, `function ,`
+are syntax errors. The ranges `...` and `...=` are built in and keep their dots.
+
+`<` and `>` cannot be declared with **one** parameter: a prefix `<` or `>` does
+not exist. A `<` in operand position is reserved for tag calls
+([TAG_CALLS.md](TAG_CALLS.md)), and `>` is reserved with it so the pair stays
+symmetric. `function <(Money a, Money b) -> bool` (two parameters) is an
+ordinary comparison and stays overloadable; `function <(int x) -> int` is a
+syntax error.
 
 **Decision:** a run of operator characters is split using the operators the
 lexer knows about: built-ins, plus every `function <op>` and
@@ -160,7 +173,7 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `range<int>`, `range<float>` | a range that counts in ints / floats |
 | `T[]`                   | array of T                                   |
 | `tuple<A, B, ...>`      | tuple: exactly these elements, in this order (at least one) |
-| `std:Map<K, V>`, `std:Set<T>` | hash map / set from `lib/std.pp`; bare `std:Map` is any map; made by `std:map(...)` / `std:set(...)` |
+| `Map<K, V>`, `Set<T>` | built-in hash map / set; bare `Map` is any map; made by `map(...)` / `set(...)` |
 | `types:Int8Array` ... `types:Float64Array` | fixed-length typed arrays from `lib/types.pp`, made by `types:int8array(length)` ... (see [PACKAGES.md](PACKAGES.md#the-types-module)) |
 | `T?`                    | `Option<T>`                                  |
 | `A \|\| B`              | union                                        |
@@ -178,9 +191,17 @@ Records are nominal when declared and structural otherwise. See
 ```
 function name(int a, b) -> int { ... }      // b is untyped
 <T>function first(T[] xs) -> T? { ... }     // generic
-const f = function(x) { return x * 2 }      // anonymous / closure
+const f = function(x) -> int { return x * 2 }   // anonymous / closure
 ```
 
+* **Every function states its return type**, `-> void` when it returns
+  nothing. `function f() { }` is a syntax error (`function 'f' needs a return
+  type`). The rule covers named and anonymous functions, declarations,
+  `native` functions, interface requirements and scopes (`scope _s(...) -> T`);
+  generators already name the type of their values. Lambdas (`x -> x * 2`) are
+  exempt: they take their type from where they are used. **Why:** a signature
+  is the contract the checker, the targets and the reader rely on; inferring
+  it from the body hides it, and a typo in a `return` silently changes it.
 * Functions are values and closures. A `function` statement runs where it
   is written: the function exists from that line on (there is no hoisting).
   Names inside a body are looked up when the body runs, so two functions can
@@ -229,7 +250,7 @@ const ToInt cb = f -> int(f)
 const Pair add = (a, b) -> a + b
 const Pair mul = (int a, int b) -> {
     const product = a * b
-    product                          // a block body gives its last expression
+    return product                   // a block body is a function body: it returns
 }
 const ToInt builtin = int            // any function that fits works too
 const ToInt mine = to_int_custom
@@ -282,11 +303,21 @@ while cond { break / continue }
 for i in ...10 { }                // 0..9
 for let i in 10...=1 { }          // 10..1, i mutable
 for i, item in array { }          // index and item
-for key, value in object { }      // also: for key in object
+for key, value in map { }         // a map's entries; for k in map.keys() / for v in map.values()
+for name, value in fields(r) { }  // a record's fields
+for i, ch in "héllo".enumerate() { } // anything else is counted with enumerate()
 for ch in "héllo" { }             // code points
 for i in range(0, 10, 3) { }
 for x in range(0, 1, 0.25) { }    // 0.0 0.25 0.5 0.75
+for x in fib() { }                // a generator, or any type that implements Iterable<T>
 ```
+
+`for` iterates an `Iterable<T>` (see [Generators and iteration](#generators-and-iteration)).
+The form with two variables needs keys: an array or a tuple (index, item), a map
+(key, value), or a `KeyIterable` / a generator of pairs. Over anything else
+(a range, a string, a set) it is an error that suggests `.enumerate()`. A map
+alone (`for x in map`) and a record are errors too: write `map.keys()`,
+`map.values()` or `fields(record)`.
 
 **Decision:** conditions must be `bool`. There is no truthiness.
 
@@ -338,7 +369,8 @@ _times(3) { io:print_nl(scope) }
   `const name = value` (or `let`) passes the value and binds `name` in the
   block.
 * `code()` / `code(value)` runs the block in a fresh scope where `scope` is the
-  value. It returns the block's last expression. To reach the value of an outer
+  value. It returns what the block gives with `yield` (see [Block values](#block-values-yield)),
+  or nothing when the block has no `yield`. To reach the value of an outer
   block from a nested one, store it first: `const outer = scope`.
 * `return`, `break` and `continue` in a `Block` act on the code around the
   scope call, as they would inside an `if`. `lift()` returns from the
@@ -353,7 +385,7 @@ _times(3) { io:print_nl(scope) }
   scope call ended, so it cannot `return`, `break`, `continue` or lift out of
   anything.
 * A scope call is an expression: its value is what the scope function
-  returned (`const x = _twice 3 { scope * 10 }`). Used as a value, its block
+  returned (`const x = _twice 3 { yield scope * 10 }`). Used as a value, its block
   cannot leave early.
 
 ## match
@@ -363,7 +395,7 @@ const label = match value {
     0 -> "zero"
     -1 -> "minus one"
     some(n) if n > 10 -> "big"
-    some(n) -> { const d = n * 2; str(d) }   // block: value of last expression
+    some(n) -> { const d = n * 2; yield str(d) }   // a block arm gives its value with yield
     Color:RED -> "red"
     none -> "nothing"            // a payload-less constructor works without ()
     x -> "anything else: " + str(x)          // a bare name binds
@@ -371,10 +403,108 @@ const label = match value {
 }
 ```
 
-`if` and `match` are expressions. A block's value is its last expression.
+`if` and `match` are expressions. An arm written without braces (`0 -> "zero"`)
+is an expression and gives its value. The block of a match arm gives a value only
+with `yield`; the blocks of an `if` give their last expression, like a ternary
+(`if c { 1 } else { 2 }`).
 Inside a statement-level `match`/`if`, `return`, `break` and `continue` work
 normally. They are an error when the `match`/`if` is used as a value.
 A `match` with no matching arm is a runtime error.
+
+### Block values: `yield`
+
+`yield expr` ends the block of a match arm or a scope call and makes `expr` that
+block's value. It is how such a block gives a value; the last expression of such
+a block is **not** its value. `if` is exempt: its branches give their last
+expression, so `if` stays usable as a ternary.
+
+```
+const parity = if n % 2 == 0 { "even" } else { "odd" }      // an if: no yield
+
+const label = match n {
+    0 -> "zero"                              // an expression arm needs no yield
+    x if x > 5 -> {
+        const big = x * 100
+        yield "big " + str(big)
+    }
+    _ -> "small"
+}
+
+const total = _with 2 {                      // code(2) in _with returns 21
+    let sum = 0
+    for i in ...scope { sum += i + 10 }
+    yield sum
+}
+
+const sign = match n {                       // an if inside an arm is yielded as a whole
+    0 -> 0
+    _ -> { yield if n > 0 { 1 } else { -1 } }
+}
+```
+
+**Decisions:**
+* `yield` must be the **last** statement of the block it is written in, and
+  that block must be the block of a match arm or a scope call. Anywhere else (an
+  `if`, a function or lambda body, a loop body, a plain `{ }`) it is a syntax
+  error. It does not leave the block early and does not reach an outer block:
+  to give a value from a nested `if`, yield the `if` itself.
+* **`if` is exempt** because it is the ternary operator (`if c { a } else { b }`),
+  and because a `yield` inside an `if` inside a loop would have no clear target
+  (the loop has no value to give).
+* A block without `yield` gives nothing. Used as a value, that is a type error
+  which points at the block's last expression when there is one:
+  `this block is used as a value but gives none: write 'yield' before its last expression`.
+* Functions and lambdas return with `return`. A lambda with an expression body
+  (`x -> x * 2`) gives that expression; a lambda with a block body is a
+  function body and needs `return`.
+* `yield` at the end of a statement-level `match` / scope call is allowed; the
+  value is unused.
+* Why a keyword and not the last expression: a value is never produced by
+  accident (a trailing call that happens to return something), the place a
+  block's value comes from is visible when reading, and moving or adding a
+  statement at the end of a block cannot change its value.
+
+## Generators and iteration
+
+A generator function is declared like a function, with `generator` instead of
+`function`; the type after `->` is the type of its values. Calling it builds a
+`Generator<T>` without running anything; `next()` runs the body to its next
+`emit`:
+
+```
+generator fib() -> int {
+    let int a = 0
+    let int b = 1
+    while true {
+        emit b                    // gives b and pauses here
+        const c = a + b
+        a = b
+        b = c
+    }
+}
+
+const Generator<int> f = fib()    // nothing has run yet
+f.next()                          // some(1), then some(1), some(2), ...
+for x in fib().take(10) { }       // a generator is an Iter<int>
+fib().map(x -> x * 2).take(3).to_array()   // [2, 2, 4]: map / filter / take are lazy
+```
+
+* `emit value` gives the next value and pauses. `return` ends the generator
+  (`next()` gives `none()` from then on); `return value` gives a last value and
+  ends it, the same as `emit value` followed by `return`. The end of the body
+  ends it too.
+* `for` iterates any `Iterable<T>`: arrays, ranges, strings, tuples, sets,
+  generators, and types that implement the prelude's interfaces `Iter<T>`
+  (`next(it) -> T?`), `Iterable<T>` (`iter(c) -> Iter<T>`) or `KeyIterable<K, V>`
+  (`pairs(c) -> Iter<tuple<K, V>>`, for `for k, v`). The built-in collections are
+  iterated directly, also when their static type is an interface.
+* A generator keeps one frame: it cannot `emit` or `return` from the block of a
+  scope call, and cannot use `lift()`.
+* Every target runs generators: the interpreter and the bytecode VM pause the
+  body; the wasm target compiles it into a step function that resumes at its
+  last `emit` ([TARGETS.md](TARGETS.md)).
+
+The whole design, with the reasons, is in [ITER.md](ITER.md).
 
 ## Enums
 
@@ -452,12 +582,12 @@ parameters to the interface's:
 
 ```
 <T>type Stack = { T[] items }
-<T>impl std:Index<int, T> for Stack<T>          // indexing a Stack<string> gives strings
-<K, V>impl Index<K, V> for Map<K, V>            // in lib/std.pp
+<T>impl Index<int, T> for Stack<T>          // indexing a Stack<string> gives strings
+<K, V>impl Index<K, V> for Map<K, V>            // built in (the prelude)
 ```
 
 The impl's generics are bound by the value being checked, so a parameter typed
-`std:Index<string, int>` accepts a map whose keys are strings and values ints. A
+`Index<string, int>` accepts a map whose keys are strings and values ints. A
 default implementation copied for a generic impl gets `any` in their place.
 
 **Decisions:**
@@ -529,7 +659,7 @@ xs[1...3]                                  // a slice
 
 * Like a binary operator, `c[a]` also sees the functions of the module that
   declared `c`'s type and the ones `impl` recorded for it, so a type that
-  implements `std:Index` can be indexed in every module.
+  implements `Index` can be indexed in every module.
 * `[]` and `[]=` are names only where a name is expected: after `function`, after
   `.` (`xs.[](0)`, `xs.[]=(0, 9)`), after `:`, and in import / export lists. In
   an expression, `[]` is an empty array, so `[](xs, 0)` calls an array. Write
@@ -538,12 +668,13 @@ xs[1...3]                                  // a slice
 * When no user code declares a `[]` / `[]=` anywhere, indexing a built-in
   collection skips the overload lookup.
 
-### `std:Index`
+### `Index`
 
-`lib/std.pp` declares what indexing means for collections that have keys:
+The prelude declares what indexing means for collections that have keys
+(built in, no import):
 
 ```
-export <K, V>interface Index {
+<K, V>interface Index {
     function get(Index collection, K key) -> V?
     function put(Index collection, K key, V value) -> void
     function [](Index collection, K key) -> V { ... }              // get(key), or an error naming the key
@@ -558,10 +689,10 @@ A type only writes `get` and `put`; `[]` and `[]=` come from the defaults:
 type Board = { int width, string[] cells }
 function get(Board b, tuple<int, int> at) -> string? { ... }
 function put(Board b, tuple<int, int> at, string value) -> void { ... }
-impl std:Index<tuple<int, int>, string> for Board
+impl Index<tuple<int, int>, string> for Board
 
 board[tuple(2, 1)] = "@"
-<K, V>function show(std:Index<K, V> c, K key) -> string { return str(c[key]) }
+<K, V>function show(Index<K, V> c, K key) -> string { return str(c[key]) }
 ```
 
 A missing key is the error `Map has no key "b"`.
@@ -604,41 +735,43 @@ for i, item in entry { ... }
 
 ## Maps and sets
 
-`lib/std.pp` provides two hash containers, written in C:
+Two hash containers are built in (written in C, declared in the prelude; no
+import needed):
 
 ```
-import std
-
-let std:Map<string, int> ages = std:map()
+let Map<string, int> ages = map()
 ages.put("john", 22)
-ages["anna"] = 31                   // the same as put (std:Index)
+ages["anna"] = 31                   // the same as put (Index)
 ages["anna"]                        // 31; a missing key is an error
 ages.get("bob")                    // none(): get returns an Option
 ages.get("bob").unwrap_or(0)       // 0
 ages["anna"] += 1                   // 32
 "john" in ages                      // true, also ages.has("john")
 ages.remove("john")                 // some(22), none() if it was not there
-for name, age in ages { }           // for name in ages: keys only
+for name, age in ages { }           // for name in ages.keys(), for age in ages.values()
 ages.keys(), ages.values()          // arrays, in insertion order
 ages.entries()                      // [tuple("anna", 31)]
 
-const std:Set<int> seen = std:set([1, 2, 2])     // Set{1, 2}
+const Set<int> seen = set([1, 2, 2])     // Set{1, 2}
 seen.add(3)                         // true; false when it was already there
 seen.remove(1)                      // true; false when it was not there
 2 in seen, seen.has(2)
 a | b, a & b, a - b                 // union, intersection, difference (also a.union(b), ...)
 ```
 
-| | `std:Map<K, V>` | `std:Set<T>` |
+| | `Map<K, V>` | `Set<T>` |
 |-|-----------------|--------------|
-| create | `std:map()`, `std:map([tuple(k, v), ...])`, `std:map({ a: 1 })`, `std:map(other)` | `std:set()`, `std:set([...])`, `std:set(0...10)`, `std:set(other)` |
+| create | `map()`, `map([tuple(k, v), ...])`, `map({ a: 1 })`, `map(other)` | `set()`, `set([...])`, `set(0...10)`, `set(other)` |
 | read | `get(m, k) -> V?`, `m[k]`, `has`, `k in m` | `has`, `x in s` |
 | change | `put(m, k, v)`, `m[k] = v`, `remove(m, k) -> V?`, `clear` | `add(s, x) -> bool`, `remove(s, x) -> bool`, `clear` |
-| all | `keys`, `values`, `entries -> tuple<K, V>[]`, `#m`, `for k, v in m` | `values -> T[]`, `#s`, `for x in s`, `for i, x in s` |
+| all | `keys`, `values`, `entries -> tuple<K, V>[]`, `#m`, `for k, v in m` | `values -> T[]`, `#s`, `for x in s`, `for i, x in s.enumerate()` |
 
 **Decisions:**
-* The functions are `global` in `lib/std.pp`, so after `import std` they work in
-  every file, as dot calls and as plain calls (`put(m, k, v)`).
+* `Map`, `Set` and their functions are **built in**, like `Option` and `Error`:
+  they work in every file without an import, as dot calls and as plain calls
+  (`put(m, k, v)`). They used to live in `lib/std.pp`; they moved because the
+  language itself relies on them (a record's rest field is a `Map`, see
+  [TAG_CALLS.md](TAG_CALLS.md)).
 * **Keys must be values that cannot change**: bool, int, float, string, enum
   values and tuples of those. An array, object, map or set as a key is a runtime
   error that suggests a tuple. Keys are compared with `==`, so `1` and `1.0` are
@@ -647,19 +780,19 @@ a | b, a & b, a - b                 // union, intersection, difference (also a.u
   key keeps its place. `==` ignores the order. They print as `Map{"a": 1}` and
   `Set{1, 2}`, and `type_of` gives `"Map"` / `"Set"`.
 * Like arrays, dispatch looks only at the first entry, and a declaration
-  (`const std:Map<string, int> m = ...`) checks them all. A generic `K` is bound
+  (`const Map<string, int> m = ...`) checks them all. A generic `K` is bound
   by the first key, so `m.get(1.0)` and `m[1.0]` on a map of ints find no
   overload, just as `1.0 in [1]` doesn't.
 * Adding or removing entries while a `for` loop walks the same map is allowed,
   but which of the new entries the loop visits is not specified.
-* The types are declared in `lib/std.pp` with `native type Map<K, V>`, so they are
-  written `std:Map<K, V>` (types are PascalCase). A type is not callable:
-  `std:Map()` and `std:Map{}` are errors. Values come from the constructor
-  functions `std:map(...)` and `std:set(...)` (constructors are snake_case or
-  flatcase). Importing `map` by name (`import std -> { map }`) merges it with the
-  built-in `map(array, f)`, like any imported function.
-* Interfaces work as for other types: `impl std:Str for std:Map`,
-  `impl std:Str for tuple<int, int>`. A map implements `std:Index`, which is
+* The types are declared in the prelude with `native type Map<K, V>`, so they are
+  written `Map<K, V>` (types are PascalCase). A type is not callable:
+  `Map()` and `Map{}` are errors. Values come from the constructor
+  functions `map(...)` and `set(...)` (constructors are snake_case or
+  flatcase). `map(...)` with one argument (or none) makes a map; `map(source, f)`
+  with two is the lazy map over an `Iterable`. They are overloads of one name.
+* Interfaces work as for other types: `impl std:Str for Map`,
+  `impl std:Str for tuple<int, int>`. A map implements `Index`, which is
   where `m[k]` and `m[k] = v` come from.
 
 ## Arithmetic

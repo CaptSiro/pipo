@@ -1169,68 +1169,6 @@ static Value n_join(VM* vm, int argc, Value* a) {
     return r;
 }
 
-static Value n_map(VM* vm, int argc, Value* a) {
-    const ObjArray* src = AS_ARRAY(a[0]);
-    ObjArray* out = array_new(vm, src->count);
-    const int base = vm->sp;
-    vm_push(vm, obj_val(out));
-    for (int i = 0; i < src->count; ++i) {
-        vm_push(vm, src->items[i]);
-        const Value r = vm_call(vm, a[1], 1, &vm->stack[vm->sp - 1]);
-        vm->sp--;
-        if (r.kind == VAL_VOID) {
-            rt_error(vm, 0, "map: the function returned no value");
-        }
-
-        array_push(out, r);
-    }
-
-    vm->sp = base;
-
-    return obj_val(out);
-}
-
-static Value n_filter(VM* vm, int argc, Value* a) {
-    const ObjArray* src = AS_ARRAY(a[0]);
-    ObjArray* out = array_new(vm, 0);
-    const int base = vm->sp;
-    vm_push(vm, obj_val(out));
-    for (int i = 0; i < src->count; ++i) {
-        const Value item = src->items[i];
-        vm_push(vm, item);
-        const Value r = vm_call(vm, a[1], 1, &vm->stack[vm->sp - 1]);
-        vm->sp--;
-        if (r.kind != VAL_BOOL) {
-            rt_error(vm, 0, "filter: the function must return a bool, got %s", value_type_name(r));
-        }
-
-        if (r.as.b) {
-            array_push(out, item);
-        }
-    }
-
-    vm->sp = base;
-
-    return obj_val(out);
-}
-
-static Value n_reduce(VM* vm, int argc, Value* a) {
-    const ObjArray* src = AS_ARRAY(a[0]);
-    const int base = vm->sp;
-    vm_push(vm, a[2]); // accumulator
-    for (int i = 0; i < src->count; ++i) {
-        vm_push(vm, src->items[i]);
-        const Value r = vm_call(vm, a[1], 2, &vm->stack[base]);
-        vm->sp = base + 1;
-        vm->stack[base] = r;
-    }
-
-    const Value r = vm->stack[base];
-    vm->sp = base;
-
-    return r;
-}
-
 // ---------------------------------------------------------------- objects
 
 static Value n_keys(VM* vm, int argc, Value* a) {
@@ -1592,9 +1530,6 @@ void builtins_register(VM* vm) {
     def(vm, "sort", "(any[] array)", n_sort);
     def(vm, "sort", "(any[] array, function compare)", n_sort_by);
     def(vm, "join", "(any[] array, string separator) -> string", n_join);
-    def(vm, "map", "(any[] array, function f)", n_map);
-    def(vm, "filter", "(any[] array, function predicate)", n_filter);
-    def(vm, "reduce", "(any[] array, function f, any initial)", n_reduce);
     def(vm, "copy", "(any value)", n_copy);
     def(vm, "tuple", "(any first, ...)", n_tuple);
     {

@@ -10,7 +10,7 @@ io:print_nl(typed, single)
 
 // ---- tuples are values: equality, keys of maps and sets
 io:print_nl(tuple(1, "a") == tuple(1, "a"), tuple(1, 2) == tuple(1, 2, 3), tuple(1.0) == tuple(1))
-const visited = std:set()
+const visited = set()
 visited.add(tuple(0, 0))
 io:print_nl(tuple(0, 0) in visited, tuple(0, 1) in visited, tuple(0.0, 0) in visited)
 

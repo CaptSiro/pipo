@@ -91,7 +91,7 @@ typedef struct {
     CFuncSet* funcs;
     TDecl* tdecl;
     CModule* module;
-    bool pending;          // set to [] / none() / std:map(): the element types come from the first use
+    bool pending;          // set to [] / none() / map(): the element types come from the first use
     NodeInfo* init_info;   // ... and are written back to the initialiser's info
 } CSym;
 
@@ -179,6 +179,10 @@ struct Checker {
     int capreasons;
     TDecl* option;
     TDecl* error;
+    TDecl* generator;      // the prelude's Generator<T>
+    TDecl* iterable;       // ... and its interfaces Iterable<T>, Iter<T>, KeyIterable<K, V>
+    TDecl* iter;
+    TDecl* key_iterable;
     int typed;
     int dyn;
     int next_id;
@@ -215,6 +219,7 @@ typedef struct Ctx {
     bool in_scope_value;  // ... or the block of a scope call used as a value
     SType* scope_value;   // in a scope call's block: the type of `scope`
     bool in_scope_fn;     // directly in a scope function's body: defer is allowed
+    Node* dropped;        // the last block checked ended with this bare expression of a non-void type (no `yield`)
 } Ctx;
 
 // check.c
@@ -232,6 +237,8 @@ SType* subst(SType* t, SBindings* b);
 SType* st_record_fill(Checker* c, SType* t);
 SType* enum_type(Checker* c, TDecl* en, SType** args, int nargs);
 SType* option_of(Checker* c, SType* t);
+SType* generator_of(Checker* c, SType* elem); // Generator<elem>
+bool is_generator(Checker* c, const SType* t);
 SType* variant_payload(Checker* c, SType* en, int variant, int k);
 CModule* load_module(Ctx* x, Node* imp, int line);
 bool cmodule_export(Checker* c, CModule* m, ObjString* name, CSym* out);
@@ -255,7 +262,9 @@ void check_body(Checker* c, CInstance* inst);
 CInstance* instantiate(Ctx* x, CFunc* f, SType** args, int argc, SBindings* b, int line);
 SType* func_value_type(Ctx* x, CFunc* f);
 void declare_function(Ctx* x, Node* n);
-bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got);
+// does got implement iface; args (the interface's type arguments wanted) are fitted against the impl's,
+// which binds the generic parameters in b (NULL: only checked)
+bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got, SBindings* b);
 
 
 

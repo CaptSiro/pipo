@@ -96,7 +96,7 @@ const x = match var {
     10 -> var * 5
     5 -> {
         const doubled = var * 2
-        doubled + 1
+        yield doubled + 1
     }
     _ -> 0
 }
@@ -181,7 +181,7 @@ for p in people {
 function greet(Person p) -> string {
     return "Hello, " + p:name + "!"
 }
-function birthday(Person p) {
+function birthday(Person p) -> void {
     p:age += 1
 }
 
@@ -201,7 +201,7 @@ interface Resource {
 impl Resource for fs:InputStream
 impl Resource for fs:OutputStream
 
-scope _resource(Block<void> code, Resource r) {
+scope _resource(Block<void> code, Resource r) -> void {
     defer { r.close() } // the cleanup: runs when the scope ends, also when the block leaves early
     code()
 }
@@ -228,7 +228,7 @@ io:print(head(tmp, 10))
 tmp.delete()
 
 // the block is called with a value: `scope` (here the thread id of an omp-like parallel for)
-scope _parallel(Block<int> code, int threads) {
+scope _parallel(Block<int> code, int threads) -> void {
     for id in ...threads {
         code(id)
     }
@@ -243,7 +243,7 @@ _parallel 2 {
 }
 
 // `scope` is a plain value, so it can be lifted out of the block
-scope _with(Block<string> code, string value) {
+scope _with(Block<string> code, string value) -> void {
     code(value)
 }
 
@@ -255,7 +255,7 @@ io:print(lifted)
 
 // a Callback outlives the scope call (it cannot return / break / continue out of anything)
 let Callback<string>[] listeners = []
-scope _on(Callback<string> code, string event) {
+scope _on(Callback<string> code, string event) -> void {
     listeners.push(code)
 }
 

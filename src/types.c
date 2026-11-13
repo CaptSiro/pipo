@@ -201,7 +201,7 @@ static int min_score(int a, int b) {
     return a < b ? a : b;
 }
 
-// std:Map<K, V> / std:Set<T> (or bare std:Map, any keys and values). Like an
+// Map<K, V> / Set<T> (or bare Map, any keys and values). Like an
 // array, dispatch looks at the first entry only and a declaration (deep)
 // checks them all: 2 + the weakest element score, 3 when empty.
 static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
@@ -213,8 +213,17 @@ static int match_native(VM* vm, ObjNativeType* nt, Type* t, Value v, ObjEnv* env
         return IS_KIND(v, OBJ_INSTANCE) && AS_INSTANCE(v)->type == nt ? 5 : 0;
     }
 
+    if (nt->which == NT_GENERATOR) {
+        // the values are not made yet: only the kind can be checked
+        if (t->nargs > 1) {
+            rt_error(vm, t->line, "type 'Generator' takes one type argument but %d were given", t->nargs);
+        }
+
+        return IS_KIND(v, OBJ_GENERATOR) ? 4 : 0;
+    }
+
     if (t->nargs && t->nargs != nt->ngenerics) {
-        rt_error(vm, t->line, "type 'std:%s' takes %d type argument(s) but %d were given", nt->name->chars, nt->ngenerics,
+        rt_error(vm, t->line, "type '%s' takes %d type argument(s) but %d were given", nt->name->chars, nt->ngenerics,
                  t->nargs);
     }
 
@@ -627,7 +636,7 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
         }
 
         if (IS_KIND(pv, OBJ_NATIVE_TYPE)) {
-            // Map<K, V> accepts Map<K2, V2> when the arguments do; a bare std:Map accepts any map
+            // Map<K, V> accepts Map<K2, V2> when the arguments do; a bare Map accepts any map
             if (at->kind != TY_NAME || av.as.o != pv.as.o) {
                 return false;
             }
@@ -737,7 +746,7 @@ static Signature* obj_sig(Obj* o) {
 static ObjEnv* obj_env(VM* vm, Obj* o) {
     switch (o->kind) {
         case OBJ_FUNCTION: return ((ObjFunction*)o)->closure;
-        // a `native function` declared in a .pp module names that module's types (std:Map in lib/std.pp)
+        // a `native function` declared in a .pp module names that module's types (Map in lib/std.pp)
         case OBJ_NATIVE: return ((ObjNative*)o)->env ? ((ObjNative*)o)->env : vm->builtins;
         case OBJ_VARIANT_CTOR: return ((ObjVariantCtor*)o)->en->env;
         default: return vm->builtins;
@@ -1155,7 +1164,7 @@ static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv*
 
     for (int i = 0; i < it->nimpls; ++i) {
         Impl* im = &it->impls[i];
-        // <K, V>impl Index<K, V> for std:Map<K, V>: matching the value binds K and V
+        // <K, V>impl Index<K, V> for Map<K, V>: matching the value binds K and V
         Bindings ib;
         impl_bindings(im, &ib);
         Value tv;

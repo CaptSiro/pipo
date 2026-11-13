@@ -29,7 +29,7 @@ io:print_nl(match c {
 })
 
 // attributes use ':'
-const obj = { name: "obj", nested: { value: 5 }, greet: function(string who) { return "hi " + who }, extra: false }
+const obj = { name: "obj", nested: { value: 5 }, greet: function(string who) -> string { return "hi " + who }, extra: false }
 obj:nested:value += 1
 obj["extra"] = true
 io:print_nl(obj:name, obj:nested:value, obj:greet("bob"), obj:extra)

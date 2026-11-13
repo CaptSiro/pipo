@@ -1,0 +1,1 @@
+err_for_record.pp:2: error: cannot iterate over a record (P): use fields(x) to go through its fields

@@ -128,17 +128,8 @@ export function lerp(number a, number b, number t) -> float {
     return float(1 - t) * a + t * b
 }
 
-// where a range ends: a ...= range stores its end one step past the last element
-function end(range r) -> number {
-    if r:inclusive {
-        return r:end - r:step
-    }
-
-    return r:end
-}
-
-export function lerp(range r, number t) -> float {
-    return lerp(r:start, r.end(), t)
+export function lerp(Range r, number t) -> float {
+    return lerp(r:start, r:end, t)
 }
 
 // the inverse of lerp: how far x is from a to b, linear(0, 10, 2.5) is 0.25
@@ -146,8 +137,8 @@ export function linear(number a, number b, number x) -> float {
     return float(x - a) / (b - a)
 }
 
-export function linear(range r, number x) -> float {
-    return linear(r:start, r.end(), x)
+export function linear(Range r, number x) -> float {
+    return linear(r:start, r:end, x)
 }
 
 // value moved from one scale to another: map(5, 0, 10, 0, 100) is 50.0
@@ -155,6 +146,6 @@ export function map(number value, number from_a, number from_b, number to_a, num
     return lerp(to_a, to_b, linear(from_a, from_b, value))
 }
 
-export function map(number value, range from, range to) -> float {
-    return map(value, from:start, from.end(), to:start, to.end())
+export function map(number value, Range from, Range to) -> float {
+    return map(value, from:start, from:end, to:start, to:end)
 }

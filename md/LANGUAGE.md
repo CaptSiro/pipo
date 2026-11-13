@@ -37,7 +37,10 @@ and cannot be overloaded.
 anywhere in a name: with a function `..`, `x..f()` would read as `x .. f()`, and
 `a.b` already means `b(a)`. `,` separates arguments and elements, so a function
 `,` would make `[1, 2]` ambiguous. `function ..`, `function +..`, `function ,`
-are syntax errors. The ranges `...` and `...=` are built in and keep their dots.
+are syntax errors. The ranges `...` and `...=` are the exception: they are
+operators like any other and can be overloaded for your own types
+(`function ...(Day a, Day b) -> Day[]`). Whether `..` can become a name too is
+left open for later.
 
 `<` and `>` cannot be declared with **one** parameter: a prefix `<` or `>` does
 not exist. A `<` in operand position is reserved for tag calls
@@ -169,8 +172,8 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `int float string bool` | primitives                                   |
 | `void`                  | no value (return type only)                  |
 | `unknown` (or `any`)    | any value, boxed with its type; opened with `x as T` ([STATIC_TYPING.md](STATIC_TYPING.md)) |
-| `object range function type` | any record (fields are `unknown`) / range / callable / type |
-| `range<int>`, `range<float>` | a range that counts in ints / floats |
+| `object function type` | any record (fields are `unknown`) / callable / type |
+| `Range<T>`              | an interval of `T`: `Range<int>`, `Range<float>`, `Range<string>`, `Range<Day>`; bare `Range` is any range ([Ranges](#ranges)) |
 | `T[]`                   | array of T                                   |
 | `tuple<A, B, ...>`      | tuple: exactly these elements, in this order (at least one) |
 | `Map<K, V>`, `Set<T>` | built-in hash map / set; bare `Map` is any map; made by `map(...)` / `set(...)` |
@@ -321,13 +324,48 @@ alone (`for x in map`) and a record are errors too: write `map.keys()`,
 
 **Decision:** conditions must be `bool`. There is no truthiness.
 
+### Ranges
+
 `a...b` excludes the end and `a...=b` includes it. Both count down when
-`a > b`. `...n` starts at 0. `...` and `...=` take ints. `range(start, end, step)`
+`a > b`. `...n` starts at 0. With ints they make a `Range<int>`; with a float
+(`0.5...=2.5`) a `Range<float>` that steps by 1.0. `range(start, end, step)`
 takes numbers: all ints give an int range, and any float makes all three
 floats. The k-th element of a float range is `start + k*step`, so rounding
-errors don't add up across the steps. `r:start`, `r:end`, `r:step` and `r:inclusive` read a range's fields. A `...=`
-range stores its end one step past the last element, so `(0...=5):end` is 6 and
-`(0...=5):inclusive` is true.
+errors don't add up across the steps. `r:start`, `r:end`, `r:step` and
+`r:inclusive` read a range's fields; `end` is the end as written, so
+`(0...=5):end` is `5` and `(0...=5):inclusive` is true. Ranges print as written
+(`0...=5`, `"a"...="e"`).
+
+**`Range<T>` of anything else.** `...` and `...=` also make a range of any other
+type: `"a"...="e"` is a `Range<string>`, `mon...=fri` a `Range<Day>`. Such a
+range is an interval: it has `start`, `end` and `inclusive` but no step and no
+length. What else it can do comes from `T`:
+
+| | needs | built in for |
+|-|-------|--------------|
+| `x in r` | `<` and `<=` of `T` (a user type: `impl Comparator`) | numbers, strings |
+| `for x in r` | `impl Iterable<T> for Range<T>` | numbers, strings (code points: `"a"...="e"` is a, b, c, d, e) |
+
+```
+type Day = { int n }
+// ==, <, <= for Day, then:
+impl std:Comparator for Day                   // gives `in`
+
+generator iter(Range<Day> r) -> Day {         // gives `for`
+    for i in r:start:n...r:end:n { emit Day{ n: i } }
+    if r:inclusive { emit r:end }
+}
+
+impl Iterable<Day> for Range<Day>
+```
+
+A string range's bounds must be one code point each to iterate (`"aa"..."c"` is
+an error at the loop). `"cc" in "a"...="e"` is true: `in` compares strings, so
+it asks "between", not "one of". `for` over a range whose type has no
+`Iterable` is a compile error that says what to write. `...` and `...=` are
+operators like any other, so a type can instead return a type of its own
+(`function ...(Date a, Date b) -> DateSpan`); a specific overload wins over the
+generic one. The design is in [RANGE.md](RANGE.md).
 
 `x in y` calls the function `in(x, y)`, which can also be called directly (`in(3, 0...3)`) or passed as a value (`const check = in`). `lib/std.pp` defines it for arrays
 (`2 in [1, 2]`), strings (`"ell" in "hello"`) and ranges (`3 in 0...5`). For
@@ -653,7 +691,7 @@ function [](Matrix m, int row, int col) -> float { return m:cells[row * m:cols +
 function []=(Matrix m, int row, int col, float v) -> void { m:cells[row * m:cols + col] = v }
 mx[1, 0] = 3.0                             // several indices: []=(mx, 1, 0, 3.0)
 
-<T>function [](T[] items, range r) -> T[] { return items.slice(r:start, r:end) }
+<T>function [](T[] items, Range<int> r) -> T[] { return items.slice(r:start, r:end) }
 xs[1...3]                                  // a slice
 ```
 

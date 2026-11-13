@@ -571,7 +571,7 @@ SType* resolve_type(Ctx* x, Type* t, CScope* s, SBindings* gen) {
                     }
 
                     SType* r = st_new(ST_RANGE);
-                    r->elem = st_prim(t->inner->prim == PRIM_FLOAT ? ST_FLOAT : ST_INT);
+                    r->elem = resolve_type(x, t->inner, s, gen);
 
                     return r;
                 }
@@ -645,6 +645,16 @@ SType* subst(SType* t, SBindings* b) {
 
             return t;
         case ST_ARRAY: return st_array(subst(t->elem, b));
+        case ST_RANGE: {
+            if (!t->elem) {
+                return t;
+            }
+
+            SType* r = st_new(ST_RANGE);
+            r->elem = subst(t->elem, b);
+
+            return r;
+        }
         case ST_BLOCK: {
             SType* r = st_new(ST_BLOCK);
             r->variadic = t->variadic;

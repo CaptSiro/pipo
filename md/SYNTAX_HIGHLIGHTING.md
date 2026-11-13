@@ -63,7 +63,7 @@ the IDE. JetBrains caches TextMate bundles.
 | `keyword.control` | `if else for in while break continue return yield emit match defer` |
 | `keyword.other` | `import export global native function const let enum type interface impl precedence over under as`, and `scope` in `scope _name(` |
 | `variable.language` | `scope`, the value inside the block of a scope call |
-| `storage.type` | `int float string bool void any range object number tuple Block Callback` |
+| `storage.type` | `int float string bool void any Range object number tuple Block Callback Generator Map Set` |
 | `entity.name.type` | capitalised names: `Person`, `Error`, `Option` |
 | `entity.name.function` | the name in `function name(` / `function +(` / `scope _name(` |
 | `entity.name.function.call` | `name(`, and every `_name` (a scope call) |

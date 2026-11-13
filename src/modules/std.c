@@ -13,6 +13,10 @@
 // even though 3 * 0.1 is 0.30000000000000004.
 static Value std_range_has(VM* vm, int argc, Value* a) {
     ObjRange* r = AS_RANGE(a[0]);
+    if (!range_is_numeric(r)) {
+        return bool_val(false);
+    }
+
     const Value x = a[1];
     const int64_t len = range_length(r);
     if (len == 0) {
@@ -52,6 +56,10 @@ static Value std_range_has(VM* vm, int argc, Value* a) {
 static Value std_in_range(VM* vm, int argc, Value* a) {
     const Value x = a[0];
     const ObjRange* r = AS_RANGE(a[1]);
+    if (!range_is_numeric(r)) {
+        return bool_val(false);
+    }
+
     const double xf = num_as_double(x);
     if (!isfinite(xf)) {
         return bool_val(false);
@@ -218,8 +226,19 @@ static const NativeImpl STD[] = {
     {NULL, NULL},
 };
 
-// Map and Set are built in: the prelude (src/prelude.c) binds these with `native "..." function`
+// <T>function ...(T start, T end) -> Range<T> / ...=: a range of anything that is not a number
+static Value range_general(VM* vm, int argc, Value* a) {
+    return obj_val(range_new_general(vm, a[0], a[1], false));
+}
+
+static Value range_general_incl(VM* vm, int argc, Value* a) {
+    return obj_val(range_new_general(vm, a[0], a[1], true));
+}
+
+// Map, Set and Range<T> are built in: the prelude (src/prelude.c) binds these with `native "..." function`
 static const NativeImpl PRELUDE_NATIVES[] = {
+    {"range_general", range_general},
+    {"range_general_incl", range_general_incl},
     {"std_map_new", map_new_fn},
     {"std_set_new", set_new_fn},
     {"std_map_get", map_get_fn},

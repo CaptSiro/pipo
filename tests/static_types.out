@@ -1,6 +1,6 @@
 unknown int float array
 int || float int int[][] { int a, string b }
-int? tuple<int, string> range<int> range<float>
+int? tuple<int, string> Range<int> Range<float>
 int 42 string of 3 something else: array
 some(3.0) none() some(3)
 1 3

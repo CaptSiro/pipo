@@ -19,9 +19,9 @@ before yours and defines them. For you they behave exactly like the others.
 | `== !=`     | `(any, any)` deep equality                          |
 | `< > <= >=` | numbers or strings                                  |
 | `!`         | `(bool)`                                            |
-| `#`         | length of a string (bytes), array, object, range, tuple, map or set |
-| `...`       | `(int end)`, `(int start, int end)` exclusive range |
-| `...=`      | `(int end)`, `(int start, int end)` inclusive range |
+| `#`         | length of a string (bytes), array, object, range of numbers, tuple, map or set |
+| `...`       | `(int end)`, `(int start, int end)`, `(number start, number end)` exclusive range; `<T>(T start, T end) -> Range<T>` for anything else |
+| `...=`      | the same, inclusive |
 | `[]`        | `x[i]`: `(any[] array, int index)`, `(string s, int index)`, `(object o, string key)`, tuples |
 | `[]=`       | `x[i] = v`: `(any[] array, int index, any value)`, `(object o, string key, any value)` |
 

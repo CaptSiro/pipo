@@ -302,6 +302,10 @@ static Table* receiver_impl_table(Value recv) {
         return &the_vm->t_set->impl_fns;
     }
 
+    if (IS_KIND(recv, OBJ_RANGE)) {
+        return &the_vm->range_impl_fns;
+    }
+
     if (IS_KIND(recv, OBJ_INSTANCE)) {
         return &AS_INSTANCE(recv)->type->impl_fns;
     }
@@ -1082,18 +1086,22 @@ static Value get_field(VM* vm, Value obj, ObjString* name, int line) {
     }
 
     if (IS_KIND(obj, OBJ_RANGE)) {
-        // read-only view of a range as { number start, number end, number step, bool inclusive }.
-        // For ...= ranges end is one step past the last element (0...=5 has end 6).
+        // read-only view of a range as { T start, T end, T step, bool inclusive }; end is the end as
+        // written (0...=5 ends at 5), and only a range of numbers has a step
         const ObjRange* r = AS_RANGE(obj);
         if (str_equals(name, "start")) {
             return r->start;
         }
 
         if (str_equals(name, "end")) {
-            return r->end;
+            return range_end(r);
         }
 
         if (str_equals(name, "step")) {
+            if (!range_is_numeric(r)) {
+                rt_error(vm, line, "only a range of numbers has a step (this one is a range of %s)", value_type_name(r->start));
+            }
+
             return r->step;
         }
 
@@ -2742,6 +2750,9 @@ static void impl_interface(VM* vm, ObjInterface* it, Type** args, int nargs, Typ
 
     ObjModule* tmod = type_module(tv);
     Table* fns = type_impl_table(tv);
+    if (!fns && target->kind == TY_PRIM && target->prim == PRIM_RANGE) {
+        fns = &vm->range_impl_fns; // impl Iterable<Day> for Range<Day>: one table for every Range<T>
+    }
 
     // The interface name means the implementing type, its generics mean the impl's type arguments.
     // The impl's own generics (<K, V>impl ...) stay unbound: they accept anything, and a default
@@ -3088,7 +3099,7 @@ ObjGenerator* gen_new(VM* vm, GenKind kind, ObjString* name) {
 }
 
 static bool is_builtin_iterable(Value v) {
-    return IS_KIND(v, OBJ_RANGE) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
+    return (IS_KIND(v, OBJ_RANGE) && range_is_numeric(AS_RANGE(v))) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
            IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET) || IS_KIND(v, OBJ_INSTANCE) || IS_KIND(v, OBJ_GENERATOR);
 }
 
@@ -3101,7 +3112,9 @@ static Value for_prepare(VM* vm, Node* n, Value it) {
 
     Table* impls = IS_OBJ(it) ? receiver_impl_table(it) : NULL;
     const bool pairs = n->as.for_.var2 && impls && table_find(impls, str_cintern(vm, "pairs"));
-    const bool iter = impls && (table_find(impls, str_cintern(vm, "iter")) || table_find(impls, str_cintern(vm, "next")));
+    // a Range<T> of non-numbers: through its iter(Range<T>) overload (impl Iterable<T> for Range<T>)
+    const bool iter = IS_KIND(it, OBJ_RANGE) ||
+                      (impls && (table_find(impls, str_cintern(vm, "iter")) || table_find(impls, str_cintern(vm, "next"))));
     if (!pairs && !iter) {
         if (IS_KIND(it, OBJ_OBJECT)) {
             rt_error(vm, n->line, "cannot iterate over a value of type %s: use fields(x) to go through its fields",
@@ -4391,6 +4404,7 @@ VM* vm_new(int argc, char** argv) {
         }
     }
 
+    table_init(&vm->range_impl_fns);
     vm->builtins = env_new(vm, NULL);
     builtins_register(vm);
     // x[i] / x[i] = v: overloads like any other, the built-in collections first

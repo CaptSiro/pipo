@@ -99,7 +99,7 @@ not instantiate, answers with the value's type there.
 | `2 ** -1` was `0.5` | an error; write `2.0 ** -1` |
 | errors were found when the line ran | they are found before the program starts |
 | reading a field of an interface value worked when the value had it | it needs `as` first |
-| `range` | still any range; `range<int>` and `range<float>` say which kind (also checked at runtime) |
+| `Range` | any range; `Range<T>` says what it goes over (`Range<int>`, `Range<string>`, ...; also checked at runtime). Reading the bounds of a bare `Range` gives numbers |
 
 ## Can everything have a type?
 

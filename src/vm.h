@@ -110,6 +110,7 @@ struct VM {
     ObjNativeType* t_map; // Map, Set: bound in lib/std.pp by `native type`
     ObjNativeType* t_set;
     ObjNativeType* t_generator; // Generator<T>: bound in the prelude by `native type`
+    Table range_impl_fns;       // what `impl ... for Range<T>` recorded (iter for Range<Day>, ...)
     ObjNativeType** native_types; // NativeClass types registered by modules (vm_register_native_types), permanent
     int nnative_types;
     Obj* tuple_ctor;      // the built-in tuple(...) function, recognised in patterns

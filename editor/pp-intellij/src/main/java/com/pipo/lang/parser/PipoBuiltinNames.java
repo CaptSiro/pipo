@@ -5,7 +5,7 @@ import java.util.Set;
 /** Names the language itself knows about. */
 public final class PipoBuiltinNames {
     /** primitive type names (prim_from_name in parser.c) */
-    public static final Set<String> PRIMITIVES = Set.of("int", "float", "string", "bool", "void", "range", "object",
+    public static final Set<String> PRIMITIVES = Set.of("int", "float", "string", "bool", "void", "Range", "object",
             "any", "unknown", "type");
 
     /** words that are keywords only in some positions */

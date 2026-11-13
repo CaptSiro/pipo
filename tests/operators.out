@@ -13,7 +13,7 @@ true false true true true true false
 true false true true true true
 true false false false true true
 [ false ][ true ][ true ][ false ]false true false
-0...3 0...4 3...0 3...-1
+0...3 0...=3 3...0 3...=0
 2 3 4 
 2 3 4 5 
 15 12 24 6 2 32

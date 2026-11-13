@@ -5,7 +5,7 @@ import std
 io:print_nl(2 in [1, 2, 3], 4 in [1, 2, 3], 1 in [], "b" in ["a", "b"])
 io:print_nl("ell" in "hello", "x" in "hello", "" in "hello", "hello" in "hell")
 
-// ---- in(number, range): bounds only, the step is ignored
+// ---- in(number, Range): bounds only, the step is ignored
 // exclusive end
 io:print_nl(0 in 0...5, 4 in 0...5, 5 in 0...5, -1 in 0...5, 4.5 in 0...5)
 // inclusive end
@@ -18,7 +18,7 @@ io:print_nl(0.5 in range(1.0, 0.0, -0.25), 0 in range(1.0, 0.0, -0.25), 0 in 0..
 // in binds looser than + and ..., tighter than == and &&
 io:print_nl(1 + 1 in 0...2, 2 in 0...3 == true, !(4 in 0...4) && true)
 
-// ---- has(range, number): is x one of the elements a for loop visits
+// ---- has(Range, number): is x one of the elements a for loop visits
 io:print_nl(has(range(2, 20, 3), 8), has(range(2, 20, 3), 9), has(range(2, 20, 3), 20), has(range(2, 20, 3), 2))
 io:print_nl(has(5...=1, 3), has(5...=1, 1), has(5...=1, 0), has(0...5, 5), has(0...0, 0))
 io:print_nl(has(range(0, 1, 0.25), 0.5), has(range(0, 1, 0.25), 0.6), has(range(0, 1, 0.25), 1))

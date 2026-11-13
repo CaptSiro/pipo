@@ -400,6 +400,10 @@ public final class PipoParser implements PsiParser {
             if (isIdent(0)) {
                 String name = text(0);
                 PsiBuilder.Marker m = mark();
+                if (name.equals("range")) {
+                    error("the range type is written Range: Range<int>, Range<float>, Range<string>, or Range for any range"
+                            + " (range(start, end, step) is the function that makes one)");
+                }
                 if (name.equals("tuple")) {
                     adv();
                     if (op(0, "<") && !nl(0)) {
@@ -677,7 +681,7 @@ public final class PipoParser implements PsiParser {
             IElementType t = at(0);
             if (t == COMMA || t == DOT) {
                 error("'" + text(0) + "' cannot be " + what + ": it is reserved");
-            } else if (t == OP && text(0).contains(".") && !inNative) { // the stubs declare the built-in ... / ...=
+            } else if (t == OP && text(0).contains(".") && !text(0).equals("...") && !text(0).equals("...=")) {
                 error("'" + text(0) + "' cannot be " + what
                         + ": names cannot contain '.', which is reserved for dot calls (x.f())");
             }

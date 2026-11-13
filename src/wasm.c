@@ -406,7 +406,7 @@ static uint8_t valtype(const SType* t, int line, const char* file) {
 // can this target make values of type t (valtype would not fail): what a box can hold
 static bool representable(const SType* t) {
     switch (t->kind) {
-        case ST_RANGE: return !(t->elem && t->elem->kind == ST_FLOAT);
+        case ST_RANGE: return !t->elem || t->elem->kind == ST_INT; // int ranges only, for now
         case ST_INT:
         case ST_FLOAT:
         case ST_BOOL:
@@ -3291,6 +3291,23 @@ static void wexpr(WCtx* w, Node* n) {
         case N_FIELD: {
             const SType* ot = wtype(w, n->as.field.obj);
             if (ot->kind == ST_RANGE) {
+                if (str_equals(n->as.field.name, "end")) {
+                    // the end as written: a ...= range stores it one step further, so end - step * inclusive
+                    const int r = new_local(w, T_I32);
+                    wexpr(w, n->as.field.obj);
+                    op_u(w, W_LOCAL_TEE, (uint64_t)r);
+                    mem(w, W_I64_LOAD, 3, 8);
+                    op_u(w, W_LOCAL_GET, (uint64_t)r);
+                    mem(w, W_I64_LOAD, 3, 16);
+                    op_u(w, W_LOCAL_GET, (uint64_t)r);
+                    mem(w, W_I32_LOAD, 2, 24);
+                    op(w, W_I64_EXTEND_I32_S);
+                    op(w, W_I64_MUL);
+                    op(w, W_I64_SUB);
+
+                    return;
+                }
+
                 static const char* fields[] = {"start", "end", "step"};
                 for (int i = 0; i < 3; ++i) {
                     if (str_equals(n->as.field.name, fields[i])) {

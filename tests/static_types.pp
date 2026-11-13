@@ -46,8 +46,8 @@ let m = map()
 m.put("a", 1)
 io:print_nl(type_of(xs), type_of(m), m["a"] + 1)
 
-// ---- range<int>: a range that counts in ints
-function first_two(range<int> r) -> int[] {
+// ---- Range<int>: a range that counts in ints
+function first_two(Range<int> r) -> int[] {
     return [r:start, r:start + r:step]
 }
 

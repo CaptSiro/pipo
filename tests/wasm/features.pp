@@ -173,3 +173,6 @@ io:print_nl(format("%5.2f|%-4d|%s", 3.14159, 7, "ok"), [1, 2] == [1, 2], tuple(1
 let nums = [3, 1, 2]
 nums[0] += 10
 io:print_nl(nums, nums.pop(), nums, reduce([1, 2, 3], (a, b) -> a + b, 0))
+// a range's end is the end as written: a ...= range stores it one step further
+const incl = 2...=6
+io:print_nl(incl:start, incl:end, incl:step, incl:inclusive, (9...=3):end, (0...4):end)

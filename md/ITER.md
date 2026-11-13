@@ -117,7 +117,7 @@ sum(fib().take(10))     // a generator
 | type | `Iterable<...>` | `KeyIterable<...>` | where |
 |------|-----------------|--------------------|-------|
 | `T[]` | `T` | `int, T` (index, item) | prelude: `iter`, `pairs` are generators |
-| `range<int>` / `range<float>` | `int` / `float` | | prelude |
+| `Range<int>` / `Range<float>` / `Range<string>` | `int` / `float` / `string` | | prelude; any other `Range<T>` through its own `impl Iterable<T> for Range<T>` |
 | `string` | `string` (code points) | | prelude |
 | `Set<T>` | `T` | | the prelude |
 | `Map<K, V>` | | `K, V` | the prelude: `pairs`; keys and values alone through `m.keys()` / `m.values()` |

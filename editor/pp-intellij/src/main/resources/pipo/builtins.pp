@@ -39,8 +39,8 @@ function map(object fields) -> Map
 <K, V>function map(Map<K, V> other) -> Map<K, V>
 function set() -> Set
 <T>function set(T[] items) -> Set<T>
-function set(range<int> items) -> Set<int>
-function set(range<float> items) -> Set<float>
+function set(Range<int> items) -> Set<int>
+function set(Range<float> items) -> Set<float>
 <T>function set(Set<T> other) -> Set<T>
 
 <K, V>function get(Map<K, V> m, K key) -> V?
@@ -78,6 +78,14 @@ interface Length {
     function length(Length collection) -> int
     function #(Length collection) -> int
 }
+
+// ---- Range<T>: an interval of any T (md/RANGE.md). Numbers are built in (0...5, 0.5...=2, range(...));
+// for anything else these make one. `in` needs < and <= of T, `for` needs impl Iterable<T> for Range<T>.
+<T>function ...(T start, T end) -> Range<T>
+<T>function ...=(T start, T end) -> Range<T>
+<T>function in(T x, Range<T> r) -> bool
+// "a"...="e": the code points from start to end
+function iter(Range<string> r) -> Generator<string>
 
 // ---- iteration (md/ITER.md)
 
@@ -163,11 +171,14 @@ native function ||(bool a, bool b) -> bool
 // the length of a string (bytes), array, object, range, tuple, map or set
 native function #(any collection) -> int
 // exclusive range: ...5 is 0, 1, 2, 3, 4; 2...5 is 2, 3, 4
-native function ...(int end) -> range
-native function ...(int start, int end) -> range
+native function ...(int end) -> Range
+native function ...(int start, int end) -> Range
+// with a float: a float range that steps by 1.0
+native function ...(number start, number end) -> Range
 // inclusive range: ...=5 is 0 to 5; 2...=5 is 2 to 5
-native function ...=(int end) -> range
-native function ...=(int start, int end) -> range
+native function ...=(int end) -> Range
+native function ...=(int start, int end) -> Range
+native function ...=(number start, number end) -> Range
 // x[i]: an array item, a byte of a string, an object field, a tuple item
 native function [](any[] array, int index) -> any
 native function [](string s, int index) -> string
@@ -265,7 +276,7 @@ native function clamp(number x, any a, any b) -> any
 // ---- misc
 
 // a range with a custom step; any float makes a float range
-native function range(number start, number end, number step) -> range
+native function range(number start, number end, number step) -> Range
 // aborts with a runtime error
 native function panic(any message) -> void
 native function assert(bool condition) -> void

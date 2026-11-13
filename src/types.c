@@ -355,8 +355,15 @@ int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep) {
     switch (t->kind) {
         case TY_PRIM:
             if (t->prim == PRIM_RANGE && t->inner && IS_KIND(v, OBJ_RANGE)) {
-                // range<int> / range<float>
-                return range_is_float(AS_RANGE(v)) == (t->inner->prim == PRIM_FLOAT) ? 4 : 0;
+                // Range<int> / Range<float> by the kind of number; Range<T> of anything else by its start
+                const ObjRange* r = AS_RANGE(v);
+                const Type* in = t->inner;
+                if (in->kind == TY_PRIM && (in->prim == PRIM_INT || in->prim == PRIM_FLOAT)) {
+                    return range_is_numeric(r) && range_is_float(r) == (in->prim == PRIM_FLOAT) ? 4 : 0;
+                }
+
+                // Range<T> binds T from the start; Range<number>, Range<string>, Range<Day> check it
+                return type_match(vm, t->inner, r->start, env, b, deep) ? 4 : 0;
             }
 
             return prim_match(t->prim, v);
@@ -670,6 +677,17 @@ static bool type_accepts(VM* vm, TRef p, TRef a, bool strict) {
     switch (pt->kind) {
         case TY_PRIM:
             if (at->kind == TY_PRIM) {
+                if (pt->prim == PRIM_RANGE && at->prim == PRIM_RANGE && pt->inner && at->inner) {
+                    // Range<T> accepts Range<U> when T accepts U (and Range<int> is not a Range<float>)
+                    const Type* pi = pt->inner;
+                    const Type* ai = at->inner;
+                    if (pi->kind == TY_PRIM && ai->kind == TY_PRIM) {
+                        return pi->prim == ai->prim;
+                    }
+
+                    return type_accepts(vm, tref(pt->inner, p.env, p.b), tref(at->inner, a.env, a.b), false);
+                }
+
                 return pt->prim == at->prim || (pt->prim == PRIM_FLOAT && at->prim == PRIM_INT);
             }
 
@@ -1203,7 +1221,7 @@ static const char* prim_name(Prim p) {
         case PRIM_STRING: return "string";
         case PRIM_BOOL: return "bool";
         case PRIM_VOID: return "void";
-        case PRIM_RANGE: return "range";
+        case PRIM_RANGE: return "Range";
         case PRIM_FUNCTION: return "function";
         case PRIM_OBJECT: return "object";
         case PRIM_ANY: return "any";
@@ -1224,7 +1242,9 @@ void type_to_string(Type* t, StrBuf* sb) {
         case TY_PRIM:
             sb_puts(sb, prim_name(t->prim));
             if (t->prim == PRIM_RANGE && t->inner) {
-                sb_printf(sb, "<%s>", prim_name(t->inner->prim));
+                sb_putc(sb, '<');
+                type_to_string(t->inner, sb);
+                sb_putc(sb, '>');
             }
 
             break;

@@ -296,7 +296,7 @@ plugin reports the same errors.
 
 | declaration | why |
 |-------------|-----|
-| a name containing `.` (`..`, `+..`) | `.` is a dot call: with a function `..`, `x..f()` would read as `x .. f()` |
+| a name containing `.` (`..`, `+..`), except `...` and `...=` | `.` is a dot call: with a function `..`, `x..f()` would read as `x .. f()`. The ranges stay overloadable |
 | `,` | separates arguments and elements: `[1, 2]` must stay a list |
 | `<` with one parameter | a `<` in operand position starts a tag call |
 | `>` with one parameter | reserved with `<`, so the pair stays symmetric and `>` never needs a second rule |

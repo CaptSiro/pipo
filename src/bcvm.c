@@ -128,7 +128,22 @@ static bool fits(SType* t, Value v) {
         case ST_FLOAT: return v.kind == VAL_FLOAT || v.kind == VAL_INT;
         case ST_BOOL: return v.kind == VAL_BOOL;
         case ST_STRING: return IS_KIND(v, OBJ_STRING);
-        case ST_RANGE: return IS_KIND(v, OBJ_RANGE) && (!t->elem || range_is_float(AS_RANGE(v)) == (t->elem->kind == ST_FLOAT));
+        case ST_RANGE: {
+            if (!IS_KIND(v, OBJ_RANGE)) {
+                return false;
+            }
+
+            const ObjRange* r = AS_RANGE(v);
+            if (!t->elem) {
+                return true;
+            }
+
+            if (t->elem->kind == ST_INT || t->elem->kind == ST_FLOAT) {
+                return range_is_numeric(r) && range_is_float(r) == (t->elem->kind == ST_FLOAT);
+            }
+
+            return !range_is_numeric(r) && fits(t->elem, r->start);
+        }
         case ST_OBJECT: return IS_KIND(v, OBJ_OBJECT);
         case ST_FUNC:
         case ST_FUNCTION: return is_callable(v);
@@ -265,6 +280,11 @@ static bool iter_next(VM* vm, Value* slots, int line, Value* key, Value* item) {
     *key = int_val(idx);
     if (IS_KIND(it, OBJ_RANGE)) {
         ObjRange* r = AS_RANGE(it);
+        if (!range_is_numeric(r)) {
+            rt_error(vm, line, "a range of %s is iterated through Iterable<T>: give the value its type, Range<T>",
+                     value_type_name(r->start));
+        }
+
         if (range_is_float(r)) {
             if (pos >= range_length(r)) {
                 return false;
@@ -1140,7 +1160,7 @@ static Value run(VM* vm, int stop) {
             case OP_JUMP_ITERABLE: {
                 const int target = READ();
                 const Value v = PEEK(0);
-                if (IS_KIND(v, OBJ_RANGE) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
+                if ((IS_KIND(v, OBJ_RANGE) && range_is_numeric(AS_RANGE(v))) || IS_KIND(v, OBJ_ARRAY) || IS_KIND(v, OBJ_STRING) || IS_KIND(v, OBJ_TUPLE) ||
                     IS_KIND(v, OBJ_MAP) || IS_KIND(v, OBJ_SET) || IS_KIND(v, OBJ_INSTANCE) || IS_KIND(v, OBJ_GENERATOR)) {
                     fr->ip = target;
                 }

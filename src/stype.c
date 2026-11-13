@@ -98,7 +98,7 @@ bool st_equal(const SType* a, const SType* b) {
 
     switch (a->kind) {
         case ST_ARRAY: return st_equal(a->elem, b->elem);
-        case ST_RANGE: return (!a->elem && !b->elem) || (a->elem && b->elem && a->elem->kind == b->elem->kind);
+        case ST_RANGE: return (!a->elem && !b->elem) || (a->elem && b->elem && st_equal(a->elem, b->elem));
         case ST_TUPLE:
         case ST_ENUM:
         case ST_NATIVE:
@@ -182,6 +182,7 @@ bool st_is_dyn(const SType* t) {
 
     switch (t->kind) {
         case ST_DYN: return true;
+        case ST_RANGE: return t->elem && st_is_dyn(t->elem);
         case ST_ARRAY:
         case ST_BLOCK: return st_is_dyn(t->elem);
         case ST_FUNC:
@@ -276,9 +277,11 @@ void st_print(const SType* t, StrBuf* sb) {
         case ST_FLOAT: sb_puts(sb, "float"); return;
         case ST_STRING: sb_puts(sb, "string"); return;
         case ST_RANGE:
-            sb_puts(sb, "range");
+            sb_puts(sb, "Range");
             if (t->elem) {
-                sb_printf(sb, "<%s>", t->elem->kind == ST_FLOAT ? "float" : "int");
+                sb_putc(sb, '<');
+                st_print(t->elem, sb);
+                sb_putc(sb, '>');
             }
 
             return;
@@ -457,6 +460,7 @@ bool st_has_param(const SType* t) {
 
     switch (t->kind) {
         case ST_PARAM: return true;
+        case ST_RANGE: return t->elem && st_has_param(t->elem);
         case ST_ARRAY:
         case ST_BLOCK: return st_has_param(t->elem);
         case ST_FUNC:
@@ -595,7 +599,19 @@ int st_fit(SType* want, SType* got, SBindings* b) {
                 return 0;
             }
 
-            return !want->elem || !got->elem || want->elem->kind == got->elem->kind ? 4 : 0;
+            if (!want->elem || !got->elem) {
+                return 4; // a bare Range is any range
+            }
+
+            if (st_is_numeric(want->elem) && st_is_numeric(got->elem)) {
+                return want->elem->kind == got->elem->kind ? 4 : 0; // Range<int> is not a Range<float>
+            }
+
+            {
+                const int s = st_fit(want->elem, got->elem, b);
+
+                return s ? 2 + s : 0;
+            }
         case ST_FLOAT: return got->kind == ST_FLOAT ? 4 : got->kind == ST_INT ? 2 : 0;
         case ST_FUNCTION: return got->kind == ST_FUNC || got->kind == ST_OVERLOAD || got->kind == ST_FUNCTION ? 3 : 0;
         case ST_OBJECT: return got->kind == ST_RECORD || got->kind == ST_OBJECT ? 2 : 0;

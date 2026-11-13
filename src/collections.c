@@ -254,7 +254,7 @@ static void set_add_all(VM* vm, ObjMap* s, Value from, int line) {
                 map_put(s, o->entries[i].key, o->entries[i].hash, void_val());
             }
         }
-    } else if (IS_KIND(from, OBJ_RANGE)) {
+    } else if (IS_KIND(from, OBJ_RANGE) && range_is_numeric(AS_RANGE(from))) {
         ObjRange* r = AS_RANGE(from);
         const int64_t len = range_length(r);
         for (int64_t k = 0; k < len; ++k) {

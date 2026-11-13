@@ -158,8 +158,9 @@ static bool at_fn_name(Parser* p, int at) {
 }
 
 // A name being declared (function, generator, interface requirement, export
-// alias). '.' is reserved for dot calls anywhere in a name: with an operator
-// `..`, `x..f()` would read as `x .. f()`. `...` and `...=` are built in.
+// alias). '.' is reserved for dot calls in a name: with an operator `..`,
+// `x..f()` would read as `x .. f()`. The ranges `...` and `...=` are the
+// exception: they can be overloaded (`..` may be revisited later).
 // ',' separates arguments and elements, so it can never be a name.
 static void check_declared_fn_name(Parser* p, Token* t, const char* what) {
     if (t->kind == T_COMMA || t->kind == T_DOT) {
@@ -167,7 +168,10 @@ static void check_declared_fn_name(Parser* p, Token* t, const char* what) {
              t->kind == T_COMMA ? "',' separates arguments and elements" : "'.' calls a function: x.f()");
     }
 
-    if (t->kind == T_OP && memchr(t->start, '.', (size_t)t->len)) {
+    // the ranges `...` and `...=` are names like any other operator and can be overloaded
+    const bool range_op = t->kind == T_OP && ((t->len == 3 && memcmp(t->start, "...", 3) == 0) ||
+                                              (t->len == 4 && memcmp(t->start, "...=", 4) == 0));
+    if (t->kind == T_OP && !range_op && memchr(t->start, '.', (size_t)t->len)) {
         perr(p, t, "'%.*s' cannot be %s: names cannot contain '.', which is reserved for dot calls (x.f())",
              t->len, t->start, what);
     }
@@ -282,7 +286,7 @@ static bool prim_from_name(const char* s, int len, Prim* out) {
         Prim prim;
     } prims[] = {
         {"int", PRIM_INT},   {"float", PRIM_FLOAT},   {"string", PRIM_STRING}, {"bool", PRIM_BOOL},
-        {"void", PRIM_VOID}, {"range", PRIM_RANGE},   {"object", PRIM_OBJECT}, {"any", PRIM_ANY},
+        {"void", PRIM_VOID}, {"Range", PRIM_RANGE},   {"object", PRIM_OBJECT}, {"any", PRIM_ANY},
         {"type", PRIM_TYPE}, {"unknown", PRIM_ANY}, {NULL, PRIM_ANY},
     };
     for (int i = 0; prims[i].name; ++i) {
@@ -315,20 +319,20 @@ static Type* parse_type_primary(Parser* p) {
             ty->prim = pr;
             Token* n = peek(p);
             if (pr == PRIM_RANGE && n->kind == T_OP && !n->nl_before && n->start[0] == '<') {
-                // range<int>, range<float>: the kind of number the range counts in
+                // Range<int>, Range<string>, Range<Day>: what the range goes from and to
                 eat_op_prefix(p, "<");
                 ty->inner = parse_type(p);
-                const Type* in = ty->inner;
-                if (in->kind != TY_PRIM || (in->prim != PRIM_INT && in->prim != PRIM_FLOAT)) {
-                    perr(p, t, "a range counts in int or float: range<int> or range<float>");
-                }
-
                 if (!eat_op_prefix(p, ">")) {
-                    perr(p, peek(p), "expected '>' to close 'range<'");
+                    perr(p, peek(p), "expected '>' to close 'Range<'");
                 }
             }
 
             return ty;
+        }
+
+        if (t->len == 5 && memcmp(t->start, "range", 5) == 0) {
+            perr(p, t, "the range type is written Range: Range<int>, Range<float>, Range<string>, or Range for any range "
+                       "(range(start, end, step) is the function that makes one)");
         }
 
         if (t->len == 5 && memcmp(t->start, "tuple", 5) == 0) {

@@ -1139,6 +1139,16 @@ static SType* builtin_result(Ctx* x, CFunc* f, SType** a, int argc, CCall* call,
     }
 
     if (strcmp(name, "...") == 0 || strcmp(name, "...=") == 0) {
+        // the built-in numeric ranges: ints count in ints, any float makes a float range
+        bool ints = true;
+        for (int i = 0; i < argc; ++i) {
+            ints = ints && a[i]->kind == ST_INT;
+        }
+
+        if (!ints) {
+            return range_of(ST_FLOAT);
+        }
+
         const bool incl = name[3] == '=';
         call->op = argc == 1 ? (incl ? COP_RANGE_TO_INCL : COP_RANGE_TO) : (incl ? COP_RANGE_INCL : COP_RANGE);
 
@@ -1593,8 +1603,12 @@ static SType* field_of(Ctx* x, Node* n, SType* obj, ObjString* name) {
             cerr(c, n->line, "enum '%s' has no variant '%s'", d->name->chars, name->chars);
         }
         case ST_RANGE:
+            if (is_name(name, "step") && obj->elem && !st_is_numeric(obj->elem)) {
+                cerr(c, n->line, "only a range of numbers has a step; %s has none", tname(obj));
+            }
+
             if (is_name(name, "start") || is_name(name, "end") || is_name(name, "step")) {
-                return obj->elem ? obj->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT));
+                return obj->elem ? obj->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT)); // bare Range: the numeric ranges
             }
 
             if (is_name(name, "inclusive")) {
@@ -3128,7 +3142,26 @@ static SType* iter_types(Ctx* x, Node* n, SType* it, SType** key, bool pairs, bo
                 cerr(c, n->line, count_hint, "range");
             }
 
-            return it->elem ? it->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT));
+            if (!it->elem || st_is_numeric(it->elem)) {
+                return it->elem ? it->elem : st_union(st_prim(ST_INT), st_prim(ST_FLOAT));
+            }
+
+            // a Range<T> of anything else is iterated through impl Iterable<T> for Range<T>
+            if (st_is_dyn(it->elem) || it->elem->kind == ST_PARAM || it->elem->kind == ST_UNKNOWN) {
+                return dyn_type(x, n, "iterating a Range whose element type is not known");
+            }
+
+            *proto = true;
+            {
+                SType** t = iface_args_of(x, c->iterable, it);
+                if (!t) {
+                    cerr(c, n->line, "cannot iterate over %s: it does not implement Iterable<%s> (write "
+                                     "generator iter(%s r) -> %s { ... } and impl Iterable<%s> for %s)",
+                         tname(it), tname(it->elem), tname(it), tname(it->elem), tname(it->elem), tname(it));
+                }
+
+                return t[0];
+            }
         case ST_ARRAY: return it->elem;
         case ST_STRING:
             if (pairs) {

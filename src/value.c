@@ -115,6 +115,28 @@ ObjRange* range_new(VM* vm, Value start, Value end, Value step) {
     return r;
 }
 
+ObjRange* range_new_general(VM* vm, Value start, Value end, bool inclusive) {
+    ObjRange* r = (ObjRange*)alloc_obj(vm, sizeof(ObjRange), OBJ_RANGE);
+    r->start = start;
+    r->end = end;
+    r->step = void_val();
+    r->inclusive = inclusive;
+
+    return r;
+}
+
+Value range_end(const ObjRange* r) {
+    if (!r->inclusive || !range_is_numeric(r)) {
+        return r->end;
+    }
+
+    if (range_is_float(r)) {
+        return float_val(r->end.as.f - r->step.as.f);
+    }
+
+    return int_val(r->end.as.i - r->step.as.i);
+}
+
 Value range_at(ObjRange* r, int64_t k) {
     if (range_is_float(r)) {
         return float_val(r->start.as.f + (double)k * r->step.as.f);
@@ -458,7 +480,8 @@ bool values_equal(Value a, Value b) {
             ObjRange* p = (ObjRange*)x;
             ObjRange* q = (ObjRange*)y;
 
-            return values_equal(p->start, q->start) && values_equal(p->end, q->end) && values_equal(p->step, q->step);
+            return values_equal(p->start, q->start) && values_equal(p->end, q->end) && values_equal(p->step, q->step) &&
+                   (range_is_numeric(p) || p->inclusive == q->inclusive);
         }
         case OBJ_ENUM_VALUE: {
             ObjEnumValue* p = (ObjEnumValue*)x;
@@ -557,7 +580,7 @@ const char* value_type_name(Value v) {
 
             return o->tag ? o->tag->name->chars : "object";
         }
-        case OBJ_RANGE: return "range";
+        case OBJ_RANGE: return "Range";
         case OBJ_CLOSURE:
         case OBJ_FUNCTION:
         case OBJ_NATIVE:
@@ -750,7 +773,17 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
         }
         case OBJ_RANGE: {
             const ObjRange* r = AS_RANGE(v);
-            if (range_is_float(r)) {
+            if (!range_is_numeric(r)) {
+                // "a"...="z": the bounds as they would be written
+                value_format(sb, r->start, false, indent);
+                sb_puts(sb, r->inclusive ? "...=" : "...");
+                value_format(sb, r->end, false, indent);
+            } else if (range_is_float(r) && (r->step.as.f == 1.0 || r->step.as.f == -1.0)) {
+                // 0.5...=2.5: as it was written
+                format_float(sb, r->start.as.f);
+                sb_puts(sb, r->inclusive ? "...=" : "...");
+                format_float(sb, range_end(r).as.f);
+            } else if (range_is_float(r)) {
                 sb_puts(sb, "range(");
                 format_float(sb, r->start.as.f);
                 sb_puts(sb, ", ");
@@ -759,7 +792,7 @@ void value_format(StrBuf* sb, Value v, bool top, int indent) {
                 format_float(sb, r->step.as.f);
                 sb_putc(sb, ')');
             } else if (r->step.as.i == 1 || r->step.as.i == -1) {
-                sb_printf(sb, "%" PRId64 "...%" PRId64, r->start.as.i, r->end.as.i);
+                sb_printf(sb, "%" PRId64 "%s%" PRId64, r->start.as.i, r->inclusive ? "...=" : "...", range_end(r).as.i);
             } else {
                 sb_printf(sb, "range(%" PRId64 ", %" PRId64 ", %" PRId64 ")", r->start.as.i, r->end.as.i, r->step.as.i);
             }

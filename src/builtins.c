@@ -272,6 +272,11 @@ static Value n_len(VM* vm, int argc, Value* a) {
     }
 
     if (IS_KIND(v, OBJ_RANGE)) {
+        if (!range_is_numeric(AS_RANGE(v))) {
+            rt_error(vm, 0, "'#' counts a range of numbers; a range of %s has no length",
+                     value_type_name(AS_RANGE(v)->start));
+        }
+
         return int_val(range_length(AS_RANGE(v)));
     }
 
@@ -300,6 +305,27 @@ static Value make_range(VM* vm, int64_t start, int64_t end, bool inclusive) {
     r->inclusive = inclusive;
 
     return obj_val(r);
+}
+
+// a...b with a float: step 1.0 (or -1.0), all three floats
+static Value make_float_range(VM* vm, double start, double end, bool inclusive) {
+    if (!isfinite(start) || !isfinite(end)) {
+        rt_error(vm, 0, "range start and end must be finite");
+    }
+
+    const double step = start <= end ? 1.0 : -1.0;
+    ObjRange* r = range_new(vm, float_val(start), float_val(inclusive ? end + step : end), float_val(step));
+    r->inclusive = inclusive;
+
+    return obj_val(r);
+}
+
+static Value n_range_num(VM* vm, int argc, Value* a) {
+    return make_float_range(vm, num_as_double(a[0]), num_as_double(a[1]), false);
+}
+
+static Value n_range_num_incl(VM* vm, int argc, Value* a) {
+    return make_float_range(vm, num_as_double(a[0]), num_as_double(a[1]), true);
 }
 
 static Value n_range_to(VM* vm, int argc, Value* a) {
@@ -1487,11 +1513,13 @@ void builtins_register(VM* vm) {
     def(vm, ">=", "(any a, any b) -> bool", n_ge);
     def(vm, "!", "(bool a) -> bool", n_not);
     def(vm, "#", "(any collection) -> int", n_len);
-    def(vm, "...", "(int end) -> range", n_range_to);
-    def(vm, "...", "(int start, int end) -> range", n_range);
-    def(vm, "...=", "(int end) -> range", n_range_to_incl);
-    def(vm, "...=", "(int start, int end) -> range", n_range_incl);
-    def(vm, "range", "(number start, number end, number step) -> range", n_range_step);
+    def(vm, "...", "(int end) -> Range", n_range_to);
+    def(vm, "...", "(int start, int end) -> Range", n_range);
+    def(vm, "...", "(number start, number end) -> Range", n_range_num);
+    def(vm, "...=", "(int end) -> Range", n_range_to_incl);
+    def(vm, "...=", "(int start, int end) -> Range", n_range_incl);
+    def(vm, "...=", "(number start, number end) -> Range", n_range_num_incl);
+    def(vm, "range", "(number start, number end, number step) -> Range", n_range_step);
 
     // printing & input live in the `io` module (src/modules/io.c)
 

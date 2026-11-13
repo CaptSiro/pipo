@@ -36,8 +36,14 @@ static void mark_table(Table* t) {
 
 static void blacken(Obj* o) {
     switch (o->kind) {
+        case OBJ_RANGE: {
+            // numbers hold no references; a Range<T> of other values does
+            const ObjRange* r = (ObjRange*)o;
+            mark_value(r->start);
+            mark_value(r->end);
+            break;
+        }
         case OBJ_STRING:
-        case OBJ_RANGE:
         case OBJ_NATIVE_TYPE:
         case OBJ_INSTANCE: break; // its type is permanent, and instances hold no GC references
         case OBJ_TUPLE: {
@@ -244,6 +250,7 @@ void gc_collect(VM* vm) {
     mark_obj((Obj*)vm->option_enum);
     mark_obj((Obj*)vm->error_enum);
     // Map / Set are permanent (never marked themselves), but what impl recorded on them is not
+    mark_table(&vm->range_impl_fns);
     ObjNativeType* nts[3] = {vm->t_map, vm->t_set, vm->t_generator};
     for (int i = 0; i < 3; ++i) {
         mark_table(&nts[i]->impl_fns);

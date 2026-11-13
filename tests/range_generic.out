@@ -1,0 +1,12 @@
+0...5 0...=5 5 true 5...=1 1
+0.5...=2.5 2.5 6 Range<float> Range<int>
+0.5  1.5  2.5  
+"a"...="e" Range<string> a e true
+abcde
+edcb
+true false true false true
+true false ["a", "b", "c"]
+ABCDEF
+1  2  3  
+true false 3 Range<Day>
+2

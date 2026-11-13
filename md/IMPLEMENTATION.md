@@ -45,7 +45,7 @@ Windows-specific code (UTF-8 console, `_fullpath`, `GetModuleFileNameA`,
 | `src/modules/types.c` | C half of `lib/types.pp`: the typed arrays (`Int8Array` ... `Float64Array`) |
 | `src/modules/math.c` | C half of `lib/math.pp`: rounding, roots, logarithms, trigonometry, random numbers |
 | `src/modules/pp.c` | the native `pp` module: location of the running script |
-| `src/modules/std.c` | C half of `lib/std.pp` (`in(number, range)`, `has(range, number)`), and the bodies of the built-in `Map` / `Set` functions the prelude binds (registered as `<prelude>`) |
+| `src/modules/std.c` | C half of `lib/std.pp` (`in(number, Range)`, `has(Range, number)`), and the bodies of the built-in `Map` / `Set` functions the prelude binds (registered as `<prelude>`) |
 | `src/prelude.c` | prelude written in the language (`number`, `Option`, `Error`, helpers) |
 | `src/main.c` | CLI and REPL |
 | `lib/` | library modules written in the language (`std`, `fs`, `math`, `types`), copied next to `pp` by the build |

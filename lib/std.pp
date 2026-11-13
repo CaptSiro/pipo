@@ -35,10 +35,10 @@ export global function in(string needle, string haystack) -> bool {
 }
 
 // x in r: is x between the range's bounds (0...5 is [0, 5), 5...=1 is [1, 5]); the step is ignored
-export global native "std_in_range" function in(number, range) -> bool
+export global native "std_in_range" function in(number, Range) -> bool
 // a in b: are a's bounds within b's, ends included or not: (1...3) in (0...3) and (0...=2) in (0...3) are
 // true, (0...=3) in (0...3) is not. The direction and the step do not matter; an empty range is in every range.
-export global function in(range inner, range outer) -> bool {
+export global function in(Range inner, Range outer) -> bool {
     if inner.is_empty() {
         return true
     }
@@ -56,41 +56,32 @@ export global function in(range inner, range outer) -> bool {
 }
 
 // ---- a range's bounds as an interval, lowest first: 0...5 is [0, 5), 5...0 is (0, 5], 0...=5 and 5...=0 are [0, 5]
-export function low(range r) -> number {
+export function low(Range r) -> number {
     if r:step > 0 {
         return r:start
     }
 
-    // a ...= range stores its end one step past the last element
-    if r:inclusive {
-        return r:end - r:step
-    }
-
     return r:end
 }
 
-export function high(range r) -> number {
+export function high(Range r) -> number {
     if r:step < 0 {
         return r:start
     }
 
-    if r:inclusive {
-        return r:end - r:step
-    }
-
     return r:end
 }
 
-export function low_included(range r) -> bool {
+export function low_included(Range r) -> bool {
     return r:step > 0 || r:inclusive
 }
 
-export function high_included(range r) -> bool {
+export function high_included(Range r) -> bool {
     return r:step < 0 || r:inclusive
 }
 
 // 0...0 and 5...5 have no elements; 0...=0 has one
-export function is_empty(range r) -> bool {
+export function is_empty(Range r) -> bool {
     if r.low() == r.high() {
         return !(r.low_included() && r.high_included())
     }
@@ -99,5 +90,5 @@ export function is_empty(range r) -> bool {
 }
 
 // has(r, x): is x one of the elements `for v in r` visits
-export global native "std_range_has" function has(range, number) -> bool
+export global native "std_range_has" function has(Range, number) -> bool
 

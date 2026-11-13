@@ -249,6 +249,13 @@ typedef struct {
     bool inclusive; // written with ...= : end was moved one step past the last element
 } ObjRange;
 
+// A Range<T> of anything else ("a"...="z", a range of a user type) is the same object
+// with start and end holding any values, end the real end, and step void: it has no
+// step, no length and is iterated through Iterable<T> (the prelude's iterate()).
+static inline bool range_is_numeric(const ObjRange* r) {
+    return r->start.kind == VAL_INT || r->start.kind == VAL_FLOAT;
+}
+
 static inline bool range_is_float(const ObjRange* r) {
     return r->start.kind == VAL_FLOAT;
 }
@@ -507,6 +514,8 @@ ObjArray* array_new(VM* vm, int cap);
 void array_push(ObjArray* a, Value v);
 ObjObject* object_new(VM* vm);
 ObjRange* range_new(VM* vm, Value start, Value end, Value step); // numbers; a mix becomes floats
+ObjRange* range_new_general(VM* vm, Value start, Value end, bool inclusive); // a Range<T> of non-numbers
+Value range_end(const ObjRange* r); // the end as written: (0...=5) ends at 5, not at the stored 6
 Value range_at(ObjRange* r, int64_t k); // the k-th element
 ObjEnv* env_new(VM* vm, ObjEnv* parent);
 ObjOverload* overload_new(VM* vm, ObjString* name);

@@ -16,7 +16,7 @@ float       = digits '.' digits exponent? | digits exponent
 string      = '"' ... '"' | "'" ... "'"             (escapes \n \t \r \0 \\ \" \' \xHH \u{H+})
 op          = run of  + - * / % < > = ! & | ^ ~ # ? @ $ \   and  ..
               ('=' and '->' are reserved; 'op=' is compound assignment)
-              (a declared name never contains '.' or ','; '...' and '...=' are built in)
+              (a declared name never contains '.' or ',', except the overloadable '...' and '...=')
 keyword     = import export global function return yield emit const let if else for in
               while break continue match enum true false
 contextual  = type interface impl precedence over under as scope generator
@@ -102,7 +102,8 @@ primary_type = prim
             | 'function'
             | '{' (type ident ','?)* '}'                         record
             | '(' type ')'
-prim        = int | float | string | bool | void | any | range | object | type
+prim        = int | float | string | bool | void | any | object | type
+            | 'Range' ('<' type '>')?                            a range; bare Range is any range
 ```
 
 `T?` is sugar for `Option<T>`.

@@ -1450,6 +1450,10 @@ static const char* JS_NATIVES[] = {
 };
 
 static const char* native_key(const CFunc* f) {
+    if (f->extern_lib) {
+        return NULL; // a C library function: a browser has no DLLs, whatever the symbol is called
+    }
+
     const char* key = f->impl_name ? f->impl_name->chars : f->name->chars;
     for (int i = 0; JS_NATIVES[i]; ++i) {
         if (strcmp(JS_NATIVES[i], key) == 0) {
@@ -1594,6 +1598,11 @@ static void native_call(WCtx* w, Node* n, CFunc* f, Node* recv, NodeList* args) 
             bridge(w, n, key, recv, args);
 
             return;
+        }
+
+        if (f->extern_lib) {
+            wfail(n->line, w->file, "the wasm target cannot call extern function '%s': it is in the C library '%s'",
+                  name, f->extern_lib->chars);
         }
 
         wfail(n->line, w->file, "the wasm target cannot call native function '%s' yet", name);

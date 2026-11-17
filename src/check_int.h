@@ -35,6 +35,7 @@ struct CFunc {
     ObjString** extra_generics; // a default copied for a generic impl: the impl's own parameters
     int nextra;
     ObjString* impl_name;       // CF_NATIVE declared in a .pp module: the name of its C body
+    ObjString* extern_lib;      // CF_NATIVE declared `extern "lib"`: impl_name is the C symbol
     CInstance** insts;
     int ninsts;
     int capinsts;

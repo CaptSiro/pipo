@@ -10,7 +10,7 @@ public final class PipoBuiltinNames {
 
     /** words that are keywords only in some positions */
     public static final Set<String> CONTEXTUAL_KEYWORDS = Set.of("type", "interface", "impl", "precedence", "over",
-            "under", "as", "native", "scope", "defer");
+            "under", "as", "native", "extern", "scope", "defer");
 
     private PipoBuiltinNames() {
     }

@@ -285,6 +285,19 @@ like Java does: `exists()` is false, `size()` is 0 and `delete()` is false.
 Close streams when done. One that is dropped without `close()` is only closed
 when the garbage collector frees it, which may be much later.
 
+## The `c` module
+
+The C types of `extern` functions ([EXTERN.md](EXTERN.md)): `i8`, `u8`, `i16`,
+`u16`, `i32`, `u32`, `i64`, `u64` (aliases of `int`), `f32`, `f64` (aliases of
+`float`) and `ptr` (an address in an `int`, 0 is NULL). To the program they are
+plain ints and floats; an `extern` declaration reads the name to know the width
+C expects.
+
+```
+import c
+extern "glfw3" function glfwWindowShouldClose(c:ptr window) -> c:i32
+```
+
 ## The `pp` module
 
 Where the running code lives, like PHP's `__FILE__`, `__DIR__` and `__LINE__`:

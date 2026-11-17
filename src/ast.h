@@ -167,7 +167,8 @@ struct Node {
         } chain;
         // S_FUNCDECL without a body is a declaration (`function a(int) -> float`);
         // decl: on a definition, the signature of the declaration it fulfils
-        struct { Signature* sig; Node* body; bool global; bool lambda; Signature* decl; ObjString* native; } func;
+        // native: the C body's name (for extern, the C symbol); lib: `extern "lib"`, else NULL
+        struct { Signature* sig; Node* body; bool global; bool lambda; Signature* decl; ObjString* native; ObjString* lib; } func;
         struct { Node* cond; Pattern* pat; bool pat_mut; Node* then_b; Node* else_b; } if_;
         struct { Node* subject; MatchArm* arms; int narms; } match;
         struct { NodeList stmts; bool scoped; } block;

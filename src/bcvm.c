@@ -760,7 +760,8 @@ static Value run(VM* vm, int stop) {
                 tf->line = line;
                 const int saved_line = vm->cur_line;
                 vm->cur_line = line;
-                const Value r = nf->fn(vm, argc, &vm->stack[vm->sp - argc]);
+                const Value r = nf->ext ? extern_call(vm, nf->ext, argc, &vm->stack[vm->sp - argc])
+                                        : nf->fn(vm, argc, &vm->stack[vm->sp - argc]);
                 vm->cur_line = saved_line;
                 vm->fp--;
                 vm->sp -= argc;
@@ -1059,7 +1060,7 @@ static Value run(VM* vm, int stop) {
                 tf->name = nf->name;
                 tf->file = vm->cur_file;
                 tf->line = line;
-                const Value r = nf->fn(vm, argc, args);
+                const Value r = nf->ext ? extern_call(vm, nf->ext, argc, args) : nf->fn(vm, argc, args);
                 vm->fp--;
                 vm->sp -= argc;
                 PUSH(r);

@@ -25,7 +25,7 @@ public final class PipoFunctionDecl extends PipoNamedElement {
     }
 
     public boolean isNative() {
-        return child(PipoTokenTypes.NATIVE_KW) != null;
+        return child(PipoTokenTypes.NATIVE_KW) != null || child(PipoTokenTypes.EXTERN_KW) != null;
     }
 
     /** scope _name(Block<T> code, ...) { ... }: called as `_name args { ... }` */

@@ -65,6 +65,7 @@ public final class PipoParser implements PsiParser {
         private boolean noLambda; // parsing a match pattern / guard
         private boolean inPattern;
         private boolean inNative;
+        private boolean inExtern;
         private boolean sawLoneParamName;
         private int scopeBlocks;        // nesting inside the blocks of scope calls: `scope` is their value
         private boolean inScopeBody;    // directly in the body of a scope declaration, where `defer` is allowed
@@ -784,7 +785,8 @@ public final class PipoParser implements PsiParser {
             }
 
             if (inNative && is(LBRACE)) {
-                error("a native function cannot have a body: its implementation is written in C");
+                error(inExtern ? "an extern function cannot have a body: it is a function of a C library"
+                        : "a native function cannot have a body: its implementation is written in C");
             }
 
             if (statement && named && !is(LBRACE)) {
@@ -1959,6 +1961,9 @@ public final class PipoParser implements PsiParser {
 
         /* `native` is contextual: native function f(...), native "impl" function f(...), native type T */
         private boolean atNative() {
+            if (word(0, "extern")) {
+                return !nl(1) && at(1) == STRING; // extern "lib" function f(...), extern "lib" "symbol" function f(...)
+            }
             if (!word(0, "native") || nl(1)) {
                 return false;
             }
@@ -1970,6 +1975,10 @@ public final class PipoParser implements PsiParser {
         }
 
         private void parseNative(PsiBuilder.Marker m) {
+            if (word(0, "extern")) {
+                parseExtern(m);
+                return;
+            }
             advAs(NATIVE_KW);
             if (blockDepth > 0) {
                 error("'native' is only allowed at the top level of a file");
@@ -2001,6 +2010,28 @@ public final class PipoParser implements PsiParser {
             inNative = true;
             parseFunction(m, true);
             inNative = false;
+        }
+
+        /* extern "glfw3" function glfwInit() -> c:i32: a C function of a DLL, without a body */
+        private void parseExtern(PsiBuilder.Marker m) {
+            advAs(EXTERN_KW);
+            if (blockDepth > 0) {
+                error("'extern' is only allowed at the top level of a file");
+            }
+            adv(); // the library name, a string (atNative checked it)
+            if (is(STRING)) {
+                adv(); // the C symbol
+            }
+            if (!is(FUNCTION) || !atFnName(1)) {
+                m.done(FUNCTION_DECL);
+                skipToLineEnd("expected a named function declaration after 'extern' but found " + desc(0));
+                return;
+            }
+            inNative = true;
+            inExtern = true;
+            parseFunction(m, true);
+            inNative = false;
+            inExtern = false;
         }
 
         private void parseImpl(PsiBuilder.Marker m) {

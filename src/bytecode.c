@@ -256,8 +256,8 @@ static int add_string(BcProgram* prog, const char* s) {
     return add_const(prog, obj_val(str_cintern(prog->vm, s)));
 }
 
-static int add_native(BcProgram* prog, NativeFn fn, const char* name) {
-    for (int i = 0; i < prog->nnatives; ++i) {
+static int add_native_ext(BcProgram* prog, NativeFn fn, const char* name, Extern* ext) {
+    for (int i = 0; i < prog->nnatives && !ext; ++i) {
         if (prog->natives[i].fn == fn) {
             return i;
         }
@@ -266,8 +266,13 @@ static int add_native(BcProgram* prog, NativeFn fn, const char* name) {
     GROW(prog->natives, prog->nnatives, prog->capnatives);
     prog->natives[prog->nnatives].fn = fn;
     prog->natives[prog->nnatives].name = name;
+    prog->natives[prog->nnatives].ext = ext;
 
     return prog->nnatives++;
+}
+
+static int add_native(BcProgram* prog, NativeFn fn, const char* name) {
+    return add_native_ext(prog, fn, name, NULL);
 }
 
 static int add_type(BcProgram* prog, SType* t) {
@@ -440,6 +445,17 @@ static int typedef_index(BcProgram* prog, TDecl* d) {
 
 // the C body of a function: a builtin / native module's, or a library module's `native function`
 static int native_of(Comp* c, CFunc* f, int line) {
+    if (f->extern_lib) {
+        // one entry per declaration and instance: each has its own Extern (library handle, symbol)
+        char err[512];
+        Extern* e = extern_new(f->sig, f->extern_lib->chars, f->impl_name->chars, err, sizeof err);
+        if (!e) {
+            fail(c, line, "%s", err);
+        }
+
+        return add_native_ext(c->prog, extern_native, f->name->chars, e);
+    }
+
     if (f->native) {
         return add_native(c->prog, f->native->fn, f->native->sig->name->chars);
     }

@@ -773,7 +773,7 @@ static Value call_declared_native(VM* vm, ObjNative* nf, int argc, Value* args, 
         }
     }
 
-    Value r = nf->fn(vm, argc, av);
+    Value r = nf->ext ? extern_call(vm, nf->ext, argc, av) : nf->fn(vm, argc, av);
     if (av != args && av != small) {
         free(av);
     }
@@ -2152,6 +2152,29 @@ static ExecStatus exec_branchy(VM* vm, Node* n, ObjEnv* env, Value* out) {
 static void exec_native_decl(VM* vm, Node* n, ObjEnv* env) {
     Signature* sig = n->as.func.sig;
     ObjString* impl = n->as.func.native;
+    if (n->as.func.lib) {
+        // extern "lib" function f(...): a C function of a DLL, loaded on the first call
+        char err[512];
+        Extern* e = extern_new(sig, n->as.func.lib->chars, impl->chars, err, sizeof err);
+        if (!e) {
+            rt_error(vm, n->line, "%s", err);
+        }
+
+        ObjNative* nf = native_new(vm, sig, extern_native);
+        nf->env = env;
+        nf->ext = e;
+        const int base = vm->sp;
+        vm_push(vm, obj_val(nf));
+        env_add_function(vm, env, sig->name, (Obj*)nf);
+        if (n->as.func.global) {
+            global_add(vm, sig->name, (Obj*)nf);
+        }
+
+        vm->sp = base;
+
+        return;
+    }
+
     ObjModule* m = vm->cur_module;
     const NativeImpl* natives = m ? m->natives : NULL;
     if (!m && env == vm->builtins) {

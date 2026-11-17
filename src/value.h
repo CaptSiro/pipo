@@ -15,6 +15,7 @@ typedef struct ObjVariantCtor ObjVariantCtor;
 typedef struct ObjInterface ObjInterface;
 typedef struct Type Type;
 typedef struct Node Node;
+typedef struct Extern Extern; // extern.c: a C function of a DLL / shared library
 
 // ------------------------------------------------------------------ values
 
@@ -389,6 +390,7 @@ typedef struct {
     NativeFn fn;
     ObjEnv* env; // scope its signature's types are resolved in; NULL = builtins.
                  // Set for `native function` declared in a .pp module.
+    Extern* ext; // `extern "lib" function`: called through extern_call instead of fn
 } ObjNative;
 
 typedef struct {

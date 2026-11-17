@@ -151,6 +151,7 @@ typedef struct BcFunc {
 typedef struct {
     NativeFn fn;
     const char* name;
+    Extern* ext; // an extern function: called through extern_call
 } BcNative;
 
 // one candidate of a dynamic dispatch: a compiled function or a native, with its parameter types

@@ -982,6 +982,20 @@ export native "vec_scale" function scale(Vec, float) -> Vec
 
 See [PACKAGES.md](PACKAGES.md#mixed-modules-pp--c) for the C side.
 
+Any file can call a function of a DLL / shared library with `extern`: the
+library, optionally the C symbol, then a declaration without a body. The `c`
+module's aliases (`c:i32`, `c:u32`, `c:f32`, `c:ptr`, ...) give the C widths;
+the library is loaded on the first call, from the declaring file's folder or the
+system's search path:
+
+```
+import c
+extern "glfw3" function glfwInit() -> c:i32
+extern "opengl32" "glClearColor" function clear_color(c:f32 r, c:f32 g, c:f32 b, c:f32 a) -> void
+```
+
+See [EXTERN.md](EXTERN.md) for the types, the loading rules and the limits.
+
 See [PACKAGES.md](PACKAGES.md) for lookup rules and the `io` module.
 
 ## Errors

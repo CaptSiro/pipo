@@ -257,6 +257,13 @@ typedef struct {
 bool is_typed_array(Value v);
 ObjTypedArray* typed_array_new(VM* vm, TypedArrayKind kind, int64_t length);
 
+// extern.c: `extern "lib" function f(...) -> T`, a C function of a DLL / shared library (md/EXTERN.md).
+// extern_new reads the C types from the signature (NULL and a message in err when C has none);
+// the library is loaded on the first extern_call.
+Extern* extern_new(Signature* sig, const char* lib, const char* symbol, char* err, size_t errn);
+Value extern_call(VM* vm, Extern* e, int argc, Value* args);
+Value extern_native(VM* vm, int argc, Value* args); // the NativeFn of extern ObjNatives; never called
+
 // modules/pp.c: directory of the file the running code is written in (caller frees)
 char* vm_script_dir(VM* vm);
 extern const char* PP_PRELUDE;

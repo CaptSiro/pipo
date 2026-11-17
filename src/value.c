@@ -218,6 +218,7 @@ ObjNative* native_new(VM* vm, Signature* sig, NativeFn fn) {
     n->sig = sig;
     n->fn = fn;
     n->env = NULL;
+    n->ext = NULL;
 
     return n;
 }

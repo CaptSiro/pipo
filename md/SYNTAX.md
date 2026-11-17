@@ -89,6 +89,7 @@ variant     = ident ('(' (type (',' type)*)? ')')? ('=' expression)?
 precedence  = 'precedence' name ('over' | 'under' | 'as') name
 native      = 'native' string? generics? 'function' name '(' ... ')' '->' type     body in C, library modules and the prelude
             | 'native' 'type' ident generics?                                    a type implemented in C (map, set)
+            | 'extern' string string? 'function' name '(' ... ')' '->' type      a C function of a DLL (EXTERN.md)
 ```
 
 ### Types

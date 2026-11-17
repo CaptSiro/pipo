@@ -2894,7 +2894,15 @@ void declare_function(Ctx* x, Node* n) {
         }
     }
 
-    if (n->as.func.native) {
+    if (n->as.func.lib) {
+        char err[512];
+        Extern* e = extern_new(sig, n->as.func.lib->chars, n->as.func.native->chars, err, sizeof err);
+        if (!e) {
+            cerr(c, n->line, "%s", err);
+        }
+
+        free(e); // the targets make their own: each keeps its library handle
+    } else if (n->as.func.native) {
         const char* lib = module_lib_path(x->module);
         const NativeImpl* impls = lib ? vm_native_impls(c->vm, lib) : NULL;
         if (!impls) {
@@ -2917,6 +2925,7 @@ void declare_function(Ctx* x, Node* n) {
 
     CFunc* f = func_new(c, n->as.func.native ? CF_NATIVE : CF_USER, name, sig, x->scope);
     f->impl_name = n->as.func.native;
+    f->extern_lib = n->as.func.lib;
     if (x->inst) {
         info_put(x->inst, n)->call.func = f;
     }

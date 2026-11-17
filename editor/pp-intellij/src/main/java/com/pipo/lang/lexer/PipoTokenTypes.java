@@ -73,6 +73,8 @@ public interface PipoTokenTypes {
     IElementType UNDER_KW = new PipoTokenType("under");
     IElementType AS_KW = new PipoTokenType("as");
     IElementType NATIVE_KW = new PipoTokenType("native");
+    /** `extern "lib" function f(...)`: a C function of a DLL / shared library */
+    IElementType EXTERN_KW = new PipoTokenType("extern");
     /** `scope _name(...)`, and `scope` as the value inside the block of a scope call */
     IElementType SCOPE_KW = new PipoTokenType("scope");
     IElementType GENERATOR_KW = new PipoTokenType("generator");
@@ -93,7 +95,7 @@ public interface PipoTokenTypes {
     TokenSet HARD_KEYWORDS = TokenSet.create(IMPORT, FUNCTION, RETURN, YIELD, EMIT, CONST, LET, IF, ELSE, FOR, IN, WHILE, BREAK,
             CONTINUE, MATCH, ENUM, EXPORT, GLOBAL, TRUE, FALSE);
     TokenSet SOFT_KEYWORDS = TokenSet.create(TYPE_KW, INTERFACE_KW, IMPL_KW, PRECEDENCE_KW, OVER_KW, UNDER_KW, AS_KW,
-            NATIVE_KW, SCOPE_KW, GENERATOR_KW, DEFER_KW);
+            NATIVE_KW, EXTERN_KW, SCOPE_KW, GENERATOR_KW, DEFER_KW);
     TokenSet KEYWORDS_SET = TokenSet.orSet(HARD_KEYWORDS, SOFT_KEYWORDS);
 
     TokenSet OPERATORS = TokenSet.create(OP, ASSIGN, COMPOUND, ARROW);

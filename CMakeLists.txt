@@ -33,7 +33,7 @@ else ()
         target_compile_definitions(pp PRIVATE __USE_MINGW_ANSI_STDIO=1)
         target_link_options(pp PRIVATE -Wl,--stack,67108864 -static)
     endif ()
-    target_link_libraries(pp m)
+    target_link_libraries(pp m ${CMAKE_DL_LIBS}) # dlopen for extern functions (empty on Windows)
 endif ()
 
 # packages that ship with the interpreter live in lib/ next to the executable.

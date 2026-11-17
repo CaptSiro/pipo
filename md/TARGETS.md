@@ -170,7 +170,7 @@ is expected (`MenuOption[]` as `View[]`, `int[]` as `float[]`) is **copied**
 with its elements converted, so the callee's changes to it are not seen by the
 caller.
 
-Not yet: `object` (open records), typed arrays, float ranges, `Range<T>` of non-numbers,
+Not yet: `extern` functions (a browser has no DLLs), `object` (open records), typed arrays, float ranges, `Range<T>` of non-numbers,
 natives and overloaded names used as function values (`reduce(xs, +, 0)`),
 `fields()` (a generator the host would have to run), the `os` / `fs` / `pp`
 modules (there is no file system in a browser; node could have one). Each is

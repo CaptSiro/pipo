@@ -17,6 +17,7 @@ typedef struct {
     int block_depth; // 0 = top level of the file
     bool no_lambda;  // parsing a match pattern / guard, where `x -> ...` starts the arm body
     bool in_native;  // parsing the declaration after `native` (it must not have a body)
+    bool in_extern;  // ... after `extern "lib"`
     int lift_uses;   // `lift` identifiers seen so far: a body that adds to it marks its Signature.uses_lift
     int scope_blocks;   // nesting inside the blocks of scope calls: `scope` names the value of the innermost one
     bool in_scope_body; // directly in the body of a scope declaration, where `defer` is allowed
@@ -806,7 +807,9 @@ static Node* parse_function(Parser* p, ObjString** generics, int ngenerics, bool
     }
 
     if (p->in_native && check(p, T_LBRACE)) {
-        perr(p, peek(p), "native function '%s' cannot have a body: its implementation is written in C", sig->name->chars);
+        perr(p, peek(p), p->in_extern ? "extern function '%s' cannot have a body: it is a function of a C library"
+                                      : "native function '%s' cannot have a body: its implementation is written in C",
+             sig->name->chars);
     }
 
     if (statement && named && !check(p, T_LBRACE)) {
@@ -2438,8 +2441,15 @@ static bool at_impl(Parser* p) {
 }
 
 // `native` is contextual: native function f(...), native "impl" function f(...), native <T>function f(...)
+// so is `extern`: extern "lib" function f(...), extern "lib" "symbol" function f(...)
 static bool at_native(Parser* p) {
     Token* t = peek(p);
+    if (tok_is(t, T_IDENT, "extern")) {
+        const Token* a = peek_at(p, 1);
+
+        return !a->nl_before && a->kind == T_STRING;
+    }
+
     if (!tok_is(t, T_IDENT, "native")) {
         return false;
     }
@@ -2477,6 +2487,49 @@ static Node* parse_native_type(Parser* p, Token* kw) {
     return n;
 }
 
+// extern "glfw3" function glfwInit() -> c:i32
+// extern "glfw3" "glfwCreateWindow" function create_window(c:i32 w, c:i32 h, string title, c:ptr m, c:ptr s) -> c:ptr
+//
+// A function of a DLL / shared library (md/EXTERN.md). The first string names the library, the
+// optional second one the C symbol (the function's own name when left out). Like `native`, it has
+// no body; unlike `native`, it may be declared in any file.
+static Node* parse_extern(Parser* p) {
+    Token* kw = advance(p);
+    if (p->block_depth > 0) {
+        perr(p, kw, "'extern' is only allowed at the top level of a file");
+    }
+
+    Token* lib = expect(p, T_STRING, "library name after 'extern'");
+    if (lib->slen == 0) {
+        perr(p, lib, "empty library name");
+    }
+
+    ObjString* symbol = NULL;
+    if (check(p, T_STRING)) {
+        Token* s = advance(p);
+        if (s->slen == 0) {
+            perr(p, s, "empty C function name");
+        }
+
+        symbol = str_intern(p->vm, s->sval, s->slen);
+    }
+
+    if (!check(p, T_FUNCTION) || !at_fn_name(p, 1)) {
+        perr(p, peek(p), "expected a named function declaration after 'extern \"%.*s\"' but found %s", lib->slen,
+             lib->sval, tok_desc(peek(p)));
+    }
+
+    p->in_native = true;
+    p->in_extern = true;
+    Node* fn = parse_function(p, NULL, 0, true);
+    p->in_native = false;
+    p->in_extern = false;
+    fn->as.func.native = symbol ? symbol : fn->as.func.sig->name;
+    fn->as.func.lib = str_intern(p->vm, lib->sval, lib->slen);
+
+    return fn;
+}
+
 // native function sqrt(float) -> float
 // native "vec_add" function +(Vec, Vec) -> Vec
 //
@@ -2485,6 +2538,10 @@ static Node* parse_native_type(Parser* p, Token* kw) {
 // comes from the table the module registered with vm_register_native_impls,
 // looked up by the function's name or by the string after `native`.
 static Node* parse_native(Parser* p) {
+    if (tok_is(peek(p), T_IDENT, "extern")) {
+        return parse_extern(p);
+    }
+
     Token* kw = advance(p);
     if (p->block_depth > 0) {
         perr(p, kw, "'native' is only allowed at the top level of a file");

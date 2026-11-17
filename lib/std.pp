@@ -34,6 +34,10 @@ export global function in(string needle, string haystack) -> bool {
     return haystack.contains(needle)
 }
 
+export <T>function array(int capacity) -> T[] {
+    return [].capacity(capacity);
+}
+
 // x in r: is x between the range's bounds (0...5 is [0, 5), 5...=1 is [1, 5]); the step is ignored
 export global native "std_in_range" function in(number, Range) -> bool
 // a in b: are a's bounds within b's, ends included or not: (1...3) in (0...3) and (0...=2) in (0...3) are

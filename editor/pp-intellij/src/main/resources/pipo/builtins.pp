@@ -207,6 +207,8 @@ native function enum_value(any variant) -> any
 
 // ---- arrays
 
+native function capacity(any[] array, int capacity) -> any[]
+native function fit(any[] array) -> void
 native function push(any[] array, any item) -> void
 // removes and returns the last item
 native function pop(any[] array) -> any?

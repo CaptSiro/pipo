@@ -16,6 +16,7 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <limits.h>
 #endif
 
 
@@ -818,6 +819,45 @@ static Value n_enum_value(VM* vm, int argc, Value* a) {
 
 // ----------------------------------------------------------------- arrays
 
+static void array_resize(VM* vm, ObjArray* arr, int64_t capacity) {
+    if (capacity > INT_MAX) {
+        rt_error(vm, 0, "array capacity %" PRId64 " is too large", capacity);
+    }
+
+    if (capacity == 0) {
+        free(arr->items);
+        arr->items = NULL;
+        arr->cap = 0;
+        return;
+    }
+
+    arr->items = pp_realloc(arr->items, sizeof(Value) * (size_t)capacity);
+    arr->cap = (int)capacity;
+}
+
+static Value n_capacity(VM* vm, int argc, Value* a) {
+    ObjArray* arr = AS_ARRAY(a[0]);
+    const int64_t capacity = a[1].as.i;
+    if (capacity <= arr->cap || (arr->cap == 0 && capacity <= 0)) {
+        return a[0];
+    }
+
+    array_resize(vm, arr, capacity);
+
+    return a[0];
+}
+
+static Value n_fit(VM* vm, int argc, Value* a) {
+    ObjArray* arr = AS_ARRAY(a[0]);
+    if (arr->cap == arr->count || arr->count == 0) {
+        return void_val();
+    }
+
+    array_resize(vm, arr, arr->count);
+
+    return void_val();
+}
+
 static Value n_push(VM* vm, int argc, Value* a) {
     if (a[1].kind == VAL_VOID) {
         rt_error(vm, 0, "cannot push a void value");
@@ -1583,6 +1623,8 @@ void builtins_register(VM* vm) {
     def(vm, "enum_value", "(any variant)", n_enum_value);
 
     // arrays
+    def(vm, "capacity", "(any[] array, int capacity) -> any[]", n_capacity);
+    def(vm, "fit", "(any[] array) -> void", n_fit);
     def(vm, "push", "(any[] array, any item)", n_push);
     def(vm, "pop", "(any[] array)", n_pop);
     def(vm, "insert", "(any[] array, int index, any item)", n_insert);

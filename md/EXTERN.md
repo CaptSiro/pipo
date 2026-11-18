@@ -74,9 +74,10 @@ written:
 | `c:ptr` | an address in an int, 0 is NULL | the address |
 | `void` | — | nothing |
 
-The `c:` types live in `lib/c.pp` and are plain aliases (`export type u32 =
-int`). Only an extern declaration looks at the name, so `c:u32` is an `int`
-everywhere else. This keeps the language free of new numeric types while the
+The `c:` types live in `lib/c.pp` as tagged aliases (`export type u32 =
+int`, see LANGUAGE.md, "Tagged aliases"). Only an extern declaration looks at the
+name for the C width; everywhere else a `c:u32` is an `int` that converts to and
+from `int` freely. This keeps the language free of new numeric types while the
 binding still says exactly what C expects.
 
 **Memory.** Strings and typed arrays are passed by pointer, without copying.

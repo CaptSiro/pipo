@@ -511,6 +511,163 @@ static bool is_record_typedef(Value tv) {
 
 static int match_interface(VM* vm, ObjInterface* it, Type* app, Value v, ObjEnv* env, Bindings* b);
 
+// ---------------------------------------------------------------- tagged aliases
+
+ObjTypeDef* typedef_tag(VM* vm, ObjTypeDef* td) {
+    if (td->tag_state == 0) {
+        td->tag_state = 1; // not a tag until shown to be one (a cycle stops here)
+        const Type* d = td->def;
+        ObjTypeDef* parent = NULL;
+        bool tag = false;
+        switch (d ? d->kind : TY_RECORD) {
+            case TY_PRIM:
+                tag = d->prim == PRIM_INT || d->prim == PRIM_FLOAT || d->prim == PRIM_STRING || d->prim == PRIM_BOOL ||
+                      d->prim == PRIM_RANGE;
+                break;
+            case TY_ARRAY:
+            case TY_TUPLE: tag = true; break;
+            case TY_NAME: {
+                Value tv;
+                bool generic = false;
+                for (int i = 0; !d->nquals && i < td->ngenerics; ++i) {
+                    generic = generic || td->generics[i] == d->name;
+                }
+
+                if (!generic && resolve_type_value(vm, (Type*)d, td->env, &tv)) {
+                    if (IS_KIND(tv, OBJ_TYPEDEF)) {
+                        parent = typedef_tag(vm, (ObjTypeDef*)tv.as.o);
+                        tag = parent != NULL;
+                    } else {
+                        tag = IS_KIND(tv, OBJ_ENUM) || IS_KIND(tv, OBJ_NATIVE_TYPE);
+                    }
+                }
+
+                break;
+            }
+            default: break;
+        }
+
+        if (tag) {
+            GROW(vm->tag_defs, vm->ntag_defs, vm->captag_defs);
+            vm->tag_defs[vm->ntag_defs++] = td;
+            td->tag_id = (uint32_t)vm->ntag_defs;
+            td->tag_parent = parent;
+            td->tag_depth = parent ? parent->tag_depth + 1 : 1;
+            td->tag_state = 2;
+        }
+    }
+
+    return td->tag_state == 2 ? td : NULL;
+}
+
+static ObjTypeDef* tag_def(VM* vm, uint32_t tag) {
+    return tag && tag <= (uint32_t)vm->ntag_defs ? vm->tag_defs[tag - 1] : NULL;
+}
+
+// g is w or below it in its chain (NULL w: any)
+static bool tag_within(const ObjTypeDef* g, const ObjTypeDef* w) {
+    if (!w) {
+        return true;
+    }
+
+    for (; g; g = g->tag_parent) {
+        if (g == w) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+ObjTypeDef* type_tag(VM* vm, Type* t, ObjEnv* env, Bindings* b) {
+    if (!t || t->kind != TY_NAME || (!t->nquals && !t->direct && find_binding(b, t->name))) {
+        return NULL;
+    }
+
+    Value tv;
+    if (!resolve_type_value(vm, t, env, &tv) || !IS_KIND(tv, OBJ_TYPEDEF)) {
+        return NULL;
+    }
+
+    return typedef_tag(vm, (ObjTypeDef*)tv.as.o);
+}
+
+// a declared type whose values carry no tag: a value stored there loses its tag
+static bool is_untagged_concrete(VM* vm, Type* t, ObjEnv* env, Bindings* b) {
+    switch (t->kind) {
+        case TY_PRIM: return t->prim != PRIM_ANY && t->prim != PRIM_OBJECT && t->prim != PRIM_FUNCTION && t->prim != PRIM_TYPE;
+        case TY_ARRAY:
+        case TY_TUPLE:
+        case TY_RECORD:
+        case TY_FUNC: return true;
+        case TY_UNION: return false;
+        case TY_NAME: {
+            if (!t->nquals && !t->direct && find_binding(b, t->name)) {
+                return false;
+            }
+
+            Value tv;
+            if (!resolve_type_value(vm, t, env, &tv)) {
+                return false;
+            }
+
+            if (IS_KIND(tv, OBJ_TYPEDEF)) {
+                ObjTypeDef* td = (ObjTypeDef*)tv.as.o;
+
+                return td->def && (td->def->kind == TY_RECORD || is_untagged_concrete(vm, td->def, td->env, NULL));
+            }
+
+            return IS_KIND(tv, OBJ_ENUM) || IS_KIND(tv, OBJ_NATIVE_TYPE);
+        }
+    }
+
+    return false;
+}
+
+Value retag(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b) {
+    if (!t || (vm->ntag_defs == 0 && t->kind != TY_NAME)) {
+        return v;
+    }
+
+    const ObjTypeDef* tg = type_tag(vm, t, env, b);
+    if (tg) {
+        v.tag = tg->tag_id;
+    } else if (v.tag && is_untagged_concrete(vm, t, env, b)) {
+        v.tag = 0;
+    }
+
+    if (t->kind == TY_ARRAY && IS_KIND(v, OBJ_ARRAY)) {
+        // A[]: the elements are A's, as the checker sees them (like the records of a Person[] get their tag)
+        const ObjTypeDef* et = type_tag(vm, t->inner, env, b);
+        ObjArray* a = AS_ARRAY(v);
+        for (int i = 0; et && i < a->count; ++i) {
+            a->items[i].tag = et->tag_id;
+        }
+    }
+
+    return v;
+}
+
+int tag_penalty(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b) {
+    const ObjTypeDef* w = vm->ntag_defs ? type_tag(vm, t, env, b) : NULL;
+    const ObjTypeDef* g = tag_def(vm, v.tag);
+    if (w == g) {
+        return 0;
+    }
+
+    const int wd = w ? w->tag_depth : 0;
+    const int gd = g ? g->tag_depth : 0;
+    if (tag_within(g, w)) {
+        return 2 * (gd - wd);
+    }
+
+    if (tag_within(w, g)) {
+        return 2 * (wd - gd) + 1;
+    }
+
+    return 0;
+}
+
 static int min_score(int a, int b) {
     return a < b ? a : b;
 }
@@ -635,10 +792,35 @@ static int match_named(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
             return 5;
         }
 
+        if (v.tag && td->def && td->def->kind != TY_RECORD) {
+            // a value of another tag chain is not this tagged alias (a Vec3 is not a Mat4)
+            const ObjTypeDef* tg = typedef_tag(vm, td);
+            const ObjTypeDef* g = tag_def(vm, v.tag);
+            if (tg && g && !tag_within(g, tg) && !tag_within(tg, g)) {
+                return 0;
+            }
+        }
+
         Bindings nb;
         make_bindings(vm, &nb, td->generics, NULL, td->ngenerics, td->env, t, env, b);
+        const bool alias = td->def && td->def->kind != TY_RECORD;
+        if (alias && ++vm->alias_depth > 256) {
+            vm->alias_depth = 0;
+            rt_error(vm, t->line, "cycle detected in type '%s'", td->name->chars);
+        }
 
-        return type_match(vm, td->def, v, td->env, &nb, deep);
+        const int s = type_match(vm, td->def, v, td->env, &nb, deep);
+        if (alias) {
+            vm->alias_depth--;
+        }
+
+        // down a tag chain (an untagged int where Meters is expected): the weakest fit, as in the checker
+        const ObjTypeDef* tg = alias && s ? typedef_tag(vm, td) : NULL;
+        if (tg && !tag_within(tag_def(vm, v.tag), tg)) {
+            return 1;
+        }
+
+        return s;
     }
 
     if (IS_KIND(tv, OBJ_ENUM)) {

@@ -450,6 +450,7 @@ static int score_candidate(VM* vm, Obj* c, int argc, Value* args, Bindings* b) {
     init_bindings(b, sig);
     ObjEnv* env = callable_env(vm, c);
     int total = 1;
+    int penalty = 0;
     for (int i = 0; i < sig->nparams; ++i) {
         int s = sig->params[i].type ? type_match(vm, sig->params[i].type, args[i], env, b, false) : 1;
         if (!s) {
@@ -457,9 +458,13 @@ static int score_candidate(VM* vm, Obj* c, int argc, Value* args, Bindings* b) {
         }
 
         total += s;
+        if (vm->ntag_defs) {
+            penalty += sig->params[i].type ? tag_penalty(vm, sig->params[i].type, args[i], env, b) : 0;
+        }
     }
 
-    return total;
+    // equal fits: the overload whose tagged aliases are closest to the arguments' tags wins, like the checker's
+    return total * 256 - (penalty < 255 ? penalty : 255);
 }
 
 static PP_NORETURN void no_overload_error_sets(VM* vm, ObjString* name, ObjOverload** sets, int nsets, Obj** cands, int ncands,
@@ -503,6 +508,10 @@ static bool ic_kinds(int argc, Value* args, uint8_t* kinds) {
     }
 
     for (int i = 0; i < argc; ++i) {
+        if (args[i].tag) {
+            return false; // a tagged alias: the overload depends on the tag too
+        }
+
         switch (args[i].kind) {
             case VAL_VOID: kinds[i] = 1; break;
             case VAL_BOOL: kinds[i] = 2; break;
@@ -714,6 +723,7 @@ static Value coerce_to(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool 
     }
 
     v = record_as_map(vm, t, v, env);
+    v = retag(vm, t, v, env, b);
     maybe_tag(vm, t, v, env, deep);
     if (IS_KIND(v, OBJ_OBJECT)) {
         adopt_field_callbacks(vm, AS_OBJECT(v));
@@ -885,6 +895,7 @@ static Value call_function(VM* vm, ObjFunction* fn, int argc, Value* args, Bindi
 
         a = adopt_callback_types(vm, pt, a, fn->closure, b, sig->params[i].name);
         a = record_as_map(vm, pt, a, fn->closure); // a record given for a Map<string, V> (without the checker)
+        a = retag(vm, pt, a, fn->closure, b);
         fill_options_for(vm, pt, a, fn->closure);
         env_define(vm, env, sig->params[i].name, a, 0, sig->ngenerics ? NULL : pt);
     }
@@ -1721,7 +1732,7 @@ static Value eval(VM* vm, Node* n, ObjEnv* env) {
             } else if (v.kind == VAL_INT && n->as.as_.type->kind == TY_PRIM && n->as.as_.type->prim == PRIM_FLOAT) {
                 r = make_some(vm, float_val((double)v.as.i));
             } else {
-                r = make_some(vm, v);
+                r = make_some(vm, retag(vm, n->as.as_.type, v, env, &b));
             }
 
             vm->sp--;

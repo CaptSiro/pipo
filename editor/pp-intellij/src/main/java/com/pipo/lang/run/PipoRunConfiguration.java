@@ -28,10 +28,11 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Runs `pp script.pp args...`. */
+/** Runs `pp [options] script.pp args...`, e.g. options `--target=bytecode`. */
 public final class PipoRunConfiguration extends LocatableConfigurationBase<RunProfileState> {
     private String scriptPath = "";
     private String scriptArgs = "";
+    private String interpreterOptions = "";
     private String workingDir = "";
     private String interpreter = "";
 
@@ -53,6 +54,15 @@ public final class PipoRunConfiguration extends LocatableConfigurationBase<RunPr
 
     public void setScriptArgs(String scriptArgs) {
         this.scriptArgs = scriptArgs == null ? "" : scriptArgs;
+    }
+
+    /** options for pp itself, before the script: --target=bytecode, --no-check, ... */
+    public String getInterpreterOptions() {
+        return interpreterOptions;
+    }
+
+    public void setInterpreterOptions(String interpreterOptions) {
+        this.interpreterOptions = interpreterOptions == null ? "" : interpreterOptions;
     }
 
     public String getWorkingDir() {
@@ -118,6 +128,7 @@ public final class PipoRunConfiguration extends LocatableConfigurationBase<RunPr
                             + "or set it in Settings | Languages & Frameworks | PiPo");
                 }
                 GeneralCommandLine cmd = new GeneralCommandLine(exe)
+                        .withParameters(ParametersListUtil.parse(interpreterOptions))
                         .withParameters(scriptPath)
                         .withParameters(ParametersListUtil.parse(scriptArgs))
                         .withCharset(StandardCharsets.UTF_8)
@@ -146,6 +157,7 @@ public final class PipoRunConfiguration extends LocatableConfigurationBase<RunPr
         super.readExternal(element);
         scriptPath = read(element, "SCRIPT_PATH");
         scriptArgs = read(element, "SCRIPT_ARGS");
+        interpreterOptions = read(element, "INTERPRETER_OPTIONS");
         workingDir = read(element, "WORKING_DIR");
         interpreter = read(element, "INTERPRETER");
     }
@@ -160,6 +172,7 @@ public final class PipoRunConfiguration extends LocatableConfigurationBase<RunPr
         super.writeExternal(element);
         JDOMExternalizerUtil.writeField(element, "SCRIPT_PATH", scriptPath);
         JDOMExternalizerUtil.writeField(element, "SCRIPT_ARGS", scriptArgs);
+        JDOMExternalizerUtil.writeField(element, "INTERPRETER_OPTIONS", interpreterOptions);
         JDOMExternalizerUtil.writeField(element, "WORKING_DIR", workingDir);
         JDOMExternalizerUtil.writeField(element, "INTERPRETER", interpreter);
     }

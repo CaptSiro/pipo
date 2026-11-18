@@ -58,6 +58,12 @@ static SType* join(SType* a, SType* b) {
         return a;
     }
 
+    if (a->tag != b->tag && (a->tag || b->tag)) {
+        // C from one branch, A (or an int) from the other: either one, as the runtime sees it, so overloads
+        // are picked by the value's own tag (the value is converted into the union: it carries its tag)
+        return st_union(a, b);
+    }
+
     // an empty array or none() takes the other branch's type
     if (a->kind == ST_ARRAY && b->kind == ST_ARRAY) {
         if (a->elem->kind == ST_NEVER) {
@@ -245,6 +251,9 @@ static SType* declared_ret(Ctx* x, CFunc* f, SBindings* gen) {
     return resolve_type(x, f->sig->ret, f->closure, gen);
 }
 
+// a candidate's score is its summed fit times this, minus its tag penalty (st_tag_penalty)
+#define SCORE_SCALE 256
+
 // how well the arguments fit f, 0 = not at all; b gets the generic bindings
 static int score_func(Ctx* x, CFunc* f, SType** args, int argc, SBindings* b) {
     const int np = func_nparams(f);
@@ -259,6 +268,7 @@ static int score_func(Ctx* x, CFunc* f, SType** args, int argc, SBindings* b) {
     func_generics(f, b);
     SBindings gen = *b;
     int total = 1;
+    int penalty = 0;
     for (int i = 0; i < np; ++i) {
         SType* want = param_type(x, f, i, &gen);
         const int s = st_fit(want, args[i], b);
@@ -267,9 +277,12 @@ static int score_func(Ctx* x, CFunc* f, SType** args, int argc, SBindings* b) {
         }
 
         total += s;
+        penalty += st_tag_penalty(want, args[i]);
     }
 
-    return total;
+    // equal fits: the overload whose tagged aliases are closest to the arguments' wins (str(C) over
+    // str(A) over str(int) for a C)
+    return total * SCORE_SCALE - (penalty < SCORE_SCALE - 1 ? penalty : SCORE_SCALE - 1);
 }
 
 static void sig_to_static(Ctx* x, CFunc* f, StrBuf* sb) {
@@ -620,7 +633,7 @@ static CFuncSet* receiver_impl_set(Ctx* x, SType* recv, ObjString* name) {
 
         SBindings b;
         memset(&b, 0, sizeof b);
-        const bool fits = recv->kind != ST_UNKNOWN && recv->kind != ST_DYN &&
+        const bool fits = recv->kind != ST_UNKNOWN && recv->kind != ST_DYN && st_tag_strict(fn->target, recv) &&
                           (st_equal(fn->target, recv) || st_fit(fn->target, recv, &b) >= 2 ||
                            (type_decl_of(fn->target) && type_decl_of(fn->target) == type_decl_of(recv)));
         if (!fits) {
@@ -768,6 +781,19 @@ static bool could_take(Ctx* x, CFunc* f, SType** args, int argc) {
     return true;
 }
 
+// the summed depths of the tagged aliases among f's parameter types
+static int tag_depths(Ctx* x, CFunc* f) {
+    SBindings gen;
+    func_generics(f, &gen);
+    int sum = 0;
+    for (int i = 0; i < func_nparams(f); ++i) {
+        const SType* p = param_type(x, f, i, &gen);
+        sum += p && p->tag ? p->tag->tag_depth : 0;
+    }
+
+    return sum < SCORE_SCALE ? sum : SCORE_SCALE - 1;
+}
+
 // Picks the best candidate like the runtime's resolve_overload: earlier sets win ties, and
 // within a set the later declaration. NULL when none fits (quiet), else an error.
 static CFunc* pick(Ctx* x, Cands* cs, SType** args, int argc, SBindings* out, bool* dispatch) {
@@ -819,28 +845,31 @@ static CFunc* pick(Ctx* x, Cands* cs, SType** args, int argc, SBindings* out, bo
     if (*dispatch) {
         // every candidate that may fit, in the order the runtime would prefer them
         last_cands = pp_calloc((size_t)total + 1, sizeof(CFunc*));
-        int* scores = pp_calloc((size_t)total + 1, sizeof(int));
+        int64_t* scores = pp_calloc((size_t)total + 1, sizeof(int64_t));
         for (int k = 0; k < cs->count; ++k) {
             for (int i = cs->sets[k]->count - 1; i >= 0; --i) {
                 SBindings b;
                 int s = score_func(x, cs->sets[k]->items[i], args, argc, &b);
                 if (!s && could_take(x, cs->sets[k]->items[i], args, argc)) {
-                    s = 100; // written for a type the value may have: beats a catch-all
+                    s = 100 * SCORE_SCALE; // written for a type the value may have: beats a catch-all
                 }
 
                 if (!s) {
                     continue;
                 }
 
+                // deeper tagged aliases first: the runtime takes the first candidate whose tags the values
+                // have (or are below), so a value tagged C reaches str(C) before str(A) and str(int)
+                const int64_t key = ((int64_t)tag_depths(x, cs->sets[k]->items[i]) << 32) | (int64_t)s;
                 int at = last_ncands;
-                while (at > 0 && scores[at - 1] < s) {
+                while (at > 0 && scores[at - 1] < key) {
                     last_cands[at] = last_cands[at - 1];
                     scores[at] = scores[at - 1];
                     at--;
                 }
 
                 last_cands[at] = cs->sets[k]->items[i];
-                scores[at] = s;
+                scores[at] = key;
                 last_ncands++;
             }
         }
@@ -3740,6 +3769,7 @@ void check_stmt(Ctx* x, Node* n) {
         case S_FUNCDECL: declare_function(x, n); return;
         case S_TYPE: {
             TDecl* d = tdecl_new(x, n->as.type_decl.def ? TD_ALIAS : TD_NATIVE, n->as.type_decl.name);
+            d->line = n->line;
             d->generics = n->as.type_decl.generics;
             d->ngenerics = n->as.type_decl.ngenerics;
             d->def = n->as.type_decl.def;

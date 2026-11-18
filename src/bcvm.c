@@ -120,6 +120,21 @@ static int str_cmp(const ObjString* a, const ObjString* b) {
     return a->len - b->len;
 }
 
+// how a value fits the tag of a parameter / `as` type t: 2 = it has that tag or one below it (or t has
+// none), 1 = it has no tag or one above (down the chain: allowed as the last resort), 0 = another chain's
+static int tag_fit(Checker* ch, const SType* t, Value v) {
+    if (!t->tag) {
+        return 2;
+    }
+
+    const TDecl* g = checker_tag(ch, (int)v.tag);
+    if (st_tag_within(g, t->tag)) {
+        return 2;
+    }
+
+    return !g || st_tag_within(t->tag, g) ? 1 : 0;
+}
+
 // does the value have static type t (for `as`)
 static bool fits(SType* t, Value v) {
     switch (t->kind) {
@@ -913,15 +928,22 @@ static Value run(VM* vm, int stop) {
             }
             case OP_AS: {
                 SType* t = prog->types[READ()];
-                const Value v = POP();
-                if (!fits(t, v)) {
+                Value v = POP();
+                if (!fits(t, v) || !tag_fit(prog->checker, t, v)) {
                     PUSH(make_none(vm));
                 } else if (t->kind == ST_FLOAT && v.kind == VAL_INT) {
                     PUSH(make_some(vm, float_val((double)v.as.i)));
                 } else {
+                    v.tag = (uint32_t)(t->tag ? t->tag->tag_id : 0);
                     PUSH(make_some(vm, v));
                 }
 
+                break;
+            }
+            case OP_SETTAG: {
+                const int t = READ();
+                const int k = READ();
+                vm->stack[vm->sp - 1 - k].tag = (uint32_t)t;
                 break;
             }
             case OP_TAG: {
@@ -1020,15 +1042,21 @@ static Value run(VM* vm, int stop) {
                 const int line = READ();
                 Value* args = &vm->stack[vm->sp - argc];
                 const BcCand* chosen = NULL;
-                for (int k = 0; k < d->ncands && !chosen; ++k) {
-                    const BcCand* cand = &d->cands[k];
-                    bool ok = cand->variadic ? argc >= cand->nparams : argc == cand->nparams;
-                    for (int i = 0; ok && i < cand->nparams; ++i) {
-                        ok = cand->params[i]->kind == ST_IFACE || fits(cand->params[i], args[i]);
-                    }
+                // the candidates come most specific first, a deeper tagged alias before the ones above it; the
+                // first pass takes a tagged parameter only for a value with that tag (or one below), the second,
+                // when nothing took the values so, also for one down the chain (an untagged float for Meters)
+                for (int pass = 2; pass >= 1 && !chosen; --pass) {
+                    for (int k = 0; k < d->ncands && !chosen; ++k) {
+                        const BcCand* cand = &d->cands[k];
+                        bool ok = cand->variadic ? argc >= cand->nparams : argc == cand->nparams;
+                        for (int i = 0; ok && i < cand->nparams; ++i) {
+                            ok = cand->params[i]->kind == ST_IFACE || fits(cand->params[i], args[i]);
+                            ok = ok && tag_fit(prog->checker, cand->params[i], args[i]) >= pass;
+                        }
 
-                    if (ok) {
-                        chosen = cand;
+                        if (ok) {
+                            chosen = cand;
+                        }
                     }
                 }
 

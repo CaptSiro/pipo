@@ -89,6 +89,7 @@ const OpInfo BC_OPS[OP_COUNT] = {
     [OP_TUPLE_GET] = {"TUPLE_GET", 1},
     [OP_AS] = {"AS", 1},
     [OP_TAG] = {"TAG", 1},
+    [OP_SETTAG] = {"SETTAG", 2},
     [OP_ITER_INIT] = {"ITER_INIT", 1},
     [OP_ITER_NEXT] = {"ITER_NEXT", 4},
     [OP_CLOSURE] = {"CLOSURE", 2},
@@ -527,10 +528,49 @@ static SType* type_of_node(Comp* c, Node* n) {
     return i->type;
 }
 
-// a value of type `from` where one of type `to` is expected: ints become floats
+// types whose values may be of several static types: a value stored there carries its tagged alias at runtime
+static bool is_open(const SType* t) {
+    switch (t->kind) {
+        case ST_UNKNOWN:
+        case ST_UNION:
+        case ST_IFACE:
+        case ST_OBJECT:
+        case ST_FUNCTION:
+        case ST_PARAM: return true;
+        default: return false;
+    }
+}
+
+static int tag_id(const SType* t) {
+    return t && t->tag ? t->tag->tag_id : 0;
+}
+
+// Tagged aliases cost nothing where the static type is known: the checker picked every such call. Only a value
+// that goes where its static type is lost (an unknown, a union, an interface, a dispatched call) gets its tag,
+// written from the static type (0 for an untagged one, so a tag never outlives the type it came from).
+static bool uses_tags(Comp* c) {
+    return checker_tag_count(c->prog->checker) > 0;
+}
+
+// a value of type `from` where one of type `to` is expected: ints become floats, a value entering an open type
+// gets the tag of its static type
 static void convert(Comp* c, const SType* from, const SType* to) {
     if (from && to && from->kind == ST_INT && to->kind == ST_FLOAT) {
         op0(c, OP_I2F);
+    }
+
+    if (from && to && uses_tags(c) && is_open(to) && !is_open(from)) {
+        op2(c, OP_SETTAG, tag_id(from), 0);
+    }
+}
+
+// the arguments of a dispatched call (on the stack, sargs their static types): each one of a known type
+// carries its tag, so the runtime can prefer str(Meters) over str(float)
+static void tag_args(Comp* c, SType** sargs, int argc) {
+    for (int i = 0; uses_tags(c) && i < argc; ++i) {
+        if (!is_open(sargs[i])) {
+            op2(c, OP_SETTAG, tag_id(sargs[i]), argc - 1 - i);
+        }
     }
 }
 
@@ -905,6 +945,7 @@ static void emit_call(Comp* c, Node* n, const CCall* call, Node* recv, NodeList*
 
         const int t = dispatch_table(c, call, name, sargs, argc, n->line);
         push_args(c, recv, args, NULL);
+        tag_args(c, sargs, argc);
         op3(c, OP_DISPATCH, t, argc, n->line);
 
         return;
@@ -1232,6 +1273,7 @@ static void chain_at(Comp* c, Node* n, const ChainInfo* ci, int enc) {
             ci->left[k] < 0 ? type_of_node(c, n->as.chain.operands.items[-ci->left[k] - 1]) : ci->calls[ci->left[k]].type,
             ci->right[k] < 0 ? type_of_node(c, n->as.chain.operands.items[-ci->right[k] - 1]) : ci->calls[ci->right[k]].type,
         };
+        tag_args(c, sargs, 2);
         op3(c, OP_DISPATCH, dispatch_table(c, call, n->as.chain.ops[k], sargs, 2, n->line), 2, n->line);
 
         return;
@@ -1618,6 +1660,28 @@ static void block_or_value(Comp* c, Node* block, bool value) {
     end_scope(c);
 }
 
+// the static type of a block's value (its last statement), NULL when it has none
+static const SType* tail_type(Comp* c, Node* block) {
+    const int count = block->as.block.stmts.count;
+    const Node* s = count ? block->as.block.stmts.items[count - 1] : NULL;
+    if (!s || s->kind != S_EXPR || !s->as.expr.yield) {
+        return NULL;
+    }
+
+    const NodeInfo* i = info(c, s->as.expr.expr);
+
+    return i ? i->type : NULL;
+}
+
+// the value of a branch (of type from) as the value of the whole if / match (of type to): a branch of a known
+// tagged alias gets its tag when the if / match is open (C from one branch, A from the other)
+static void tag_branch(Comp* c, const SType* from, Node* whole) {
+    const NodeInfo* i = info(c, whole);
+    if (from && i && i->type && uses_tags(c) && is_open(i->type) && !is_open(from)) {
+        op2(c, OP_SETTAG, tag_id(from), 0);
+    }
+}
+
 // if / match; value: leaves the value of the branch taken
 static void branchy(Comp* c, Node* n, bool value) {
     if (n->kind == N_IF) {
@@ -1634,6 +1698,10 @@ static void branchy(Comp* c, Node* n, bool value) {
         }
 
         block_or_value(c, n->as.if_.then_b, value);
+        if (value) {
+            tag_branch(c, tail_type(c, n->as.if_.then_b), n);
+        }
+
         end_scope(c);
         const int end = jump(c, OP_JUMP);
         patch_fails(c, &fails);
@@ -1641,8 +1709,14 @@ static void branchy(Comp* c, Node* n, bool value) {
             Node* e = n->as.if_.else_b;
             if (e->kind == N_IF || e->kind == N_MATCH) {
                 branchy(c, e, value);
+                if (value) {
+                    tag_branch(c, info(c, e) ? info(c, e)->type : NULL, n);
+                }
             } else {
                 block_or_value(c, e, value);
+                if (value) {
+                    tag_branch(c, tail_type(c, e), n);
+                }
             }
         } else if (value) {
             op0(c, OP_VOID);
@@ -1672,10 +1746,15 @@ static void branchy(Comp* c, Node* n, bool value) {
 
         if (arm->body_is_block) {
             block_or_value(c, arm->body, value);
+            if (value) {
+                tag_branch(c, tail_type(c, arm->body), n);
+            }
         } else {
             expr(c, arm->body);
             if (!value) {
                 op0(c, OP_POP);
+            } else {
+                tag_branch(c, type_of_node(c, arm->body), n);
             }
         }
 

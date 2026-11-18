@@ -21,7 +21,8 @@ import java.util.stream.Stream;
  * project that contains them, so imports resolve as they do for the interpreter.
  * <ul>
  *   <li>A file the interpreter rejects with a syntax error must get an error.</li>
- *   <li>Every other file must get no error at all.</li>
+ *   <li>Every other file must get no error at all, except the interpreter's own: an err_ test
+ *       may get an error whose message the interpreter prints too (a type cycle).</li>
  *   <li>Unresolved names must not appear in tests/ and lib/ (the err_ tests excepted);
  *       those in examples/ are only listed.</li>
  * </ul>
@@ -95,6 +96,10 @@ public class PipoHighlightingTest extends BasePlatformTestCase {
                 int line = StringUtil.offsetToLineNumber(text, info.getStartOffset()) + 1;
                 String where = rel + ":" + line + ": " + info.getDescription();
                 if (info.getSeverity() == HighlightSeverity.ERROR) {
+                    if (!syntaxError && verdict != null && info.getDescription() != null
+                            && verdict.contains(info.getDescription())) {
+                        continue; // the interpreter's own error, reported in the editor too
+                    }
                     errors.add(where);
                 } else if (info.getSeverity() == HighlightSeverity.WARNING && !errTest) {
                     // examples/ may lag behind the interpreter; only tests/ and lib/ must be clean

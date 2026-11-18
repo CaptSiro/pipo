@@ -57,6 +57,8 @@ struct SType {
     CModule* module;    // ST_MODULE
     ObjString* alias;   // the name of the `type X = ...` it came from, for messages
     int arity;          // ST_FUNCTION standing for a lambda not typed yet: its parameter count + 1, 0 = any
+    TDecl* tag;         // a tagged alias (`type Meters = float`): the same value as base, seen as this type
+    SType* base;        // tag != NULL: the type without any tag (float for Meters, also for `type Km = Meters`)
 };
 
 typedef enum {
@@ -96,6 +98,12 @@ struct TDecl {
     SType* record;       // TD_ALIAS of a record, without type arguments: resolved lazily
     Node* node;          // TD_ENUM: its declaration (the variants' values, for compiling targets)
     int id;
+    int line;            // TD_ALIAS: where it is declared
+    bool resolving;      // TD_ALIAS: its definition is being resolved (a second visit is a cycle)
+    // a tagged alias (TD_ALIAS of a non-record, non-union, non-function type, see md/LANGUAGE.md#tagged-aliases)
+    int tag_id;          // 1-based index in the checker's tag table, the runtime's Value.tag; 0 = not a tag
+    int tag_depth;       // 1 for `type A = int`, 2 for `type B = A`, ...
+    TDecl** tag_chain;   // tag_chain[k] for k in 1..tag_depth: the tag at that depth of its chain; [tag_depth] is itself
 };
 
 SType* st_new(STKind kind);
@@ -108,6 +116,14 @@ bool st_is_numeric(const SType* t);    // int, float, or a union of both
 bool st_has_param(const SType* t);     // an unbound generic parameter anywhere inside
 void st_print(const SType* t, StrBuf* sb);
 const char* st_name(const SType* t);   // printed into a buffer that lives until the next call
+SType* st_tagged(SType* base, TDecl* tag); // base seen as the tagged alias tag
+SType* st_untagged(SType* t);          // t without its tag
+bool st_tag_within(const TDecl* g, const TDecl* w); // g is w, or below w in its chain (NULL w: any)
+// a tagged value where its tag w is expected: the tag of got is w or below it (or w is NULL)
+bool st_tag_strict(const SType* want, const SType* got);
+// how far a value of type got is from want along a tag chain: 0 = same tag, 2 per step up (C to A), 2 per step
+// plus 1 down (int to A); for ranking overloads that fit equally well otherwise
+int st_tag_penalty(const SType* want, const SType* got);
 
 // how well a value of type `got` fits where `want` is expected: 0 = not at all.
 // The scores follow the runtime's (types.c), so the checker picks the overload the interpreter would.
@@ -191,6 +207,10 @@ int checker_dyn_count(Checker* c);
 CInstance* checker_main(Checker* c);
 Node* checker_module_ast(Checker* c, const char* abs_path); // the checked tree of an imported file, or NULL
 NodeInfo* instance_info(CInstance* inst, Node* n);
+
+// the tagged alias with this tag id (Value.tag at runtime), NULL for 0 or an unknown id
+TDecl* checker_tag(Checker* c, int id);
+int checker_tag_count(Checker* c);
 
 
 

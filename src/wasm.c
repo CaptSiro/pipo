@@ -286,6 +286,7 @@ typedef struct WasmGen {
     int nboxed;
     int capboxed;
     SType** tests;    // type tests (type id) -> i32: does a boxed value of that type fit tests[i]
+    bool* test_strict; // ... taking a tagged alias only for a box of that tag or one below it (dispatch)
     WFunc** test_funcs;
     int ntests;
     int captests;
@@ -1182,10 +1183,12 @@ static void convert(WCtx* w, const SType* from, const SType* to) {
     }
 }
 
-// the function that tests a type id (on the stack) against t: i32 1 when a value of it fits t
-static int type_test(SType* t) {
+// the function that tests a type id (on the stack) against t: i32 1 when a value of it fits t. strict
+// (dispatch): a tagged alias in t takes only boxes of that tag or one below it, so str(Meters) is not tried
+// for a plain float; `as` also takes a box down the chain, like the checker
+static int type_test(SType* t, bool strict) {
     for (int i = 0; i < G->ntests; ++i) {
-        if (st_equal(G->tests[i], t)) {
+        if (st_equal(G->tests[i], t) && G->test_strict[i] == strict) {
             return G->test_funcs[i]->index;
         }
     }
@@ -1193,12 +1196,14 @@ static int type_test(SType* t) {
     if (G->ntests >= G->captests) {
         G->captests = G->captests ? G->captests * 2 : 8;
         G->tests = pp_realloc(G->tests, sizeof(SType*) * (size_t)G->captests);
+        G->test_strict = pp_realloc(G->test_strict, sizeof(bool) * (size_t)G->captests);
         G->test_funcs = pp_realloc(G->test_funcs, sizeof(WFunc*) * (size_t)G->captests);
     }
 
     WFunc* f = wfunc_add(func_type("i", "i"));
     f->done = true; // the body is made last, when every boxed type is known
     G->tests[G->ntests] = t;
+    G->test_strict[G->ntests] = strict;
     G->test_funcs[G->ntests] = f;
     G->ntests++;
 
@@ -2204,7 +2209,7 @@ static void dispatch_values(WCtx* w, Node* n, const CCall* call, SType** sargs, 
                 if (is_boxed(sargs[i]) && (!is_boxed(params[i]) || other_iface)) {
                     op_u(w, W_LOCAL_GET, locals[i]);
                     mem(w, W_I32_LOAD, 2, 0);
-                    op_u(w, W_CALL, (uint64_t)type_test(params[i]));
+                    op_u(w, W_CALL, (uint64_t)type_test(params[i], true));
                     op(w, W_I32_EQZ);
                     op_u(w, W_BR_IF, (uint64_t)(w->labels - next));
                 }
@@ -2242,7 +2247,7 @@ static void dispatch_values(WCtx* w, Node* n, const CCall* call, SType** sargs, 
             if (is_boxed(sargs[i]) && (!is_boxed(params[i]) || other_iface)) {
                 op_u(w, W_LOCAL_GET, locals[i]);
                 mem(w, W_I32_LOAD, 2, 0);
-                op_u(w, W_CALL, (uint64_t)type_test(params[i]));
+                op_u(w, W_CALL, (uint64_t)type_test(params[i], true));
                 op(w, W_I32_EQZ);
                 op_u(w, W_BR_IF, (uint64_t)(w->labels - next));
             }
@@ -2765,7 +2770,7 @@ static void as_value(WCtx* w, Node* n) {
     const int b = new_local(w, T_I32);
     op_u(w, W_LOCAL_TEE, (uint64_t)b);
     mem(w, W_I32_LOAD, 2, 0);
-    op_u(w, W_CALL, (uint64_t)type_test(to));
+    op_u(w, W_CALL, (uint64_t)type_test(to, false));
     open_block(w, W_IF, T_I32);
     op_u(w, W_LOCAL_GET, (uint64_t)b);
     unbox(w, to, n->line);
@@ -5302,7 +5307,8 @@ int wasm_compile(VM* vm, Checker* c, const char* base) {
         Bytes* b = &gen.test_funcs[i]->body;
         uleb(b, 0);
         for (int k = 0; k < gen.nboxed; ++k) {
-            if (st_fit(gen.tests[i], gen.tdescs[gen.boxed[k]], NULL) <= 0) {
+            if (st_fit(gen.tests[i], gen.tdescs[gen.boxed[k]], NULL) <= 0 ||
+                (gen.test_strict[i] && !st_tag_strict(gen.tests[i], gen.tdescs[gen.boxed[k]]))) {
                 continue;
             }
 

@@ -30,6 +30,55 @@ SType* st_array(SType* elem) {
     return t;
 }
 
+SType* st_tagged(SType* base, TDecl* tag) {
+    SType* t = st_new(base->kind);
+    *t = *base;
+    t->tag = tag;
+    t->base = base->tag ? base->base : base;
+
+    return t;
+}
+
+SType* st_untagged(SType* t) {
+    return t && t->tag ? t->base : t;
+}
+
+bool st_tag_within(const TDecl* g, const TDecl* w) {
+    if (!w) {
+        return true;
+    }
+
+    return g && g->tag_depth >= w->tag_depth && g->tag_chain[w->tag_depth] == w;
+}
+
+bool st_tag_strict(const SType* want, const SType* got) {
+    return !want || !want->tag || (got && st_tag_within(got->tag, want->tag));
+}
+
+int st_tag_penalty(const SType* want, const SType* got) {
+    if (!want || !got) {
+        return 0;
+    }
+
+    const TDecl* w = want->tag;
+    const TDecl* g = got->tag;
+    if (w == g) {
+        return 0;
+    }
+
+    const int wd = w ? w->tag_depth : 0;
+    const int gd = g ? g->tag_depth : 0;
+    if (st_tag_within(g, w)) {
+        return 2 * (gd - wd); // up the chain: C where A (or the base) is expected
+    }
+
+    if (st_tag_within(w, g)) {
+        return 2 * (wd - gd) + 1; // down: int (or A) where C is expected
+    }
+
+    return 0; // tags of other chains do not fit at all; st_fit decides that
+}
+
 static void union_add(SType* u, int* cap, SType* m) {
     if (m->kind == ST_UNION) {
         for (int i = 0; i < m->nargs; ++i) {
@@ -92,8 +141,12 @@ bool st_equal(const SType* a, const SType* b) {
         return true;
     }
 
-    if (!a || !b || a->kind != b->kind) {
+    if (!a || !b || a->kind != b->kind || a->tag != b->tag) {
         return false;
+    }
+
+    if (a->tag) {
+        return st_equal(a->base, b->base);
     }
 
     switch (a->kind) {
@@ -245,6 +298,12 @@ static void print_args(SType** args, int n, StrBuf* sb) {
 void st_print(const SType* t, StrBuf* sb) {
     if (!t) {
         sb_puts(sb, "unknown");
+
+        return;
+    }
+
+    if (t->tag) {
+        sb_puts(sb, t->tag->name->chars);
 
         return;
     }
@@ -625,6 +684,21 @@ int st_fit(SType* want, SType* got, SBindings* b) {
         }
 
         return best;
+    }
+
+    if ((want->tag || got->tag) && want->kind != ST_UNION && want->kind != ST_IFACE) {
+        // a tagged alias is its base type seen under another name: it fits where its base or a tag above it
+        // is expected, and the base (or a tag above) fits where it is expected. Tags of other chains do not.
+        if (want->tag && got->tag && !st_tag_within(got->tag, want->tag) && !st_tag_within(want->tag, got->tag)) {
+            return 0;
+        }
+
+        const bool down = want->tag && !st_tag_within(got->tag, want->tag);
+        const int s = st_fit(st_untagged(want), st_untagged(got), b);
+
+        // down the chain (int where Meters is expected) is allowed, as the weakest fit: any overload that
+        // takes the value as it is wins
+        return down && s ? 1 : s;
     }
 
     switch (want->kind) {

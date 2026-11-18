@@ -194,6 +194,12 @@ struct Checker {
     CInstance** all_insts;
     int ninsts;
     int capinsts;
+    TDecl** tags;          // the tagged aliases, by tag_id - 1
+    int ntags;
+    int captags;
+    TDecl** alias_stack;   // the aliases being resolved, innermost last (for the message of a cycle)
+    int nalias_stack;
+    int capalias_stack;
     // names compared often
     ObjString* s_and;
     ObjString* s_or;

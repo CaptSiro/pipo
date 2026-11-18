@@ -92,6 +92,14 @@ function 1 fib (1 params, 1 locals, 0 captures)
   and a failing `lift()` inside a block become `SCOPE_EXIT`, which longjmps back
   to its call; there the defer block runs and the exit continues as if it were
   written at the call (in an enclosing block it leaves that block's call too).
+* **Tagged aliases** (`type Meters = float`, LANGUAGE.md) cost nothing in calls the
+  checker resolved. `Value.tag` (32 bits in what was padding) holds the checker's
+  tag id only where it is read: `SETTAG tag k` writes it when a value of a known type
+  enters an open one (an unknown, a union, an interface, the branch of an if / match
+  of a union type) and on the arguments of a `DISPATCH`. Dispatch tables list deeper
+  tags first; `DISPATCH` takes the first candidate whose tagged parameters the values
+  have (or are below), then, if none, one that takes them down a chain. A program
+  with no tagged alias emits no `SETTAG`.
 
 ## wasm: the web target
 

@@ -251,6 +251,10 @@ void gc_collect(VM* vm) {
     mark_obj((Obj*)vm->error_enum);
     // Map / Set are permanent (never marked themselves), but what impl recorded on them is not
     mark_table(&vm->range_impl_fns);
+    for (int i = 0; i < vm->ntag_defs; ++i) {
+        mark_obj((Obj*)vm->tag_defs[i]);
+    }
+
     ObjNativeType* nts[3] = {vm->t_map, vm->t_set, vm->t_generator};
     for (int i = 0; i < 3; ++i) {
         mark_table(&nts[i]->impl_fns);

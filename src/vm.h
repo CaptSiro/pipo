@@ -111,6 +111,10 @@ struct VM {
     ObjNativeType* t_set;
     ObjNativeType* t_generator; // Generator<T>: bound in the prelude by `native type`
     Table range_impl_fns;       // what `impl ... for Range<T>` recorded (iter for Range<Day>, ...)
+    ObjTypeDef** tag_defs;      // the interpreter's tagged aliases, by Value.tag - 1
+    int ntag_defs;
+    int captag_defs;
+    int alias_depth;            // nesting of alias definitions being matched (a cycle without the checker)
     ObjNativeType** native_types; // NativeClass types registered by modules (vm_register_native_types), permanent
     int nnative_types;
     Obj* tuple_ctor;      // the built-in tuple(...) function, recognised in patterns
@@ -208,6 +212,13 @@ Value vm_lift(VM* vm, Value v);
 
 // types.c
 int type_match(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b, bool deep);
+ObjTypeDef* typedef_tag(VM* vm, ObjTypeDef* td);         // td when it is a tagged alias, else NULL
+ObjTypeDef* type_tag(VM* vm, Type* t, ObjEnv* env, Bindings* b); // the tagged alias t names, or NULL
+// v as it is stored where the type t is declared: tagged with t's tag, untagged for a concrete untagged
+// type, as it is for an open type (unknown, a union, an interface, a generic parameter)
+Value retag(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b);
+// how far v's tag is from the tag t expects (st_tag_penalty of the checker): for ranking overloads
+int tag_penalty(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b);
 bool same_kind(Value a, Value b);
 bool resolve_type_value(VM* vm, Type* t, ObjEnv* env, Value* out);
 void type_to_string(Type* t, StrBuf* sb);

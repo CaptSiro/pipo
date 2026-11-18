@@ -15,6 +15,7 @@ import javax.swing.JPanel;
 final class PipoRunConfigurationEditor extends SettingsEditor<PipoRunConfiguration> {
     private final TextFieldWithBrowseButton script = new TextFieldWithBrowseButton();
     private final RawCommandLineEditor args = new RawCommandLineEditor();
+    private final RawCommandLineEditor options = new RawCommandLineEditor();
     private final TextFieldWithBrowseButton workingDir = new TextFieldWithBrowseButton();
     private final TextFieldWithBrowseButton interpreter = new TextFieldWithBrowseButton();
     private final JPanel panel;
@@ -35,6 +36,8 @@ final class PipoRunConfigurationEditor extends SettingsEditor<PipoRunConfigurati
                 .addLabeledComponent("Script arguments:", args)
                 .addLabeledComponent("Working directory:", workingDir)
                 .addTooltip("Empty: the script's directory")
+                .addLabeledComponent("Interpreter options:", options)
+                .addTooltip("Passed to pp before the script, e.g. --target=bytecode or --no-check (pp --help lists them)")
                 .addLabeledComponent("Interpreter:", interpreter)
                 .addTooltip("Empty: the project's interpreter" + (detected != null ? " (" + detected + ")" : "")
                         + ". Settings | Languages & Frameworks | PiPo")
@@ -45,6 +48,7 @@ final class PipoRunConfigurationEditor extends SettingsEditor<PipoRunConfigurati
     protected void resetEditorFrom(@NotNull PipoRunConfiguration c) {
         script.setText(c.getScriptPath());
         args.setText(c.getScriptArgs());
+        options.setText(c.getInterpreterOptions());
         workingDir.setText(c.getWorkingDir());
         interpreter.setText(c.getInterpreter());
     }
@@ -53,6 +57,7 @@ final class PipoRunConfigurationEditor extends SettingsEditor<PipoRunConfigurati
     protected void applyEditorTo(@NotNull PipoRunConfiguration c) {
         c.setScriptPath(script.getText().trim());
         c.setScriptArgs(args.getText());
+        c.setInterpreterOptions(options.getText());
         c.setWorkingDir(workingDir.getText().trim());
         c.setInterpreter(interpreter.getText().trim());
     }

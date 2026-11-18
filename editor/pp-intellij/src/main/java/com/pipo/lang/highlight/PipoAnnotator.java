@@ -20,7 +20,10 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.math.BigInteger;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -80,6 +83,68 @@ public final class PipoAnnotator implements Annotator {
             checkFunction(fn, holder);
         } else if (t == PipoElementTypes.EXPORT_STMT) {
             checkExport(element, holder);
+        } else if (element instanceof PipoTypeDecl decl) {
+            checkTypeCycle(decl, holder);
+        }
+    }
+
+    /* type A = B, type B = A: an alias defined through itself (a record breaks the chain: it is how a type contains itself) */
+    private void checkTypeCycle(PipoTypeDecl decl, AnnotationHolder holder) {
+        if (decl.isNative() || decl.isRecord() || decl.getNameIdentifier() == null) {
+            return;
+        }
+        List<PipoTypeDecl> path = new ArrayList<>();
+        path.add(decl);
+        if (cycleFrom(decl, decl, path, new HashSet<>())) {
+            for (PipoTypeDecl d : path) {
+                if (d.getContainingFile() == decl.getContainingFile()
+                        && d.getTextRange().getStartOffset() < decl.getTextRange().getStartOffset()) {
+                    return; // reported once, at the first declaration of the cycle, as the checker does
+                }
+            }
+            StringBuilder sb = new StringBuilder();
+            for (PipoTypeDecl d : path) {
+                sb.append(d.getName()).append(" -> ");
+            }
+            sb.append(decl.getName());
+            error(holder, decl.getNameIdentifier(), "cycle detected in type '" + decl.getName() + "': " + sb);
+        }
+    }
+
+    /* does the definition of cur reach start through aliases? path: the aliases on the way, cur last */
+    private static boolean cycleFrom(PipoTypeDecl start, PipoTypeDecl cur, List<PipoTypeDecl> path, Set<PipoTypeDecl> seen) {
+        PsiElement def = cur.getDefinition();
+        if (def == null || !seen.add(cur)) {
+            return false;
+        }
+        List<PipoTypeRef> refs = new ArrayList<>();
+        collectTypeRefs(def, refs);
+        for (PipoTypeRef ref : refs) {
+            if (!(firstTarget(ref.getReference()) instanceof PipoTypeDecl next) || next.isNative() || next.isRecord()) {
+                continue;
+            }
+            if (next == start) {
+                return true;
+            }
+            path.add(next);
+            if (cycleFrom(start, next, path, seen)) {
+                return true;
+            }
+            path.remove(path.size() - 1);
+        }
+        return false;
+    }
+
+    /* the type names in a type, not looking into records */
+    private static void collectTypeRefs(PsiElement e, List<PipoTypeRef> out) {
+        if (is(e, PipoElementTypes.RECORD_TYPE)) {
+            return;
+        }
+        if (e instanceof PipoTypeRef ref && !ref.isQualifierPart()) {
+            out.add(ref);
+        }
+        for (PsiElement c = e.getFirstChild(); c != null; c = c.getNextSibling()) {
+            collectTypeRefs(c, out);
         }
     }
 
@@ -215,7 +280,8 @@ public final class PipoAnnotator implements Annotator {
         int end = leaf.getTextRange().getEndOffset();
         CharSequence text = file.getViewProvider().getContents();
         if (end < text.length() && PipoLexer.isIdentChar(text.charAt(end))) {
-            error(holder, new TextRange(end, end + 1), "invalid character '" + text.charAt(end) + "' in number literal");
+            // an annotation must stay inside the element being annotated, so mark the literal itself
+            error(holder, leaf, "invalid character '" + text.charAt(end) + "' in number literal");
             return;
         }
         if (t != PipoTokenTypes.INT) {

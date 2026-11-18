@@ -29,6 +29,10 @@ typedef enum {
 
 typedef struct Value {
     ValueKind kind;
+    // the tagged alias (`type Meters = float`) the value was last seen as where its static type was lost (an
+    // unknown, a union, an interface, a dispatched call); 0 = none. Lives in what would be padding: no cost in
+    // size. Bytecode: the checker's tag id (checker_tag); interpreter: VM.tag_defs[tag - 1].
+    uint32_t tag;
     union {
         bool b;
         int64_t i;
@@ -40,6 +44,7 @@ typedef struct Value {
 static inline Value void_val(void) {
     Value v;
     v.kind = VAL_VOID;
+    v.tag = 0;
     v.as.i = 0;
 
     return v;
@@ -48,6 +53,7 @@ static inline Value void_val(void) {
 static inline Value bool_val(bool b) {
     Value v;
     v.kind = VAL_BOOL;
+    v.tag = 0;
     v.as.i = 0;
     v.as.b = b;
 
@@ -57,6 +63,7 @@ static inline Value bool_val(bool b) {
 static inline Value int_val(int64_t i) {
     Value v;
     v.kind = VAL_INT;
+    v.tag = 0;
     v.as.i = i;
 
     return v;
@@ -65,6 +72,7 @@ static inline Value int_val(int64_t i) {
 static inline Value float_val(double f) {
     Value v;
     v.kind = VAL_FLOAT;
+    v.tag = 0;
     v.as.f = f;
 
     return v;
@@ -73,6 +81,7 @@ static inline Value float_val(double f) {
 static inline Value obj_val(void* o) {
     Value v;
     v.kind = VAL_OBJ;
+    v.tag = 0;
     v.as.o = (Obj*)o;
 
     return v;
@@ -449,6 +458,11 @@ struct ObjTypeDef {
     ObjEnv* env;
     ObjModule* module; // module that declared the type (NULL for the prelude)
     Table impl_fns;    // name -> ObjOverload: functions `impl` found for this type, searched by dot calls
+    // a tagged alias (`type Meters = float`, see typedef_tag in types.c), worked out on first use
+    int tag_state;     // 0 = not known yet, 1 = not a tag, 2 = a tag
+    uint32_t tag_id;   // VM.tag_defs[tag_id - 1] is this typedef
+    int tag_depth;     // 1 for `type A = int`, 2 for `type B = A`, ...
+    ObjTypeDef* tag_parent; // the tag it was declared over (A for `type B = A`), NULL over an untagged type
 };
 
 // `impl Iface<args> for target`, `<K, V>impl Index<K, V> for Map<K, V>`

@@ -99,6 +99,7 @@ typedef enum {
     OP_TUPLE_GET,    // k
     OP_AS,           // type: value -> some(value) when it has the static type, else none()
     OP_TAG,          // typedef: tags the object on top (or every object in the array on top) with a record type
+    OP_SETTAG,       // tag, k: the value k below the top gets Value.tag = tag (a tagged alias's id, 0 = none)
 
     OP_ITER_INIT,    // slot: pops the iterable into slot; slot+1, slot+2: position and index
     OP_ITER_NEXT,    // slot, var1, var2, target: the next item into var1 / var2 (-1: none), or jump to target

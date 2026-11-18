@@ -220,6 +220,48 @@ Assigning `int` to a `float` variable or parameter converts it.
 | `number`                | prelude alias for `int \|\| float`           |
 
 `type Name = ...` and `type Pair<A, B> = { A first, B second }` define types.
+
+### Tagged aliases
+
+`type X = T` where `T` is not a record, a union or a function type (`int`, `float`, `string`,
+`bool`, `Range`, an array, a tuple, an enum such as `T?`, `Map`, a native type, or another tagged
+alias) makes a **tagged alias**: a value of `X` *is* a `T` (same representation, no wrapper, no
+cost), but the checker sees it as an `X`:
+
+```
+type Meters = float
+type Seconds = float
+function str(Meters m) -> string { return str(m + 0.0) + " m" }   // m + 0.0 is a float
+
+const Meters d = 3.0       // a float converts to Meters
+str(d)                     // "3.0 m": str(Meters) wins over str(float)
+str(2.5)                   // "2.5": a plain float stays a float
+const float f = d          // typed as float again: str(f) is "3.0"
+d + 1.0                    // a float: operators of T give T unless one is declared for Meters
+speed(t, d)                // error when speed takes (Meters, Seconds): tags of one base don't mix
+```
+
+* **Overloads.** An overload for `X` beats one for `T` (and is used for `T` only when nothing else
+  takes the value: converting `T` to `X` is the weakest fit). `impl Iface for X` covers `X`, not
+  `T`.
+* **Chains.** `type B = A` over a tagged `A` puts `B` below `A`: a `B` fits where an `A` or a `T`
+  is expected, and the overload closest to the value's tag wins (for a `C` of `type C = B`:
+  `f(C)`, then `f(B)`, `f(A)`, `f(T)`). A value converts up and down its chain, never to another
+  chain (`Meters` to `Seconds`).
+* **Joins.** Branches of different tags (`if c { aC } else { anA }`) give the union `C || A`;
+  the overload then follows the value's own tag at runtime.
+* **Inference** keeps the tag (`const b = d` is a `Meters`), generics bind it (`T = Meters`).
+* **Cycles** are an error, used or not: `type A = B` with `type B = A` is
+  `cycle detected in type 'A': A -> B -> A`; so is `type Tree = Tree[]` (a record is how a type
+  contains itself).
+
+**Cost.** None where the static type is known: the checker picks the overload, so a call on a
+`Meters` compiles to the same direct call as one on a `float`. A value only carries its tag where
+its static type is lost (an `unknown`, a union, an interface, a call dispatched at runtime): the
+bytecode VM keeps a 32-bit tag in what was padding of every value and writes it at those points,
+wasm boxes already record the static type. Records stay nominal records (`type R = { ... }`);
+unions and function types stay plain names for what they stand for.
+
 ### Record literals
 
 A record literal converted to a record type (an argument, a typed declaration, `Type({ ... })`):

@@ -402,6 +402,70 @@ static SType* fill_hook(SType* t) {
     return st_record_fill(the_checker, t);
 }
 
+// `type A = B` and `type B = A`: neither can be resolved
+static PP_NORETURN void alias_cycle(Checker* c, TDecl* d) {
+    StrBuf sb;
+    sb_init(&sb);
+    int from = c->nalias_stack - 1;
+    while (from > 0 && c->alias_stack[from] != d) {
+        from--;
+    }
+
+    for (int i = from; i < c->nalias_stack; ++i) {
+        sb_printf(&sb, "%s -> ", c->alias_stack[i]->name->chars);
+    }
+
+    sb_puts(&sb, d->name->chars);
+    if (d->module && d->module->path) {
+        c->file = d->module->path;
+    }
+
+    cerr(c, d->line, "cycle detected in type '%s': %s", d->name->chars, sb.data);
+}
+
+// a `type X = ...` of these is a tagged alias; records are nominal already, unions, functions and the
+// open types stay plain names for what they stand for
+static bool is_taggable(const SType* t) {
+    switch (t->kind) {
+        case ST_BOOL:
+        case ST_INT:
+        case ST_FLOAT:
+        case ST_STRING:
+        case ST_RANGE:
+        case ST_ARRAY:
+        case ST_TUPLE:
+        case ST_ENUM:
+        case ST_NATIVE: return true;
+        default: return false;
+    }
+}
+
+// d tags a type whose own tag (NULL for an untagged type) is parent: d sits one below it in the chain
+static void register_tag(Checker* c, TDecl* d, TDecl* parent) {
+    if (d->tag_id) {
+        return;
+    }
+
+    d->tag_depth = parent ? parent->tag_depth + 1 : 1;
+    d->tag_chain = pp_calloc((size_t)d->tag_depth + 1, sizeof(TDecl*));
+    for (int k = 1; k < d->tag_depth; ++k) {
+        d->tag_chain[k] = parent->tag_chain[k];
+    }
+
+    d->tag_chain[d->tag_depth] = d;
+    GROW(c->tags, c->ntags, c->captags);
+    c->tags[c->ntags++] = d;
+    d->tag_id = c->ntags;
+}
+
+TDecl* checker_tag(Checker* c, int id) {
+    return id > 0 && id <= c->ntags ? c->tags[id - 1] : NULL;
+}
+
+int checker_tag_count(Checker* c) {
+    return c->ntags;
+}
+
 static SType* named_decl_type(Checker* c, TDecl* d, SType** args, int nargs) {
     switch (d->kind) {
         case TD_ENUM: return enum_type(c, d, args, nargs);
@@ -435,16 +499,31 @@ static SType* named_decl_type(Checker* c, TDecl* d, SType** args, int nargs) {
                 return t;
             }
 
+            if (d->resolving) {
+                alias_cycle(c, d);
+            }
+
             SBindings b = decl_bindings(d, args, nargs);
             Ctx x = {0};
             x.c = c;
+            d->resolving = true;
+            GROW(c->alias_stack, c->nalias_stack, c->capalias_stack);
+            c->alias_stack[c->nalias_stack++] = d;
             SType* t = resolve_type(&x, d->def, d->scope, &b);
+            c->nalias_stack--;
+            d->resolving = false;
             if (t->kind == ST_FUNC && !d->ngenerics) {
                 SType* named = st_new(ST_FUNC);
                 *named = *t;
                 named->alias = d->name;
 
                 return named;
+            }
+
+            if (is_taggable(t)) {
+                register_tag(c, d, t->tag);
+
+                return st_tagged(t, d);
             }
 
             return t;
@@ -637,6 +716,12 @@ SType* subst(SType* t, SBindings* b) {
         return t;
     }
 
+    if (t->tag) {
+        SType* base = subst(t->base, b);
+
+        return base == t->base ? t : st_tagged(base, t->tag);
+    }
+
     switch (t->kind) {
         case ST_PARAM:
             for (int i = 0; i < b->count; ++i) {
@@ -779,6 +864,11 @@ bool st_implements(Checker* c, TDecl* iface, SType** args, int nargs, SType* got
         ib.count = im->ngenerics;
         for (int k = 0; k < im->ngenerics && k < PP_MAX_BINDINGS; ++k) {
             ib.names[k] = im->generics[k];
+        }
+
+        // an impl for a tagged alias covers that tag and the ones below it, not its base type
+        if (!st_tag_strict(im->target, got)) {
+            continue;
         }
 
         if (st_fit(im->target, got, &ib) >= 2 || (im->target->kind != ST_UNKNOWN && st_equal(im->target, got))) {
@@ -1126,6 +1216,15 @@ static void check_module_body(Checker* c, CModule* m, Node* program) {
     x.ret_want = st_prim(ST_UNKNOWN);
     for (int i = 0; i < program->as.block.stmts.count; ++i) {
         check_stmt(&x, program->as.block.stmts.items[i]);
+    }
+
+    // every alias is resolved once, so a cycle (type A = B, type B = A) is an error even when unused
+    for (int i = 0; i < m->scope->count; ++i) {
+        const CSym* sym = &m->scope->syms[i];
+        if (sym->kind == SYM_TYPE && sym->tdecl && sym->tdecl->kind == TD_ALIAS && sym->tdecl->module == m &&
+            sym->tdecl->def && sym->tdecl->def->kind != TY_RECORD) {
+            named_decl_type(c, sym->tdecl, NULL, 0);
+        }
     }
 
     // functions written but never called are checked too, with their declared types

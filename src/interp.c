@@ -297,6 +297,16 @@ static void lower_tag_at_runtime(VM* vm, Node* n, Value callee) {
 // declared the receiver's type, so `r.area()` works without `r.shapes:area()`.
 static ObjOverload* receiver_module_set(VM* vm, Value recv, ObjString* name) {
     ObjModule* m = NULL;
+    // a tagged alias (glfw:Window = c:ptr): the module of each tag of its chain, the deepest first
+    if (recv.tag && (int)recv.tag <= vm->ntag_defs) {
+        for (const ObjTypeDef* td = vm->tag_defs[recv.tag - 1]; td; td = td->tag_parent) {
+            Value v;
+            if (td->module && module_member(td->module, name, &v) && IS_KIND(v, OBJ_OVERLOAD)) {
+                return (ObjOverload*)v.as.o;
+            }
+        }
+    }
+
     if (IS_KIND(recv, OBJ_OBJECT)) {
         const ObjTypeDef* td = AS_OBJECT(recv)->tag;
         if (td) {

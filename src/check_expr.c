@@ -6,6 +6,7 @@
 // Expressions and statements of the static checker. See check.c and md/STATIC_TYPING.md.
 
 extern bool (*st_callable_fits_hook)(SType* want, SType* got);
+extern void (*st_bind_callable_hook)(SType* want, SType* got, SBindings* b);
 void global_add(Checker* c, ObjString* name, CFunc* f);
 void module_add_export(CModule* m, ObjString* name, ObjString* src);
 
@@ -538,6 +539,52 @@ static bool func_fits_type(Ctx* x, CFunc* f, SType* want) {
     return st_fit(want->elem, subst(ret, &b), NULL) > 0;
 }
 
+// A named function passed where a generic callback type is expected (xs.map(double) with
+// Mapper<T, R>): once the earlier arguments bound the callback's parameters (T = int), the member
+// of the set that takes them is the one that will run, and its declared return type binds R.
+static void bind_callable_ret(SType* want, SType* got, SBindings* b) {
+    if (got->kind != ST_OVERLOAD || want->kind != ST_FUNC || want->variadic || !want->elem ||
+        !st_has_param(want->elem)) {
+        return;
+    }
+
+    SType* bound = subst(want, b);
+    for (int i = 0; i < bound->nargs; ++i) {
+        if (st_has_param(bound->args[i])) {
+            return; // bound by a later argument (reduce(xs, +, 0)): nothing to pick from yet
+        }
+    }
+
+    Ctx x = {0};
+    x.c = hook_checker;
+    CFunc* best = NULL;
+    SBindings best_b;
+    memset(&best_b, 0, sizeof best_b);
+    int best_score = 0;
+    for (int i = 0; i < got->funcs->count; ++i) {
+        SBindings fb;
+        memset(&fb, 0, sizeof fb);
+        const int score = score_func(&x, got->funcs->items[i], bound->args, bound->nargs, &fb);
+        if (score > best_score) {
+            best = got->funcs->items[i];
+            best_b = fb;
+            best_score = score;
+        }
+    }
+
+    if (best && best->kind == CF_USER && best->body && best->sig && best->sig->ngenerics) {
+        // a generic member runs with these parameters: the compiling targets need that instance
+        SType** params;
+        int np;
+        checker_declared_instance(hook_checker, best, bound->args, bound->nargs, &params, &np);
+    }
+
+    SType* ret = best ? declared_ret(&x, best, &best_b) : NULL;
+    if (ret) {
+        st_fit(want->elem, subst(ret, &best_b), b);
+    }
+}
+
 static bool fits_callable(SType* want, SType* got) {
     Ctx x = {0};
     x.c = hook_checker;
@@ -606,9 +653,8 @@ static TDecl* type_decl_of(const SType* t) {
     }
 }
 
-// the functions named `name` exported by the module that declared the receiver's type
-static CFuncSet* receiver_module_set(Ctx* x, SType* recv, ObjString* name) {
-    TDecl* d = type_decl_of(recv);
+// the functions named `name` exported by the module that declared d
+static CFuncSet* decl_module_set(Ctx* x, TDecl* d, ObjString* name) {
     if (!d || !d->module || !d->module->scope) {
         return NULL;
     }
@@ -662,7 +708,15 @@ static void call_cands(Ctx* x, Cands* cs, ObjString* name, SType* recv) {
     }
 
     if (recv) {
-        cands_add(cs, receiver_module_set(x, recv, name));
+        // the modules that declared the receiver's type: for a tagged alias each tag of its chain,
+        // the deepest first (glfw:Window = c:ptr looks in glfw, then c), then the untagged type
+        if (recv->tag) {
+            for (int k = recv->tag->tag_depth; k >= 1; --k) {
+                cands_add(cs, decl_module_set(x, recv->tag->tag_chain[k], name));
+            }
+        }
+
+        cands_add(cs, decl_module_set(x, type_decl_of(recv->tag && recv->base ? recv->base : recv), name));
         cands_add(cs, receiver_impl_set(x, recv, name));
         if (recv->kind == ST_IFACE) {
             cands_add(cs, iface_req_set(x, recv, name));
@@ -3920,4 +3974,5 @@ CInstance* checker_declared_instance(Checker* c, CFunc* f, SType** sargs, int sa
 void checker_hooks(Checker* c) {
     hook_checker = c;
     st_callable_fits_hook = fits_callable;
+    st_bind_callable_hook = bind_callable_ret;
 }

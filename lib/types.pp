@@ -11,6 +11,11 @@
 // Float32Array and Float64Array hold floats and also take ints. #a, a[i], a[i] = v
 // (negative i counts from the end), for x in a, for i, x in a, ==, copy(a) and
 // printing work like on arrays.
+// Str: values that str(x) turns into text; `impl types:Str for T` with str(T) -> string
+export interface Str {
+    function str(Str) -> string
+}
+
 export native type Int8Array
 export native type Int16Array
 export native type Int32Array

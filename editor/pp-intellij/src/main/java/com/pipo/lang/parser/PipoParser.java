@@ -692,7 +692,13 @@ public final class PipoParser implements PsiParser {
         /** '.' and ',' are never part of a declared name: '.' is reserved for dot calls, ',' separates */
         private void checkDeclaredFnName(String what) {
             IElementType t = at(0);
-            if (t == COMMA || t == DOT) {
+            if (PipoTokenTypes.HARD_KEYWORDS.contains(t) && t != IN) {
+                // `in` is the exception: it is the operator `x in y`, and can be overloaded
+                error("'" + text(0) + "' is a keyword and cannot be " + what);
+            } else if (t == OP && (text(0).equals("&&") || text(0).equals("||"))) {
+                error("'" + text(0) + "' cannot be " + what + ": it is reserved (it skips its right side when the "
+                        + "left one decides, so it is not a function and cannot be overloaded)");
+            } else if (t == COMMA || t == DOT) {
                 error("'" + text(0) + "' cannot be " + what + ": it is reserved");
             } else if (t == OP && text(0).contains(".") && !text(0).equals("...") && !text(0).equals("...=")) {
                 error("'" + text(0) + "' cannot be " + what
@@ -1689,11 +1695,29 @@ public final class PipoParser implements PsiParser {
             m.done(FUNCTION_DECL);
         }
 
+        // import a, "./b" -> x, c:d -> { e }: one IMPORT_STMT per module, like the interpreter. The
+        // first covers `import a` (and `export` before it); each later one starts at its comma.
         private void parseImport(PsiBuilder.Marker m) {
             adv(); // import
             if (blockDepth > 0) {
                 error("'import' is only allowed at the top of a file, before any other statement");
             }
+            parseImportItem();
+            m.done(IMPORT_STMT);
+            while (is(COMMA) && !nl(0)) {
+                PsiBuilder.Marker next = mark();
+                adv();
+                if (!is(STRING) && !isIdent(0)) {
+                    error("expected a module name or a \"./path\" string after ',' but found " + desc(0));
+                    next.done(IMPORT_STMT);
+                    return;
+                }
+                parseImportItem();
+                next.done(IMPORT_STMT);
+            }
+        }
+
+        private void parseImportItem() {
             PsiBuilder.Marker path = mark();
             if (is(STRING)) {
                 adv();
@@ -1737,7 +1761,6 @@ public final class PipoParser implements PsiParser {
                     a.done(IMPORT_ALIAS);
                 }
             }
-            m.done(IMPORT_STMT);
         }
 
         private boolean atExportedDecl() {

@@ -1,5 +1,5 @@
 import io
-import std
+import types
 
 // ---- construction, reading, printing
 const t = tuple(1, "a", 2.5)
@@ -36,6 +36,6 @@ io:print_nl(copy(t) == t)
 
 // ---- interfaces
 function str(tuple<int, int> p) -> string { return "point(" + str(p[0]) + ", " + str(p[1]) + ")" }
-impl std:Str for tuple<int, int>
-function show(std:Str s) -> string { return s.str() }
+impl types:Str for tuple<int, int>
+function show(types:Str s) -> string { return s.str() }
 io:print_nl(show(tuple(1, 2)))

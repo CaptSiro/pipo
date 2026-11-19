@@ -166,8 +166,7 @@ native function >(any a, any b) -> bool
 native function <=(any a, any b) -> bool
 native function >=(any a, any b) -> bool
 native function !(bool a) -> bool
-native function &&(bool a, bool b) -> bool
-native function ||(bool a, bool b) -> bool
+// && and || are not functions: they skip their right side when the left one decides
 // the length of a string (bytes), array, object, range, tuple, map or set
 native function #(any collection) -> int
 // exclusive range: ...5 is 0, 1, 2, 3, 4; 2...5 is 2, 3, 4

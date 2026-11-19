@@ -1,5 +1,6 @@
 import io
 import std
+import types
 
 // ---- in(T, T[]) and in(string, string)
 io:print_nl(2 in [1, 2, 3], 4 in [1, 2, 3], 1 in [], "b" in ["a", "b"])
@@ -42,10 +43,10 @@ function str(Money m) -> string { return "$" + str(m:cents / 100) + "." + str(m:
 function ==(Money a, Money b) -> bool { return a:cents == b:cents }
 function <(Money a, Money b) -> bool { return a:cents < b:cents }
 function <=(Money a, Money b) -> bool { return a:cents <= b:cents }
-impl std:Str for Money
+impl types:Str for Money
 impl std:Comparator for Money
 
-function show(std:Str s) -> string { return "<" + str(s) + ">" }
+function show(types:Str s) -> string { return "<" + str(s) + ">" }
 function same(std:Equals a, std:Equals b) -> bool { return a == b }
 
 const Money a = { cents: 150 }
@@ -68,3 +69,6 @@ io:print_nl((2...3) in (0...10), (0...10) in (2...3), (1...3) in (0...3), (0...=
 io:print_nl((0...3) in (0...=3), (3...0) in (0...=3), (3...0) in (0...3), (3...=1) in (0...4), (5...5) in (0...1), (0...=0) in (1...2))
 io:print_nl(range(0, 1, 0.25) in (0...1), (0...1) in range(0, 1, 0.25), (-5...5) in (-10...10), (0...5) in (5...0))
 io:print_nl((0...=5):inclusive, (0...5):inclusive, (0...=5):end)
+
+// is_digit: one character 0 to 9
+io:print_nl(std:is_digit("0"), std:is_digit("9"), std:is_digit("a"), std:is_digit(""), std:is_digit("10"), std:is_digit("5x"))

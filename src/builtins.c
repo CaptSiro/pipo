@@ -828,6 +828,7 @@ static void array_resize(VM* vm, ObjArray* arr, int64_t capacity) {
         free(arr->items);
         arr->items = NULL;
         arr->cap = 0;
+
         return;
     }
 

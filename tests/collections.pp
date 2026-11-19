@@ -1,5 +1,5 @@
 import io
-import std
+import types
 
 // ---- Map<K, V>
 let Map<string, int> ages = map()
@@ -70,6 +70,6 @@ io:print_nl(set(["x", "y"]).first())
 // ---- the types themselves
 io:print_nl(Map, Set, type_of(Map))
 function str(Map m) -> string { return "a map of " + str(#m) }
-impl std:Str for Map
-function show(std:Str x) -> string { return x.str() }
+impl types:Str for Map
+function show(types:Str x) -> string { return x.str() }
 io:print_nl(show(map({ a: 1 })))

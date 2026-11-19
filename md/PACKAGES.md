@@ -10,7 +10,14 @@ import io -> { print, write }      // copy exported symbols into this scope
 import "./geometry"                // the file geometry.pp next to this file
 import "./shapes/rect.pp" -> rect  // .pp is optional
 import "../shared/util" -> { clamp, + }
+
+import io, os, fs, "./geometry", types -> t, math -> { pi }, "./ui":shapes   // several at once
 ```
+
+* **Several modules** can share one `import`, separated by commas. Each entry is a
+  complete import of its own (path, `:submodules`, `-> alias` or `-> { names }`),
+  and the line is the same as one import per entry, in that order. A comma at
+  the end of a line continues the list on the next line.
 
 * **`import name`** (an identifier) loads a **library module**. It is looked
   up as a registered native module first (like `io`), then as `name.pp` in each

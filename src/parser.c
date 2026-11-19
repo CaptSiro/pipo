@@ -25,6 +25,7 @@ typedef struct {
     bool block_yields;      // directly in such a block
     bool gen_body;          // in the body of a generator (not of a function or lambda nested in it)
     int gen_scope_base;     // scope_blocks when the generator's body started: deeper is a scope call's block
+    NodeList more_imports;  // `import a, b`: the imports after the first one, added after it by parse_program
 } Parser;
 
 // ---------------------------------------------------------------- helpers
@@ -166,6 +167,22 @@ static bool at_fn_name(Parser* p, int at) {
 // exception: they can be overloaded (`..` may be revisited later).
 // ',' separates arguments and elements, so it can never be a name.
 static void check_declared_fn_name(Parser* p, Token* t, const char* what) {
+    switch (t->kind) {
+        case T_IMPORT: case T_FUNCTION: case T_RETURN: case T_CONST: case T_LET: case T_IF: case T_ELSE:
+        case T_FOR: case T_WHILE: case T_BREAK: case T_CONTINUE: case T_MATCH: case T_ENUM: case T_TRUE:
+        case T_FALSE: case T_EXPORT: case T_GLOBAL: case T_YIELD: case T_EMIT:
+            // `in` is the exception: it is the operator `x in y`, and can be overloaded
+            perr(p, t, "'%.*s' is a keyword and cannot be %s", t->len, t->start, what);
+        default: break;
+    }
+
+    // && and || run their right side only when needed, so they are not calls and cannot be overloaded
+    if (t->kind == T_OP && t->len == 2 && (memcmp(t->start, "&&", 2) == 0 || memcmp(t->start, "||", 2) == 0)) {
+        perr(p, t, "'%.*s' cannot be %s: it is reserved (it skips its right side when the left one decides, so it "
+                   "is not a function and cannot be overloaded)",
+             t->len, t->start, what);
+    }
+
     if (t->kind == T_COMMA || t->kind == T_DOT) {
         perr(p, t, "'%c' cannot be %s: it is reserved (%s)", t->start[0], what,
              t->kind == T_COMMA ? "',' separates arguments and elements" : "'.' calls a function: x.f()");
@@ -1975,13 +1992,9 @@ static Node* parse_let(Parser* p) {
     return n;
 }
 
-static Node* parse_import(Parser* p) {
-    Token* kw = advance(p);
-    if (p->block_depth > 0) {
-        perr(p, kw, "'import' is only allowed at the top of a file, before any other statement");
-    }
-
-    Node* n = new_node(S_IMPORT, kw->line);
+// one module of an import: "./file" or name, then :sub..., then -> alias or -> { names }
+static Node* parse_import_item(Parser* p, int line) {
+    Node* n = new_node(S_IMPORT, line);
     StrBuf path;
     sb_init(&path);
     ObjString* last;
@@ -2057,6 +2070,27 @@ static Node* parse_import(Parser* p) {
     return n;
 }
 
+// import a, "./b" -> x, c:d -> { e }: one S_IMPORT per module, as if each had its own line.
+// The first is returned; parse_program adds the others right after it (more_imports).
+static Node* parse_import(Parser* p) {
+    Token* kw = advance(p);
+    if (p->block_depth > 0) {
+        perr(p, kw, "'import' is only allowed at the top of a file, before any other statement");
+    }
+
+    Node* first = parse_import_item(p, kw->line);
+    while (check(p, T_COMMA) && !peek(p)->nl_before) {
+        advance(p);
+        if (!check(p, T_STRING) && !check(p, T_IDENT)) {
+            perr(p, peek(p), "expected a module name or a \"./path\" string after ',' but found %s", tok_desc(peek(p)));
+        }
+
+        nl_push(&p->more_imports, parse_import_item(p, peek(p)->line));
+    }
+
+    return first;
+}
+
 static bool is_generic_prefix(Parser* p);
 static bool at_native(Parser* p);
 
@@ -2105,8 +2139,12 @@ static Node* parse_export(Parser* p) {
 
     if (check(p, T_IMPORT)) {
         // export import "./fs" == import "./fs" + export fs
+        const int before = p->more_imports.count;
         Node* im = parse_import(p);
         im->as.import.reexport = true;
+        for (int i = before; i < p->more_imports.count; ++i) {
+            p->more_imports.items[i]->as.import.reexport = true; // export import a, b re-exports both
+        }
 
         return im;
     }
@@ -2922,8 +2960,14 @@ Node* parse_program(VM* vm, const char* src, const char* file) {
         }
 
         nl_push(&block->as.block.stmts, s);
+        for (int i = 0; i < p.more_imports.count; ++i) {
+            nl_push(&block->as.block.stmts, p.more_imports.items[i]);
+        }
+
+        p.more_imports.count = 0;
     }
 
+    free(p.more_imports.items);
     check_declarations(&p, &block->as.block.stmts);
     free(tl.toks);
 

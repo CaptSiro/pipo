@@ -26,7 +26,19 @@ public final class PipoImportStmt extends PipoNamedElement {
     }
 
     public boolean isReexport() {
-        return child(PipoTokenTypes.EXPORT) != null;
+        if (child(PipoTokenTypes.EXPORT) != null) {
+            return true;
+        }
+        // `export import a, b`: b's statement starts at its comma; the first one of the list has the export
+        PsiElement first = getFirstChild();
+        if (first == null || !PipoPsiUtil.is(first, PipoTokenTypes.COMMA)) {
+            return false;
+        }
+        PsiElement prev = getPrevSibling();
+        while (prev != null && !(prev instanceof PipoImportStmt)) {
+            prev = prev.getPrevSibling();
+        }
+        return prev instanceof PipoImportStmt previous && previous.isReexport();
     }
 
     public boolean isDestructured() {

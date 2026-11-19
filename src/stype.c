@@ -5,6 +5,7 @@
 // interfaces and callables need the checker to decide whether a type fits; check.c sets these
 bool (*st_implements_hook)(TDecl* iface, SType** args, int nargs, SType* got, SBindings* b) = NULL;
 bool (*st_callable_fits_hook)(SType* want, SType* got) = NULL;
+void (*st_bind_callable_hook)(SType* want, SType* got, SBindings* b) = NULL;
 SType* (*st_fill_hook)(SType* t) = NULL;
 
 
@@ -868,7 +869,12 @@ int st_fit(SType* want, SType* got, SBindings* b) {
             }
 
             if (st_has_param(want)) {
-                // reduce(xs, +, 0): the callback's generics are bound by later arguments; any set may fit then
+                // reduce(xs, +, 0): the callback's generics are bound by later arguments; any set may fit then.
+                // xs.map(double): the parameters are bound already, so the member they pick binds the result
+                if (b && st_bind_callable_hook) {
+                    st_bind_callable_hook(want, got, b);
+                }
+
                 return 3;
             }
 

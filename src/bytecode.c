@@ -1200,6 +1200,89 @@ static void native_value(Comp* c, CFuncSet* set, int line) {
     op1(c, OP_CONST, add_const(c->prog, obj_val(ov)));
 }
 
+// Several functions under one name used as a value (xs.map(label) with label(int) and
+// label(string)): the value is a closure of a small function that passes its arguments on to a
+// dynamic dispatch over every compiled instance of the set, user functions before natives. The
+// call through the value then picks the overload by the arguments, like the interpreter does.
+// False when no such function can be made (members of different arities, variadic or nested ones).
+static bool overload_thunk(Comp* c, CFuncSet* set, int line) {
+    BcProgram* prog = c->prog;
+    BcDispatch d = {0};
+    d.name = set->name;
+    int cap = 0;
+    int arity = -1;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int i = 0; i < set->count; ++i) {
+            CFunc* f = set->items[i];
+            if ((pass == 0) != (f->kind == CF_USER)) {
+                continue;
+            }
+
+            if (f->kind == CF_USER) {
+                if (is_nested(c, f)) {
+                    return false;
+                }
+
+                for (int k = 0; k < f->ninsts; ++k) {
+                    CInstance* inst = f->insts[k];
+                    if ((f->sig && f->sig->variadic) || (arity >= 0 && inst->nparams != arity)) {
+                        return false;
+                    }
+
+                    arity = inst->nparams;
+                    GROW(d.cands, d.ncands, cap);
+                    d.cands[d.ncands++] = (BcCand){false, func_for(prog, inst)->index, inst->params, inst->nparams, false};
+                }
+            } else if (f->kind == CF_NATIVE && f->native) {
+                BcCand bc = {true, native_of(c, f, line), NULL, 0, f->sig && f->sig->variadic};
+                checker_declared_instance(prog->checker, f, NULL, 0, &bc.params, &bc.nparams);
+                if (bc.variadic || (arity >= 0 && bc.nparams != arity)) {
+                    return false;
+                }
+
+                arity = bc.nparams;
+                GROW(d.cands, d.ncands, cap);
+                d.cands[d.ncands++] = bc;
+            } else {
+                return false;
+            }
+        }
+    }
+
+    if (d.ncands == 0) {
+        return false;
+    }
+
+    GROW(prog->dispatches, prog->ndispatches, prog->capdispatches);
+    prog->dispatches[prog->ndispatches] = d;
+    const int table = prog->ndispatches++;
+
+    BcFunc* thunk = pp_calloc(1, sizeof(BcFunc));
+    thunk->name = set->name;
+    thunk->file = c->fn->file;
+    thunk->line = line;
+    thunk->nparams = arity;
+    thunk->nlocals = arity;
+    thunk->kind = BC_FUNCTION;
+    thunk->compiled = true;
+    thunk->index = prog->nfuncs;
+    GROW(prog->funcs, prog->nfuncs, prog->capfuncs);
+    prog->funcs[prog->nfuncs++] = thunk;
+
+    Comp tc = {0};
+    tc.prog = prog;
+    tc.fn = thunk;
+    for (int i = 0; i < arity; ++i) {
+        op1(&tc, OP_LOAD, i);
+    }
+
+    op3(&tc, OP_DISPATCH, table, arity, line);
+    op0(&tc, OP_RETURN);
+    op2(c, OP_CLOSURE, thunk->index, 0);
+
+    return true;
+}
+
 static void function_value(Comp* c, Node* n, SType* t) {
     CFuncSet* set = t->funcs;
     CInstance* only = NULL;
@@ -1220,9 +1303,14 @@ static void function_value(Comp* c, Node* n, SType* t) {
         return;
     }
 
+    // one user function is the value itself, unless natives share its name (str(Vec) next to str(int))
+    if ((users != 1 || !only || set->count > users) && overload_thunk(c, set, n->line)) {
+        return;
+    }
+
     if (users != 1 || !only) {
-        // several functions under one name: the calls through the value are resolved statically,
-        // so the value itself only has to print as the function
+        // calls through the value are resolved statically (no thunk could be made: mixed arities or
+        // nested functions), so the value itself only has to print as the function
         ObjOverload* ov = overload_new(c->prog->vm, set->name);
         op1(c, OP_CONST, add_const(c->prog, obj_val(ov)));
 

@@ -31,7 +31,9 @@ with `pp`.
 
 Any run of `+ - * / % < > = ! & | ^ ~ # ? @ $ \` and `..` is a symbolic name.
 `=` (assignment) and `->` are reserved. `&&` and `||` are short-circuiting
-and cannot be overloaded.
+and cannot be overloaded: `function &&(...)` is a syntax error. The keywords
+cannot name a function either (`'if' is a keyword and cannot be a function name`),
+except `in`, which is the operator `x in y`.
 
 `.` and `,` are never part of a declared name. `.` is reserved for dot calls
 anywhere in a name: with a function `..`, `x..f()` would read as `x .. f()`, and
@@ -952,8 +954,8 @@ a | b, a & b, a - b                 // union, intersection, difference (also a.u
   functions `map(...)` and `set(...)` (constructors are snake_case or
   flatcase). `map(...)` with one argument (or none) makes a map; `map(source, f)`
   with two is the lazy map over an `Iterable`. They are overloads of one name.
-* Interfaces work as for other types: `impl std:Str for Map`,
-  `impl std:Str for tuple<int, int>`. A map implements `Index`, which is
+* Interfaces work as for other types: `impl types:Str for Map`,
+  `impl types:Str for tuple<int, int>`. A map implements `Index`, which is
   where `m[k]` and `m[k] = v` come from.
 
 ## Arithmetic
@@ -974,6 +976,7 @@ import "./geometry" -> { vec, +, Vec }  // bring exports in; + extends the local
 import os:fs                            // submodule: export `fs` of os, or os/fs.pp
 import "./ui":shapes -> { rect }        // works for files too
 export import "./ui/shapes"             // import and re-export in one line (an import)
+import io, os, "./geometry" -> geo, math -> { pi }, "./ui":shapes   // several modules, comma separated
 
 export type Vec = { float x, float y } // export in front of a declaration, anywhere in the code
 export function length(Vec v) -> float { ... }
@@ -981,6 +984,11 @@ export function length(Vec v) -> float { ... }
 export { vec, ORIGIN -> zero }          // or list what importers may see, last in the file
 export SCALE -> factor
 ```
+
+One `import` can name several modules separated by commas. Each one is written exactly as it
+would be on a line of its own (a path, `:submodules`, then `-> alias` or `-> { names }`), and the
+line means the same as those separate imports, in that order. A comma at the end of a line
+continues the list on the next one; `export import a, b` re-exports both.
 
 A file is laid out as **imports, then code, then exports**. An `import` (or
 `export import`) after any other statement, an `import` inside a block, or a

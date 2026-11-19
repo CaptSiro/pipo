@@ -645,6 +645,29 @@ Value retag(VM* vm, Type* t, Value v, ObjEnv* env, Bindings* b) {
         }
     }
 
+    if (t->kind == TY_NAME && t->nargs && IS_KIND(v, OBJ_ENUM_VALUE)) {
+        // Error<A> / A?: a payload of a generic parameter's type is an A (success(handle) returned as
+        // Error<glfw:Window> is a Window), like the elements of an A[]
+        ObjEnumValue* ev = AS_ENUMV(v);
+        const ObjEnum* en = ev->en;
+        Value tv;
+        const bool same = resolve_type_value(vm, t, env, &tv) && IS_KIND(tv, OBJ_ENUM) && tv.as.o == (Obj*)en;
+        const Variant* var = same && ev->variant < en->nvariants ? &en->variants[ev->variant] : NULL;
+        for (int i = 0; var && i < ev->count && i < var->npayload; ++i) {
+            const Type* pt = var->payload[i];
+            if (!pt || pt->kind != TY_NAME || pt->nquals || pt->nargs) {
+                continue;
+            }
+
+            for (int k = 0; k < en->ngenerics && k < t->nargs; ++k) {
+                if (en->generics[k] == pt->name || str_equals(en->generics[k], pt->name->chars)) {
+                    ev->payload[i] = retag(vm, t->args[k], ev->payload[i], env, b);
+                    break;
+                }
+            }
+        }
+    }
+
     return v;
 }
 

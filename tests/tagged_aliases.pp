@@ -1,7 +1,7 @@
 // `type X = T` over a non-record, non-union type is a tagged alias: the same value as T, seen as X.
 // Overloads for X win over the ones for T; T is used where X has none.
 import io
-import std
+import types
 
 type Alias = int
 function alias(int x) -> Alias {
@@ -12,7 +12,7 @@ function str(Alias a) -> string {
     return "Alias:" + str(a + 0)
 }
 
-impl std:Str for Alias
+impl types:Str for Alias
 
 io:print_nl(5.alias().str())        // Alias:5
 io:print_nl(str(5))                 // 5: a plain int stays an int
@@ -57,7 +57,7 @@ const (C || string)[] mixed = [intabc, "y"]
 io:print_nl(name(mixed[0]) + " " + name(mixed[1]))   // B string
 
 // through an interface
-function describe(std:Str s) -> string {
+function describe(types:Str s) -> string {
     return s.str()
 }
 

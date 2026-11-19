@@ -1,7 +1,3 @@
-export interface Str {
-    function str(Str) -> string
-}
-
 export interface Equals {
     function ==(Equals, Equals) -> bool
     function !=(Equals a, Equals b) -> bool {
@@ -96,3 +92,9 @@ export function is_empty(Range r) -> bool {
 // has(r, x): is x one of the elements `for v in r` visits
 export global native "std_range_has" function has(Range, number) -> bool
 
+
+
+// is_digit(c): is c one of the characters 0 to 9 ("12", "" and "5x" are not)
+export function is_digit(string c) -> bool {
+    return #c == 1 && c in "0"...="9"
+}

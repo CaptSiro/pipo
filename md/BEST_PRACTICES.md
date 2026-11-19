@@ -101,7 +101,7 @@ correct, not as law.
 * Use `global function` only for operators and conversions that must work
   wherever the type goes (`global function str(Order order) -> string`,
   `global function ==(Rect a, Rect b) -> bool`), and implement the matching
-  interface (`impl std:Str for Order`).
+  interface (`impl types:Str for Order`).
 * Lambdas for short callbacks: `order.reduce((a, x) -> a + x:cost, 0.0)`.
 
 ## 5. Errors

@@ -13,6 +13,8 @@
 // a types:*Array a pointer to its elements (C may write into them), and string? or a
 // types:*Array? passes none() as NULL.
 
+import types
+
 export type i8 = int
 export type u8 = int
 export type i16 = int
@@ -26,3 +28,62 @@ export type f32 = float
 export type f64 = float
 // an address, 0 is NULL: window handles, contexts, offsets into a bound buffer
 export type ptr = int
+
+export type Int32Pointer = types:Int32Array
+export type Int64Pointer = types:Int64Array
+
+
+
+export function chars(types:Int8Array bytes) -> string {
+    for i in ...#bytes {
+        if bytes[i] == 0 {
+            return bytes.text(0, i)
+        }
+    }
+
+    return bytes.text(0, #bytes)
+}
+
+
+
+export function int32pointer() -> Int32Pointer {
+    return types:int32array(1)
+}
+
+export global function *(Int32Pointer ptr) -> i32 {
+    return ptr[0]
+}
+
+export global function *=(Int32Pointer ptr, i32 value) -> i32 {
+    ptr[0] = value
+
+    return value
+}
+
+export global function &(i32 number) -> Int32Pointer {
+    const ptr = int32pointer()
+    ptr *= number
+
+    return ptr
+}
+
+export function int64pointer() -> Int64Pointer {
+    return types:int64array(1)
+}
+
+export global function *(Int64Pointer ptr) -> i64 {
+    return ptr[0]
+}
+
+export global function *=(Int64Pointer ptr, i64 value) -> i64 {
+    ptr[0] = value
+
+    return value
+}
+
+export global function &(i64 number) -> Int64Pointer {
+    const ptr = int64pointer()
+    ptr *= number
+
+    return ptr
+}

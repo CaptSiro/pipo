@@ -262,6 +262,21 @@ public final class PipoParser implements PsiParser {
             return at(n) == IDENT && text(n).length() > 1 && text(n).charAt(0) == '_';
         }
 
+        /* mod:_name, mod:sub:_name written without spaces: the offset of the scope name, 0 when not one */
+        private int qualifiedScopeAt() {
+            if (at(0) != IDENT || isScopeName(0)) {
+                return 0;
+            }
+            for (int i = 1; ; i += 2) {
+                if (at(i) != COLON || space(i) || nl(i) || at(i + 1) != IDENT || space(i + 1) || nl(i + 1)) {
+                    return 0;
+                }
+                if (isScopeName(i + 1)) {
+                    return i + 1;
+                }
+            }
+        }
+
         /* names starting with '_' belong to scopes, and `scope` is the value inside the block of a scope call */
         private void checkVarName(int n, String what) {
             if (isScopeName(n)) {
@@ -993,7 +1008,7 @@ public final class PipoParser implements PsiParser {
                 m.done(LITERAL);
                 return new Res(m, LITERAL);
             }
-            if (isScopeName(0)) {
+            if (isScopeName(0) || qualifiedScopeAt() > 0) {
                 return parseScopeCall();
             }
             if (word(0, "scope")) {
@@ -1589,10 +1604,19 @@ public final class PipoParser implements PsiParser {
          */
         private Res parseScopeCall() {
             PsiBuilder.Marker m = mark();
-            String name = text(0);
+            int parts = qualifiedScopeAt();
+            String name = text(parts);
             PsiBuilder.Marker r = mark();
             adv();
             r.done(REF_EXPR);
+            for (int i = 0; i < parts; i += 2) {
+                // mod:sub:_name: FIELD_EXPR(FIELD_EXPR(REF_EXPR, sub), _name)
+                PsiBuilder.Marker f = r.precede();
+                adv(); // ':'
+                takeFnName();
+                f.done(FIELD_EXPR);
+                r = f;
+            }
             if (is(LPAREN) && !space(0) && !nl(0)) {
                 PsiBuilder.Marker list = mark();
                 adv();
@@ -2201,7 +2225,7 @@ public final class PipoParser implements PsiParser {
             }
             if (t == IDENT) {
                 IElementType a = at(1);
-                if (isScopeName(0)) {
+                if (isScopeName(0) || qualifiedScopeAt() > 0) {
                     parseScopeCall();
                     m.done(EXPR_STMT);
                     endStatement();

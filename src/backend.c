@@ -97,6 +97,7 @@ void names_used_nested(NameList* out, Node* n, bool nested) {
             return;
         case N_BLOCK: used_list(out, &n->as.block.stmts, nested); return;
         case N_SCOPECALL:
+            names_used_nested(out, n->as.scall.callee, nested);
             used_list(out, &n->as.scall.args, nested);
             names_used_nested(out, n->as.scall.body, true);
 

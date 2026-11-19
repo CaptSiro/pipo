@@ -99,6 +99,23 @@ export function gen_buffer() -> int {
 }
 ```
 
+c.pp names the common case: `c:Int32Pointer`, `c:Int64Pointer` and `c:Uint32Pointer` are
+tagged aliases of a length-1 typed array (`c:int32pointer()` ... make one), with `*p` to read,
+`p *= v` to write and `&v` to box a value. `c:Uint32Pointer` reads the 4 bytes as unsigned
+(a `c:u32`), so a `GLuint` id keeps its own tag: `c:i32` and `c:u32` are different tags of
+`int` and do not convert into each other.
+
+```
+extern "opengl32" function glGenBuffers(c:i32 n, c:Uint32Pointer buffers) -> void
+
+export function gen_buffer() -> Buffer {   // type Buffer = c:u32
+    const id = c:uint32pointer()
+    glGenBuffers(1, id)
+
+    return *id
+}
+```
+
 ## 3. Finding the library
 
 The library is loaded, and the symbol looked up, on the **first call**, not at

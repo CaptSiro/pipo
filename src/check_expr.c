@@ -2319,6 +2319,12 @@ static SType* call_value(Ctx* x, Node* n, SType* callee, SType** args, Node** no
                 return callee->args[0]; // what the block yields, known per call of the scope
             }
 
+            if (!callee->variadic) {
+                // a scope checked without a call (no caller yet, e.g. one exported to the modules that
+                // import it): what its block yields is not known, each call checks it again
+                return dyn_type(x, n, "the value of a Block in a scope that is not called");
+            }
+
             return st_prim(ST_VOID); // a Callback kept for later: its value is not known, so it gives none
         case ST_DYN:
         case ST_FUNCTION:
@@ -2669,14 +2675,27 @@ static SType* check_branchy(Ctx* x, Node* n, bool as_value, SType* expect) {
 static SType* check_scope_call(Ctx* x, Node* n, bool as_value) {
     Checker* c = x->c;
     ObjString* name = n->as.scall.name;
-    const CSym* sym = scope_lookup(x->scope, name);
+    CFuncSet* local = NULL;
+    if (n->as.scall.callee) {
+        // mod:_name: the scope exported by that module
+        SType* ct = check_expr(x, n->as.scall.callee, NULL);
+        if (ct->kind == ST_OVERLOAD) {
+            local = ct->funcs;
+        } else if (ct->kind != ST_DYN) {
+            cerr(c, n->line, "'%s' is not a scope (it is %s)", name->chars, tname(ct));
+        }
+    } else {
+        const CSym* sym = scope_lookup(x->scope, name);
+        local = sym && sym->kind == SYM_FUNCS ? sym->funcs : NULL;
+    }
+
     CFuncSet* g = global_funcs(c, name);
-    if ((!sym || sym->kind != SYM_FUNCS) && !g) {
+    if (!local && !g) {
         cerr(c, n->line, "undefined scope '%s'", name->chars);
     }
 
     Cands cs = {{0}, 0};
-    cands_add(&cs, sym && sym->kind == SYM_FUNCS ? sym->funcs : NULL);
+    cands_add(&cs, local);
     cands_add(&cs, g);
     NodeList* al = &n->as.scall.args;
     const int argc = al->count + 1;

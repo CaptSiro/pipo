@@ -232,7 +232,8 @@ struct Node {
         struct { Node* value; bool emit; } ret;
         // args: expressions, or S_LET nodes for `const f = file(...)` (the variable is visible in body only);
         // uses_lift: body names lift, so a run of the block installs a LiftTarget
-        struct { ObjString* name; NodeList args; Node* body; InlineCache* ic; bool uses_lift; } scall;
+        // callee: the N_FIELD of a module-qualified call (mod:sub:_name), else NULL (looked up by name)
+        struct { ObjString* name; Node* callee; NodeList args; Node* body; InlineCache* ic; bool uses_lift; } scall;
         struct { Node* body; } defer;
         struct { Node* expr; Type* type; } as_;
     } as;

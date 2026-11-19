@@ -1076,12 +1076,52 @@ static Node* parse_scope_arg(Parser* p) {
     return d;
 }
 
+// mod:_name, mod:sub:_name: the number of tokens before the scope name (0 when the current
+// token does not start a module-qualified scope call). The parts are written without spaces.
+static int qualified_scope_at(Parser* p) {
+    if (peek(p)->kind != T_IDENT || is_scope_name(peek(p))) {
+        return 0;
+    }
+
+    for (int i = 1;; i += 2) {
+        Token* colon = peek_at(p, i);
+        Token* part = peek_at(p, i + 1);
+        if (colon->kind != T_COLON || colon->space_before || colon->nl_before || part->kind != T_IDENT ||
+            part->space_before || part->nl_before) {
+            return 0;
+        }
+
+        if (is_scope_name(part)) {
+            return i + 1;
+        }
+    }
+}
+
 // _name { ... }, _name a, b { ... }, _name(a, b) { ... }, _name const f = open(...) { ... }:
-// calls the scope _name with the block as its first argument. The current token is the name.
+// calls the scope _name with the block as its first argument. The current token is the name,
+// or the module of mod:_name (then qualified_scope_at is not 0).
 static Node* parse_scope_call(Parser* p) {
-    Token* nm = advance(p);
+    Node* callee = NULL;
+    Token* nm;
+    if (qualified_scope_at(p)) {
+        Token* first = advance(p);
+        callee = new_node(N_IDENT, first->line);
+        callee->as.str = intern_tok(p, first);
+        do {
+            advance(p); // ':'
+            nm = advance(p);
+            Node* f = new_node(N_FIELD, nm->line);
+            f->as.field.obj = callee;
+            f->as.field.name = intern_tok(p, nm);
+            callee = f;
+        } while (!is_scope_name(nm));
+    } else {
+        nm = advance(p);
+    }
+
     Node* n = new_node(N_SCOPECALL, nm->line);
     n->as.scall.name = intern_tok(p, nm);
+    n->as.scall.callee = callee;
     n->as.scall.ic = new_ic(p);
     Token* t = peek(p);
     if (t->kind == T_LPAREN && !t->space_before && !t->nl_before) {
@@ -1231,7 +1271,7 @@ static Node* parse_primary(Parser* p) {
             return n;
         }
         case T_IDENT: {
-            if (is_scope_name(t)) {
+            if (is_scope_name(t) || qualified_scope_at(p)) {
                 return parse_scope_call(p);
             }
 
@@ -2777,7 +2817,7 @@ static Node* parse_statement(Parser* p) {
         case T_IDENT: {
             Token* a = peek_at(p, 1);
             Token* b = peek_at(p, 2);
-            if (is_scope_name(t)) {
+            if (is_scope_name(t) || qualified_scope_at(p)) {
                 // parsed once here: the generic path below would parse the whole block twice
                 Node* e = parse_scope_call(p);
                 n = new_node(S_EXPR, e->line);

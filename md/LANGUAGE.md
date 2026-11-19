@@ -550,6 +550,10 @@ _times(3) { io:print_nl(scope) }
 * A scope call is an expression: its value is what the scope function
   returned (`const x = _twice 3 { yield scope * 10 }`). Used as a value, its block
   cannot leave early.
+* A module exports a scope like a function (`export scope _bind(...)`), and
+  other modules call it through the module: `gl:_bind vao { ... }`,
+  `ui:shapes:_clip(r) { ... }`. Write the path without spaces. Importing the
+  name (`import "./gl" -> { _bind }`) also works.
 
 ## match
 

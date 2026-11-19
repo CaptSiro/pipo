@@ -2003,8 +2003,10 @@ static ExecStatus exec_scope_call(VM* vm, Node* n, ObjEnv* env, Value* out) {
     const int base = vm->sp;
     ObjString* name = n->as.scall.name;
     Value callee;
-    const Entry* e = env_find(env, name, NULL);
-    if (e) {
+    const Entry* e = n->as.scall.callee ? NULL : env_find(env, name, NULL);
+    if (n->as.scall.callee) {
+        callee = eval(vm, n->as.scall.callee, env); // mod:_name
+    } else if (e) {
         callee = e->value;
     } else {
         ObjOverload* g = global_set(vm, name);

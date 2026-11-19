@@ -91,9 +91,11 @@ static const struct {
     {"i64", C_I64}, {"u64", C_U64}, {"f32", C_F32}, {"f64", C_F64}, {"ptr", C_PTR},
 };
 
+// a types:*Array, or one of c.pp's pointers over one (c:Int32Pointer ...): a pointer to its elements
 static bool is_typed_array_name(const char* s) {
-    static const char* const NAMES[] = {"Int8Array",  "Int16Array",   "Int32Array",
-                                        "Int64Array", "Float32Array", "Float64Array"};
+    static const char* const NAMES[] = {"Int8Array",    "Int16Array",    "Int32Array",    "Int64Array",
+                                        "Float32Array", "Float64Array",  "Int32Pointer",  "Uint32Pointer",
+                                        "Int64Pointer"};
     for (size_t i = 0; i < sizeof NAMES / sizeof NAMES[0]; ++i) {
         if (strcmp(s, NAMES[i]) == 0) {
             return true;

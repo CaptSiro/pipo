@@ -30,6 +30,8 @@ export type f64 = float
 export type ptr = int
 
 export type Int32Pointer = types:Int32Array
+// the same 4 bytes read as unsigned (GLuint ids): its own tag, so * gives a u32, not an i32
+export type UInt32Pointer = types:Int32Array
 export type Int64Pointer = types:Int64Array
 
 
@@ -62,6 +64,38 @@ export global function *=(Int32Pointer ptr, i32 value) -> i32 {
 
 export global function &(i32 number) -> Int32Pointer {
     const ptr = int32pointer()
+    ptr *= number
+
+    return ptr
+}
+
+export function uint32pointer() -> UInt32Pointer {
+    return types:int32array(1)
+}
+
+// an Int32Array holds the bits as signed: -1 is 4294967295
+export global function *(UInt32Pointer ptr) -> u32 {
+    const int bits = ptr[0]
+
+    return if bits < 0 {
+        bits + 4294967296
+    } else {
+        bits
+    }
+}
+
+export global function *=(UInt32Pointer ptr, u32 value) -> u32 {
+    ptr[0] = if value > 2147483647 {
+        value - 4294967296
+    } else {
+        value
+    }
+
+    return value
+}
+
+export global function &(u32 number) -> UInt32Pointer {
+    const ptr = uint32pointer()
     ptr *= number
 
     return ptr
